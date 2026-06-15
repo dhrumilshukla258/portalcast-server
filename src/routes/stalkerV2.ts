@@ -9,9 +9,9 @@ import {
 } from "@/utils/storage";
 import { initialConfig, seriesFlag } from "@/config/server";
 import { serverManager } from "@/serverManager";
-import { Genre, Channel, EPG_List } from "@/types/types";
-import { getEpgCache, fetchAndCacheEpg } from "@/utils/epg";
+import axios from "axios";
 import { ConfigProfile } from "@/models/ConfigProfile";
+import { ContentCache } from "@/models/ContentCache";
 import { stalkerApi } from "@/utils/stalker";
 import { Readable } from "stream";
 import { XtreamCache } from "@/models/XtreamCache";
@@ -23,12 +23,25 @@ import {
   applyChannelOverrides,
   applyPortalItemOverrides,
 } from "@/utils/overrides";
+import crypto from "crypto";
+import { getEpgCache, fetchAndCacheEpg } from "@/utils/epg";
+
+const CACHE_DURATION_MS = 4 * 60 * 60 * 1000; // 4 hours
 
 const getActiveProfileId = async () => {
   const activeProfile = await ConfigProfile.findOne({
     where: { isActive: true },
   });
   return activeProfile?.id;
+};
+
+// Generates dynamic deterministic keys for parameters
+const generateCacheKey = (type: string, queryParams: any): string => {
+  const sortedString = JSON.stringify(
+    queryParams,
+    Object.keys(queryParams).sort(),
+  );
+  return `${type}_${crypto.createHash("md5").update(sortedString).digest("hex")}`;
 };
 
 const mapChannel = (channel: any) => {
@@ -39,6 +52,7 @@ const mapChannel = (channel: any) => {
   return {
     ...channel,
     cmd: cmdUrl,
+    screenshot_uri: channel.logo || channel.screenshot_uri || "",
     isPortal: initialConfig.providerType === "stalker",
   };
 };
@@ -51,7 +65,6 @@ export const stalkerV2: ServerRoute[] = [
       try {
         const { slug } = request.params;
         const targetUrl = `http://${initialConfig.hostname}:${initialConfig.port}/${slug}`;
-
         const response = await fetch(targetUrl);
 
         if (!response.ok || !response.body) {
@@ -62,7 +75,6 @@ export const stalkerV2: ServerRoute[] = [
 
         const contentType =
           response.headers.get("content-type") || "image/jpeg";
-
         const nodeStream = Readable.fromWeb(response.body as any);
 
         return h
@@ -145,12 +157,13 @@ export const stalkerV2: ServerRoute[] = [
         await writeChannels(filteredChannels, profileId);
         const mappedChannels = filteredChannels.map(mapChannel);
         const genres = await readGenres("channel", profileId);
-        // If no genres are loaded yet, skip genre filtering to avoid returning empty
         if (genres.length === 0) {
           return mappedChannels ?? [];
         }
         return (mappedChannels ?? []).filter((channel) => {
-          const genre = genres.find((r) => r.id === String(channel.tv_genre_id));
+          const genre = genres.find(
+            (r) => r.id === String(channel.tv_genre_id),
+          );
           return (
             genre &&
             (initialConfig.groups.length === 0 ||
@@ -219,7 +232,6 @@ export const stalkerV2: ServerRoute[] = [
       }
     },
   },
-
   {
     method: "GET",
     path: "/api/v2/movie-groups",
@@ -232,7 +244,6 @@ export const stalkerV2: ServerRoute[] = [
         }
         return {
           success: true,
-
           page: Number(1),
           pageAtaTime: Number(1),
           total_items: channels.length,
@@ -255,9 +266,29 @@ export const stalkerV2: ServerRoute[] = [
   },
   {
     method: "GET",
+    path: "/api/v2/reset-movies",
+    handler: async (request, h) => {
+      try {
+        const groups = await serverManager.getProvider().getMoviesGroups();
+        const filteredChannels = groups.js.filter(
+          (channel) => initialConfig.playCensored || channel.censored != 1,
+        );
+        return { success: true, data: filteredChannels };
+      } catch (err) {
+        console.error(err);
+        return h
+          .response({ success: false, error: "Failed to reset movies." })
+          .code(500);
+      }
+    },
+  },
+  {
+    method: "GET",
     path: "/api/v2/movies",
     handler: async (request, h) => {
       try {
+        const profileId = (await getActiveProfileId()) || 0;
+        const query = request.query as any;
         const {
           category = 0,
           movieId = 0,
@@ -265,18 +296,27 @@ export const stalkerV2: ServerRoute[] = [
           episodeId = 0,
           page = 1,
           search = "",
-          token,
-          sort,
-        } = request.query;
+        } = query;
 
         if (category == 0 && movieId == 0) {
           return h.redirect("/api/v2/movie-groups");
         }
 
         const itemsPerApiPage = 14;
-        const pagesToFetchAtOnce = 1;
         const startApiPage = Number(page);
+        const cacheKey = generateCacheKey("movies", query);
+        const getVodCache = (catId: string) =>
+          xtreamCache.get<any[]>(`vod_streams_${catId}`).then((v) => v ?? []);
 
+        // ContentCache check — skip if searching or drilling into a specific item
+        if (!search && Number(movieId) === 0) {
+          const cachedRecord = await ContentCache.findOne({ where: { profileId, cacheKey } });
+          if (cachedRecord && new Date() < cachedRecord.expiresAt) {
+            return cachedRecord.response;
+          }
+        }
+
+        // Virtual categories — serve from xtreamCache overrides
         if (String(category).startsWith("vcat_") && Number(movieId) === 0) {
           const movedIn = await ContentOverride.findAll({
             where: { item_type: "movie", target_category_id: String(category) },
@@ -284,8 +324,7 @@ export const stalkerV2: ServerRoute[] = [
           });
           const allItems: any[] = [];
           for (const ov of movedIn) {
-            if (ov.hidden) continue;
-            if (!ov.original_category_id) continue;
+            if (ov.hidden || !ov.original_category_id) continue;
             const itemId = ov.item_key.replace("movie_", "");
             const srcItems = (await xtreamCache.get<any[]>(`vod_streams_${ov.original_category_id}`)) ?? [];
             const srcItem = srcItems.find((i: any) => String(i.stream_id) === itemId);
@@ -307,65 +346,43 @@ export const stalkerV2: ServerRoute[] = [
           });
         }
 
-        const fetchPage = async (pageNum: number) => {
-          try {
-            let sortParam = "added";
-            if (sort === "alphabetic") sortParam = "name";
+        const sortParam = query.sort === "alphabetic" ? "name" : "added";
+        const res = await serverManager.getProvider().getMovies({
+          category,
+          page: Number(page),
+          movieId,
+          seasonId,
+          episodeId,
+          search,
+          token: query.token,
+          sort: sortParam,
+        });
 
-            const res = await serverManager.getProvider().getMovies({
-              category: String(category).startsWith("vcat_") ? "*" : category,
-              page: pageNum,
-              movieId,
-              seasonId,
-              episodeId,
-              search,
-              token,
-              sort: sortParam,
-            });
-
-            return { page: pageNum, ...res.js };
-          } catch (err) {
-            console.error(`Failed to fetch page ${pageNum}: ${err}`);
+        if (res && res.js && Array.isArray(res.js.data)) {
+          const isSeasonContext = !!seasonId && !episodeId;
+          const isSeriesContext = !!movieId && !seasonId && !episodeId;
+          res.js.data = res.js.data.map((item: any) => {
+            const isEpisode = isSeasonContext || !!item.series_number || item.is_episode;
+            const isSeason = isSeriesContext && !isEpisode;
             return {
-              page: pageNum,
-              data: [],
-              total_items: 0,
-              error: true,
-              isPortal: initialConfig.contextPath == "",
+              ...item,
+              is_episode: isEpisode ? 1 : item.is_episode,
+              ...(isSeason && { is_season: true }),
             };
-          }
-        };
-
-        const pagesToFetch = Array.from(
-          { length: pagesToFetchAtOnce },
-          (_, i) => startApiPage + i,
-        );
-        const firstResult = await fetchPage(pagesToFetch.at(0) ?? 0);
-
-        if (firstResult.error) {
-          return h
-            .response({
-              success: false,
-              message: `Failed to fetch page ${pagesToFetch.at(0)}`,
-            })
-            .code(500);
+          });
         }
 
-        const rawData = Array.isArray(firstResult.data) ? firstResult.data : [];
+        let firstPageData = res?.js?.data ?? [];
 
-        // At the top level (no movieId), exclude series items so only movies show here
-        let firstPageData = Number(movieId) === 0
-          ? rawData.filter((item: any) => item[seriesFlag] != 1)
-          : rawData;
+        // At top level exclude series so only movies show
+        if (Number(movieId) === 0) {
+          firstPageData = firstPageData.filter((item: any) => item[seriesFlag] != 1);
+        }
 
-        const getVodCache = (catId: string) =>
-          xtreamCache.get<any[]>(`vod_streams_${catId}`).then((v) => v ?? []);
-
-        // Page 1 may be entirely series (newest-first sort) — fall back to warm cache for movies
-        if (Number(movieId) === 0 && firstPageData.length === 0 && rawData.length > 0) {
+        // Page 1 all-series fallback — use warm cache
+        if (Number(movieId) === 0 && firstPageData.length === 0 && res?.js?.data?.length > 0) {
           const cachedMovies = await xtreamCache.get<any[]>(`vod_streams_${category}`);
           if (cachedMovies && cachedMovies.length > 0) {
-            // Apply overrides to full cache (not paginated slice) so moved-in items land at correct pages
             const allNormalized = cachedMovies.map((m: any) => ({ ...m, id: String(m.stream_id) }));
             const allOverridden = await applyPortalItemOverrides(allNormalized, "movie", String(category), getVodCache);
             const offset = (startApiPage - 1) * itemsPerApiPage;
@@ -384,8 +401,7 @@ export const stalkerV2: ServerRoute[] = [
           }
         }
 
-        // For episode-level requests the cmd in get_ordered_list is a stale,
-        // IP-restricted CDN URL. Call create_link to get a fresh token.
+        // For episode-level requests refresh cmd via create_link (stale CDN URLs)
         if (Number(episodeId) > 0) {
           for (const item of firstPageData as any[]) {
             try {
@@ -404,8 +420,9 @@ export const stalkerV2: ServerRoute[] = [
           }
         }
 
-        const actualTotalItems = firstResult.total_items ?? 0;
-        return {
+        const actualTotalItems = (res?.js && Number(res.js.total_items)) ?? 0;
+
+        const responsePayload = {
           success: true,
           page: Number(page),
           pageAtaTime: 1,
@@ -418,6 +435,17 @@ export const stalkerV2: ServerRoute[] = [
           errors: false,
           isPortal: initialConfig.providerType === "stalker",
         };
+
+        if (!search && res?.js) {
+          await ContentCache.upsert({
+            profileId,
+            cacheKey,
+            response: responsePayload,
+            expiresAt: new Date(Date.now() + CACHE_DURATION_MS),
+          });
+        }
+
+        return responsePayload;
       } catch (err) {
         console.error(err);
         return h
@@ -431,6 +459,8 @@ export const stalkerV2: ServerRoute[] = [
     path: "/api/v2/series",
     handler: async (request, h) => {
       try {
+        const profileId = (await getActiveProfileId()) || 0;
+        const query = request.query as any;
         const {
           category = 0,
           movieId = 0,
@@ -439,16 +469,28 @@ export const stalkerV2: ServerRoute[] = [
           page = 1,
           search = "",
           sort,
-        } = request.query;
+          ...others
+        } = query;
 
         if (category == 0 && movieId == 0) {
           return h.redirect("/api/v2/series-groups");
         }
 
+        const cacheKey = generateCacheKey("series", query);
         const itemsPerApiPage = 14;
-        const pagesToFetchAtOnce = 1;
         const startApiPage = Number(page);
+        const getSeriesCache = (catId: string) =>
+          xtreamCache.get<any[]>(`series_list_${catId}`).then((v) => v ?? []);
 
+        // ContentCache check — skip if searching or drilling into a specific item
+        if (!search && Number(movieId) === 0) {
+          const cachedRecord = await ContentCache.findOne({ where: { profileId, cacheKey } });
+          if (cachedRecord && new Date() < cachedRecord.expiresAt) {
+            return cachedRecord.response;
+          }
+        }
+
+        // Virtual categories — serve from xtreamCache overrides
         if (String(category).startsWith("vcat_") && Number(movieId) === 0) {
           const movedIn = await ContentOverride.findAll({
             where: { item_type: "series", target_category_id: String(category) },
@@ -456,8 +498,7 @@ export const stalkerV2: ServerRoute[] = [
           });
           const allItems: any[] = [];
           for (const ov of movedIn) {
-            if (ov.hidden) continue;
-            if (!ov.original_category_id) continue;
+            if (ov.hidden || !ov.original_category_id) continue;
             const itemId = ov.item_key.replace("series_", "");
             const srcItems = (await xtreamCache.get<any[]>(`series_list_${ov.original_category_id}`)) ?? [];
             const srcItem = srcItems.find((i: any) => String(i.series_id) === itemId);
@@ -482,61 +523,29 @@ export const stalkerV2: ServerRoute[] = [
         const sourceRow = await XtreamCache.findOne({ where: { key: "portal_series_source" } });
         const isNativeSeries = sourceRow ? JSON.parse(sourceRow.value) === "native" : false;
 
-        const fetchPage = async (pageNum: number) => {
-          try {
-            let sortParam = "added";
-            if (sort === "alphabetic") sortParam = "name";
+        const sortParam = sort === "alphabetic" ? "name" : "added";
+        const portalCategory = String(category).startsWith("vcat_") ? "*" : category;
+        const res = isNativeSeries
+          ? await serverManager.getProvider().getSeries({ category: portalCategory, page: Number(page), movieId, seasonId, episodeId, search, token: query.token, sort: sortParam, ...others })
+          : await serverManager.getProvider().getMovies({ category: portalCategory, page: Number(page), movieId, seasonId, episodeId, search, token: query.token, sort: sortParam });
 
-            const portalCategory = String(category).startsWith("vcat_") ? "*" : category;
-            const res = isNativeSeries
-              ? await serverManager.getProvider().getSeries({ category: portalCategory, page: pageNum, movieId, seasonId, episodeId, search, sort: sortParam })
-              : await serverManager.getProvider().getMovies({ category: portalCategory, page: pageNum, movieId, seasonId, episodeId, search, sort: sortParam });
-            return { page: pageNum, ...res.js };
-          } catch (err: any) {
-            console.error(`Failed to fetch page ${pageNum}:`, err.stack || err);
-            return {
-              page: pageNum,
-              data: [],
-              total_items: 0,
-              error: true,
-              isPortal: initialConfig.contextPath == "",
-            };
-          }
-        };
-
-        const pagesToFetch = Array.from(
-          { length: pagesToFetchAtOnce },
-          (_, i) => startApiPage + i,
-        );
-        const firstResult = await fetchPage(pagesToFetch.at(0) ?? 0);
-
-        if (firstResult.error) {
-          return h
-            .response({
-              success: false,
-              message: `Failed to fetch page ${pagesToFetch.at(0)}`,
-            })
-            .code(500);
+        if (res?.js?.data && Array.isArray(res.js.data)) {
+          res.js.data = res.js.data.map((item: any) => {
+            const isEpisode = !!seasonId || !!item.series_number || item.is_episode;
+            return { ...item, is_episode: isEpisode ? 1 : item.is_episode };
+          });
         }
 
-        const rawData = Array.isArray(firstResult.data) ? firstResult.data : [];
-        // Native portals return only series items; VOD-mixed portals need is_series filter
+        const rawData = res?.js?.data ?? [];
         let firstPageData = Number(movieId) === 0
           ? (isNativeSeries ? rawData : rawData.filter((item: any) => item[seriesFlag] == 1))
           : rawData;
 
-        const getSeriesCache = (catId: string) =>
-          xtreamCache.get<any[]>(`series_list_${catId}`).then((v) => v ?? []);
-
-        // VOD-mixed: page 1 may be entirely movies — fall back to warm cache for series
+        // VOD-mixed: page 1 may be entirely movies — fall back to warm series cache
         if (Number(movieId) === 0 && !isNativeSeries && firstPageData.length === 0 && rawData.length > 0) {
           const cachedSeries = await xtreamCache.get<any[]>(`series_list_${category}`);
           if (cachedSeries && cachedSeries.length > 0) {
-            const allNormalized = cachedSeries.map((s: any) => ({
-              ...s,
-              id: String(s.series_id),
-              [seriesFlag]: 1,
-            }));
+            const allNormalized = cachedSeries.map((s: any) => ({ ...s, id: String(s.series_id), [seriesFlag]: 1 }));
             const allOverridden = await applyPortalItemOverrides(allNormalized, "series", String(category), getSeriesCache);
             const offset = (startApiPage - 1) * itemsPerApiPage;
             const pageData = allOverridden.slice(offset, offset + itemsPerApiPage);
@@ -554,13 +563,11 @@ export const stalkerV2: ServerRoute[] = [
           }
         }
 
-        const portalTotal = firstResult.total_items ?? 0;
+        const portalTotal = res?.js?.total_items ?? 0;
         const ratio = isNativeSeries ? 1 : (rawData.length > 0 ? firstPageData.length / rawData.length : 1);
-        const actualTotalItems = Number(movieId) === 0
-          ? Math.ceil(portalTotal * ratio)
-          : portalTotal;
+        const actualTotalItems = Number(movieId) === 0 ? Math.ceil(portalTotal * ratio) : portalTotal;
 
-        return {
+        const responsePayload = {
           success: true,
           page: Number(page),
           pageAtaTime: 1,
@@ -573,6 +580,17 @@ export const stalkerV2: ServerRoute[] = [
           errors: false,
           isPortal: initialConfig.providerType === "stalker",
         };
+
+        if (!search && res?.js) {
+          await ContentCache.upsert({
+            profileId,
+            cacheKey,
+            response: responsePayload,
+            expiresAt: new Date(Date.now() + CACHE_DURATION_MS),
+          });
+        }
+
+        return responsePayload;
       } catch (err) {
         console.error(err);
         return h
@@ -586,9 +604,16 @@ export const stalkerV2: ServerRoute[] = [
     path: "/api/v2/movie-link",
     handler: async (request, h) => {
       try {
-        const { series = "", id = "", download = 0, token, cmd } = request.query;
-        const isSeries = series && series !== "0" && series !== "false" && series !== "";
-        let movieLink;
+        const {
+          series = "",
+          id = "",
+          download = 0,
+          token,
+          cmd,
+        } = request.query;
+        const isSeries =
+          series && series !== "0" && series !== "false" && series !== "";
+        let movieLink: any;
         if (isSeries) {
           movieLink = await serverManager.getProvider().getSeriesLink({
             series: series as string,
@@ -604,6 +629,22 @@ export const stalkerV2: ServerRoute[] = [
             cmd: cmd as string,
           });
         }
+
+        if (movieLink && (download == 1 || download === "1")) {
+          const rawUrl = movieLink?.js?.cmd || movieLink?.cmd;
+          if (
+            typeof rawUrl === "string" &&
+            (rawUrl.startsWith("/") || rawUrl.includes("get_download_link.php"))
+          ) {
+            const proxiedDownloadUrl = `/api/v2/download?path=${encodeURIComponent(rawUrl)}`;
+            if (movieLink.js) {
+              movieLink.js.cmd = proxiedDownloadUrl;
+            } else {
+              movieLink.cmd = proxiedDownloadUrl;
+            }
+          }
+        }
+
         return movieLink;
       } catch (err) {
         console.error(err);
@@ -724,8 +765,6 @@ export const stalkerV2: ServerRoute[] = [
       }
     },
   },
-
-
   {
     method: "POST",
     path: "/api/v2/catchup-scan",
@@ -752,7 +791,6 @@ export const stalkerV2: ServerRoute[] = [
           total_items: channels.length,
           actual_length: channels.length,
           total_loaded: channels.length,
-
           data: await applyGenreOverrides(channels, "series"),
           errors: false,
           isPortal: initialConfig.providerType === "stalker",
@@ -794,10 +832,7 @@ export const stalkerV2: ServerRoute[] = [
     handler: async (request, h) => {
       try {
         const cache = await getEpgCache();
-        if (cache) {
-          return cache;
-        }
-
+        if (cache) return cache;
         return [];
       } catch (err) {
         console.error(err);
@@ -841,7 +876,6 @@ export const stalkerV2: ServerRoute[] = [
         const tokenResponse = await stalkerApi.fetchNewToken();
         if (tokenResponse && tokenResponse.token) {
           stalkerApi.addToken(tokenResponse.token);
-
           const activeProfile = await ConfigProfile.findOne({
             where: { isActive: true },
           });
@@ -850,7 +884,6 @@ export const stalkerV2: ServerRoute[] = [
             activeProfile.changed("config", true);
             await activeProfile.save();
           }
-
           return { success: true, token: tokenResponse.token };
         }
         return h
@@ -870,7 +903,6 @@ export const stalkerV2: ServerRoute[] = [
     handler: async (request, h) => {
       try {
         initialConfig.tokens = [];
-
         const activeProfile = await ConfigProfile.findOne({
           where: { isActive: true },
         });
@@ -879,7 +911,6 @@ export const stalkerV2: ServerRoute[] = [
           activeProfile.changed("config", true);
           await activeProfile.save();
         }
-
         return { success: true, message: "All tokens cleared." };
       } catch (err) {
         console.error("Error clearing tokens:", err);
@@ -889,7 +920,6 @@ export const stalkerV2: ServerRoute[] = [
       }
     },
   },
-
   {
     method: "POST",
     path: "/api/v2/warm-xtream-vod",
@@ -921,7 +951,7 @@ export const stalkerV2: ServerRoute[] = [
   {
     method: "DELETE",
     path: "/api/v2/clear-xtream-cache",
-    handler: async (request, h) => {
+    handler: async (_request, h) => {
       try {
         const count = await XtreamCache.destroy({ where: {} });
         return { success: true, message: `Cleared ${count} xtream cache entries.` };
@@ -930,6 +960,255 @@ export const stalkerV2: ServerRoute[] = [
         return h
           .response({ success: false, error: "Failed to clear xtream cache." })
           .code(500);
+      }
+    },
+  },
+
+  {
+    method: "GET",
+    path: "/api/v2/download",
+    handler: async (request, h) => {
+      try {
+        const { path, id, series, isSeries, cmd } = request.query as {
+          path?: string;
+          id?: string;
+          series?: string;
+          isSeries?: string;
+          cmd?: string;
+        };
+
+        const provider = serverManager.getProvider();
+
+        // If direct resolution parameters are provided
+        if (id) {
+          if (initialConfig.providerType === "stalker") {
+            const stalker = provider as any;
+            let token = stalker.cache.get("auth_token");
+            if (!token) {
+              token = await stalker.getToken(false);
+            }
+
+            const isSeriesBool = isSeries === "1" || isSeries === "true";
+            
+            // Try download mode (download=1)
+            let linkData: any;
+            if (isSeriesBool) {
+              linkData = await stalker.getSeriesLink({
+                series: series || "0",
+                id: Number(id),
+                download: 1,
+                cmd: cmd,
+              });
+            } else {
+              linkData = await stalker.getMovieLink({
+                series: series || "0",
+                id: Number(id),
+                download: 1,
+                cmd: cmd,
+              });
+            }
+
+            let resolvedUrl = linkData?.js?.cmd || linkData?.cmd;
+            if (resolvedUrl && resolvedUrl.startsWith("/")) {
+              resolvedUrl = `${stalker.getBaseUrl()}${resolvedUrl}`;
+            }
+
+            // If we got a valid download link, let's request it
+            if (resolvedUrl && !resolvedUrl.includes("error=nothing_to_play") && !(linkData?.js?.error === "nothing_to_play")) {
+              const config = stalker._getAxiosRequestConfig({}, token || "");
+              
+              // Validate that get_download_link.php doesn't return 404
+              const validateRes = await axios({
+                method: "get",
+                url: resolvedUrl,
+                headers: config.headers,
+                params: config.params,
+                validateStatus: () => true,
+              });
+
+              // If it's valid, request stream proxy
+              if (validateRes.status === 200 || validateRes.status === 206) {
+                // If it returned nothing_to_play in data, skip to play fallback
+                const dataStr = typeof validateRes.data === "string" ? validateRes.data : JSON.stringify(validateRes.data);
+                if (!dataStr.includes("nothing_to_play")) {
+                  const response = await axios({
+                    method: "get",
+                    url: resolvedUrl,
+                    headers: config.headers,
+                    params: config.params,
+                    responseType: "stream",
+                    validateStatus: () => true,
+                  });
+
+                  const proxyResponse = h.response(response.data);
+                  const headersToCopy = ["content-type", "content-length", "content-disposition", "accept-ranges", "content-range"];
+                  for (const [key, value] of Object.entries(response.headers)) {
+                    if (value && headersToCopy.includes(key.toLowerCase())) {
+                      proxyResponse.header(key, value.toString());
+                    }
+                  }
+                  proxyResponse.code(response.status);
+                  return proxyResponse;
+                }
+              }
+            }
+
+            // Fallback: Try play mode (download=0)
+            let playLinkData: any;
+            if (isSeriesBool) {
+              playLinkData = await stalker.getSeriesLink({
+                series: series || "0",
+                id: Number(id),
+                download: 0,
+                cmd: cmd,
+              });
+            } else {
+              playLinkData = await stalker.getMovieLink({
+                series: series || "0",
+                id: Number(id),
+                download: 0,
+                cmd: cmd,
+              });
+            }
+
+            let playUrl = playLinkData?.js?.cmd || playLinkData?.cmd;
+            if (playUrl && playUrl.startsWith("/")) {
+              playUrl = `${stalker.getBaseUrl()}${playUrl}`;
+            }
+            if (playUrl) {
+              const config = stalker._getAxiosRequestConfig({}, token || "");
+
+              // If playUrl is an m3u8 playlist, serve the playlist file as attachment
+              if (playUrl.includes(".m3u8") || playUrl.includes("index.m3u8")) {
+                const playRes = await axios({
+                  method: "get",
+                  url: playUrl,
+                  headers: config.headers,
+                  responseType: "text",
+                });
+                
+                const filename = `stream_${id}.m3u8`;
+                return h.response(playRes.data)
+                  .header("Content-Type", "application/x-mpegurl")
+                  .header("Content-Disposition", `attachment; filename="${filename}"`)
+                  .code(200);
+              } else {
+                // Otherwise stream the play link direct file
+                const response = await axios({
+                  method: "get",
+                  url: playUrl,
+                  headers: config.headers,
+                  params: config.params,
+                  responseType: "stream",
+                  validateStatus: () => true,
+                });
+
+                const proxyResponse = h.response(response.data);
+                const headersToCopy = ["content-type", "content-length", "content-disposition", "accept-ranges", "content-range"];
+                for (const [key, value] of Object.entries(response.headers)) {
+                  if (value && headersToCopy.includes(key.toLowerCase())) {
+                    proxyResponse.header(key, value.toString());
+                  }
+                }
+                proxyResponse.code(response.status);
+                return proxyResponse;
+              }
+            }
+            return h.response({ error: "Failed to resolve stream link for download" }).code(404);
+          } else {
+            // For Xtream and others
+            let playUrl = "";
+            if (path && path.startsWith("/")) {
+              playUrl = `http://${initialConfig.hostname}:${initialConfig.port}${path}`;
+            } else if (path) {
+              playUrl = path;
+            } else if (cmd) {
+              playUrl = cmd;
+            }
+            if (playUrl) {
+              const response = await axios({
+                method: "get",
+                url: playUrl,
+                headers: { "User-Agent": "VLC/3.0.16 LibVLC/3.0.16" },
+                responseType: "stream",
+                validateStatus: () => true,
+              });
+
+              const proxyResponse = h.response(response.data);
+              const headersToCopy = ["content-type", "content-length", "content-disposition", "accept-ranges", "content-range"];
+              for (const [key, value] of Object.entries(response.headers)) {
+                if (value && headersToCopy.includes(key.toLowerCase())) {
+                  proxyResponse.header(key, value.toString());
+                }
+              }
+              proxyResponse.code(response.status);
+              return proxyResponse;
+            }
+            return h.response({ error: "Failed to resolve playUrl" }).code(404);
+          }
+        }
+
+        // Old path parameter fallback
+        if (!path) {
+          return h.response({ error: "Missing path or id parameter" }).code(400);
+        }
+
+        let targetUrl = path;
+        let headers: Record<string, string> = {};
+        let params: Record<string, any> = {};
+
+        if (initialConfig.providerType === "stalker") {
+          const stalker = provider as any;
+          let token = stalker.cache.get("auth_token");
+          if (!token) {
+            token = await stalker.getToken(false);
+          }
+
+          if (path.startsWith("/")) {
+            targetUrl = `${stalker.getBaseUrl()}${path}`;
+          }
+
+          const config = stalker._getAxiosRequestConfig({}, token || "");
+          headers = config.headers;
+          params = config.params || {};
+        } else {
+          if (path.startsWith("/")) {
+            targetUrl = `http://${initialConfig.hostname}:${initialConfig.port}${path}`;
+          }
+          headers = {
+            "User-Agent": "VLC/3.0.16 LibVLC/3.0.16",
+          };
+        }
+
+        const response = await axios({
+          method: "get",
+          url: targetUrl,
+          headers: headers,
+          params: params,
+          responseType: "stream",
+          validateStatus: () => true,
+        });
+
+        const proxyResponse = h.response(response.data);
+
+        const headersToCopy = [
+          "content-type",
+          "content-length",
+          "content-disposition",
+          "accept-ranges",
+          "content-range",
+        ];
+        for (const [key, value] of Object.entries(response.headers)) {
+          if (value && headersToCopy.includes(key.toLowerCase())) {
+            proxyResponse.header(key, value.toString());
+          }
+        }
+
+        proxyResponse.code(response.status);
+        return proxyResponse;
+      } catch (error: any) {
+        console.error("Download proxy error:", error.message);
+        return h.response({ error: "Failed to proxy download" }).code(500);
       }
     },
   },

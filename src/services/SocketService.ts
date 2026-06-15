@@ -52,6 +52,7 @@ class SocketService {
 
           this.devices.set(socket.id, device);
           this.broadcastReceivers();
+          this.broadcastActiveUserCount();
         },
       );
 
@@ -82,6 +83,10 @@ class SocketService {
         },
       );
 
+      socket.on("get_active_devices", () => {
+        socket.emit("active_devices_list", Array.from(this.devices.values()));
+      });
+
       socket.on("disconnect", () => {
         const device = this.devices.get(socket.id);
         if (device) {
@@ -90,6 +95,7 @@ class SocketService {
           if (device.type === "receiver") {
             this.broadcastReceivers();
           }
+          this.broadcastActiveUserCount();
         }
       });
 
@@ -121,6 +127,13 @@ class SocketService {
   private broadcastReceivers() {
     const receivers = this.getReceivers();
     this.io?.emit("receivers_updated", receivers);
+  }
+
+  private broadcastActiveUserCount() {
+    const count = this.devices.size;
+    const list = Array.from(this.devices.values());
+    this.io?.emit("active_user_count", count);
+    this.io?.emit("active_devices_updated", list);
   }
 
   public broadcastLog(level: string, message: string, timestamp: string) {

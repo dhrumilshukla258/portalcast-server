@@ -3,6 +3,7 @@ import { initialConfig, seriesFlag } from "@/config/server";
 import { readChannels, readGenres } from "./storage";
 import { serverManager } from "@/serverManager";
 import { SystemConfig } from "@/models/SystemConfig";
+import { ConfigProfile } from "@/models/ConfigProfile";
 import {
   applyGenreOverrides,
   applyChannelOverrides,
@@ -78,8 +79,10 @@ function matchesGroups(genreTitle: string): boolean {
 }
 
 export async function getPlaylistV2() {
-  const genres = await readGenres("channel");
-  const allPrograms = await readChannels();
+  const activeProfile = await ConfigProfile.findOne({ where: { isActive: true } });
+  const profileId = activeProfile?.id;
+  const genres = await readGenres("channel", profileId);
+  const allPrograms = await readChannels(profileId);
   const m3u = (allPrograms ?? []).filter((channel) => {
     const genre = genres.find((r) => r.id === channel.tv_genre_id);
     if (!genre) return false;
@@ -89,8 +92,10 @@ export async function getPlaylistV2() {
 }
 
 export async function getM3uV2(host: string) {
-  const genres = await readGenres("channel");
-  const allPrograms = await readChannels();
+  const activeProfile = await ConfigProfile.findOne({ where: { isActive: true } });
+  const profileId = activeProfile?.id;
+  const genres = await readGenres("channel", profileId);
+  const allPrograms = await readChannels(profileId);
 
   if (!genres?.length || !allPrograms?.length) {
     return liveCache;
@@ -122,9 +127,11 @@ export async function getM3uV2(host: string) {
 }
 
 export async function getEPGV2() {
-  const genres = await readGenres("channel");
-  const allPrograms = await serverManager.getProvider().getChannels();
-  const channels = (allPrograms.js.data ?? []).filter((channel) => {
+  const activeProfile = await ConfigProfile.findOne({ where: { isActive: true } });
+  const profileId = activeProfile?.id;
+  const genres = await readGenres("channel", profileId);
+  const allPrograms = await readChannels(profileId);
+  const channels = (allPrograms ?? []).filter((channel) => {
     const genre = genres.find((r) => r.id === channel.tv_genre_id);
     if (!genre) return false;
     return matchesGroups(genre.title);

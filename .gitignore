@@ -36,3 +36,4 @@ stalker-m3u-server.yml
 compose.override.yml
 database.sqlite
 temp
+uploads
