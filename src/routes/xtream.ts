@@ -5,7 +5,9 @@ import { ConfigProfile } from "@/models/ConfigProfile";
 import { liveStreamService } from "@/services/LiveStreamService";
 import { serverManager } from "@/serverManager";
 import { logger } from "@/utils/logger";
-import { initialConfig, seriesFlag, serverProtocol } from "@/config/server";
+import { initialConfig, seriesFlag } from "@/config/server";
+import { getPublicProto, getPublicHost, getPublicOrigin } from "@/utils/publicUrl";
+import { proxiedLogoPath } from "@/utils/portalAssets";
 import { readGenres, readChannels, upsertGenre, deleteGenre } from "@/utils/storage";
 import {
   applyXtreamCatOverrides,
@@ -20,6 +22,8 @@ import { SystemConfig } from "@/models/SystemConfig";
 import { handleProxyStream } from "./proxy";
 import { stalkerApi } from "@/utils/stalker";
 import { cmdPlayerV2 } from "@/utils/cmdPlayer";
+import { User } from "@/models/User";
+import { verifyPassword } from "@/utils/password";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -85,10 +89,30 @@ function stripVer(id: string): string {
   return id.replace(/_v\d+$/, "");
 }
 
-function userInfo() {
+export async function resolveXtreamUser(username?: string, password?: string): Promise<User | null> {
+  if (!username || !password) return null;
+
+  // Try per-user DB credentials first
+  const user = await User.findOne({ where: { email: username, isActive: true } });
+  if (user && user.passwordHash && user.salt && verifyPassword(password, user.passwordHash, user.salt)) {
+    return user;
+  }
+
+  // Admin env-var credentials (ADMIN_EMAIL + ADMIN_PASSWORD).
+  // With no ADMIN_EMAIL configured, the admin password alone is accepted.
+  const adminEmail = (process.env.ADMIN_EMAIL || "").toLowerCase().trim();
+  const adminPassword = process.env.ADMIN_PASSWORD || "";
+  if (adminPassword && password === adminPassword && (!adminEmail || username.toLowerCase() === adminEmail)) {
+    return (user ?? { email: username }) as User;
+  }
+
+  return null;
+}
+
+function userInfo(username: string, password: string) {
   return {
-    username:               initialConfig.username || "admin",
-    password:               initialConfig.password || "admin",
+    username,
+    password,
     message:                "Welcome",
     auth:                   1,
     status:                 "Active",
@@ -102,13 +126,16 @@ function userInfo() {
 }
 
 function serverInfo(request: any) {
-  const host = request.info.host?.split(":")[0] || "localhost";
-  const port = request.info.host?.split(":")[1] || "3000";
+  const proto = getPublicProto(request);
+  const publicHost = getPublicHost(request);
+  const host = publicHost.split(":")[0] || "localhost";
+  // No explicit port means the client used the protocol default (reverse proxy)
+  const port = publicHost.split(":")[1] || (proto === "https" ? "443" : "80");
   return {
     url:             host,
     port:            port,
-    https_port:      "443",
-    server_protocol: serverProtocol,
+    https_port:      proto === "https" ? port : "443",
+    server_protocol: proto,
     rtmp_port:       port,
     timezone:        "UTC",
     timestamp_now:   Math.floor(Date.now() / 1000),
@@ -897,7 +924,11 @@ export const xtreamRoutes: ServerRoute[] = [
   {
     method: "GET",
     path: "/xmltv.php",
-    handler: async (_request, h) => {
+    handler: async (request, h) => {
+      const { username, password } = request.query as Record<string, string>;
+      if (!await resolveXtreamUser(username, password)) {
+        return h.response({ user_info: { auth: 0 } }).code(401);
+      }
       const epgCache = await getEpgCache();
       const channels = await readChannels();
 
@@ -934,12 +965,16 @@ export const xtreamRoutes: ServerRoute[] = [
     method: "GET",
     path: "/player_api.php",
     handler: async (request, h) => {
-      const { action } = request.query as Record<string, string>;
+      const { action, username, password } = request.query as Record<string, string>;
+      const xtreamUser = await resolveXtreamUser(username, password);
+      if (!xtreamUser) {
+        return h.response({ user_info: { auth: 0 } }).code(401);
+      }
       const provider = serverManager.getProvider();
 
       if (!action) {
         return h.response({
-          user_info:   userInfo(),
+          user_info:   userInfo(username, password),
           server_info: serverInfo(request),
         });
       }
@@ -985,7 +1020,8 @@ export const xtreamRoutes: ServerRoute[] = [
               name:                c.name?.trim(),
               stream_type:         "live",
               stream_id:           c.id,
-              stream_icon:         buildIconUrl(c.logo),
+              // Stored as a relative /api/images path; absolutized per request below
+              stream_icon:         proxiedLogoPath(c.logo),
               epg_channel_id:      c.id,
               added:               "",
               category_id:         c.tv_genre_id || "0",
@@ -995,7 +1031,25 @@ export const xtreamRoutes: ServerRoute[] = [
             }));
             await xtreamCache.set(cacheKey, raw);
           }
-          return h.response(await applyXtreamChannelOverrides(raw));
+          const origin = getPublicOrigin(request);
+          const portalPrefix = `${initialConfig.https ? "https" : "http"}://${initialConfig.hostname}:${initialConfig.port}`;
+          const fixIcon = (icon: any): any => {
+            if (typeof icon !== "string" || icon === "") return icon;
+            // New format: relative /api/images path — absolutize per request
+            if (icon.startsWith("/")) return `${origin}${icon}`;
+            // Legacy cached format: portal prefix + raw logo value (often malformed
+            // for bare filenames) — recover the logo and rebuild the proxied path
+            if (icon.startsWith(portalPrefix)) {
+              const rawLogo = icon.slice(portalPrefix.length).replace(/^\//, "");
+              return `${origin}${proxiedLogoPath(rawLogo)}`;
+            }
+            return icon; // external absolute URL — leave as-is
+          };
+          const withIcons = (await applyXtreamChannelOverrides(raw)).map((c: any) => ({
+            ...c,
+            stream_icon: fixIcon(c.stream_icon),
+          }));
+          return h.response(withIcons);
         }
 
         // ── VOD ─────────────────────────────────────────────────────────────
@@ -1471,14 +1525,22 @@ export const xtreamRoutes: ServerRoute[] = [
   {
     method: "GET",
     path: "/movie/{username}/{password}/{streamId}.m3u8",
-    handler: (request, h) => handleStalkerVodStream(request, h),
+    handler: async (request, h) => {
+      const { username, password } = request.params;
+      if (!await resolveXtreamUser(username, password)) return h.response("Unauthorized").code(401);
+      return handleStalkerVodStream(request, h);
+    },
   },
 
   // ── Series stream ──────────────────────────────────────────────────────────
   {
     method: "GET",
     path: "/series/{username}/{password}/{streamId}.m3u8",
-    handler: (request, h) => handleStalkerSeriesStream(request, h),
+    handler: async (request, h) => {
+      const { username, password } = request.params;
+      if (!await resolveXtreamUser(username, password)) return h.response("Unauthorized").code(401);
+      return handleStalkerSeriesStream(request, h);
+    },
   },
 
   // ── Live stream .m3u8 ──────────────────────────────────────────────────────
@@ -1486,7 +1548,8 @@ export const xtreamRoutes: ServerRoute[] = [
     method: "GET",
     path: "/live/{username}/{password}/{streamId}.m3u8",
     handler: async (request, h) => {
-      const { streamId } = request.params;
+      const { username, password, streamId } = request.params;
+      if (!await resolveXtreamUser(username, password)) return h.response("Unauthorized").code(401);
       const { proxy: proxyParam } = request.query as { proxy?: string };
       const activeProfile = await ConfigProfile.findOne({
         where: { isActive: true },
@@ -1539,7 +1602,8 @@ export const xtreamRoutes: ServerRoute[] = [
     method: "GET",
     path: "/live/{username}/{password}/{streamId}.ts",
     handler: async (request, h) => {
-      const { streamId } = request.params;
+      const { username, password, streamId } = request.params;
+      if (!await resolveXtreamUser(username, password)) return h.response("Unauthorized").code(401);
       const { proxy: proxyParam } = request.query as { proxy?: string };
       const activeProfile = await ConfigProfile.findOne({
         where: { isActive: true },
@@ -1619,6 +1683,7 @@ export const xtreamRoutes: ServerRoute[] = [
     path: "/{username}/{password}/{streamId}",
     handler: async (request, h) => {
       const { streamId, username, password } = request.params;
+      if (!await resolveXtreamUser(username, password)) return h.response("Unauthorized").code(401);
       return h.redirect(`/live/${username}/${password}/${streamId}.ts`).code(302);
     },
   },
@@ -1626,7 +1691,8 @@ export const xtreamRoutes: ServerRoute[] = [
     method: "GET",
     path: "/movie/{username}/{password}/{streamId}.{extension}",
     handler: async (request, h) => {
-      const { streamId, extension } = request.params;
+      const { username, password, streamId, extension } = request.params;
+      if (!await resolveXtreamUser(username, password)) return h.response("Unauthorized").code(401);
       if (initialConfig.providerType === "stalker") {
         return handleStalkerVodStream(request, h);
       }
@@ -1646,7 +1712,8 @@ export const xtreamRoutes: ServerRoute[] = [
     method: "GET",
     path: "/series/{username}/{password}/{episodeId}.{extension}",
     handler: async (request, h) => {
-      const { episodeId, extension } = request.params;
+      const { username, password, episodeId, extension } = request.params;
+      if (!await resolveXtreamUser(username, password)) return h.response("Unauthorized").code(401);
       if (initialConfig.providerType === "stalker") {
         return handleStalkerSeriesStream(request, h);
       }

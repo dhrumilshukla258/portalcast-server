@@ -30,6 +30,13 @@ import { logger } from "./utils/logger";
 import { authCheck } from "./utils/jwt";
 
 const init = async () => {
+  if (!process.env.ADMIN_PASSWORD) {
+    logger.warn("ADMIN_PASSWORD is not set — admin login is disabled (returns 503).");
+  }
+  if (!process.env.ADMIN_EMAIL && !process.env.ADMIN_EMAILS) {
+    logger.warn("ADMIN_EMAIL is not set — any email + ADMIN_PASSWORD logs in as admin (bootstrap mode). Set ADMIN_EMAIL to lock this down.");
+  }
+
   await initDB();
 
   await migrateToProfiles();
@@ -107,6 +114,30 @@ const init = async () => {
 
     // Attach user metadata to plugins state so handlers can access it
     (request.plugins as any).user = user;
+
+    const isMutation = ["POST", "PUT", "DELETE", "PATCH"].includes(request.method.toUpperCase());
+
+    // Paths that require admin regardless of HTTP method
+    const isAdminOnlyPath =
+      path.startsWith("/api/admin/") ||
+      path.startsWith("/api/v2/debug") ||
+      path.startsWith("/api/v2/refresh-") ||
+      path.startsWith("/api/refresh/") ||
+      path.startsWith("/api/profiles") ||
+      path.startsWith("/api/config") ||
+      path.startsWith("/api/upload") ||
+      path === "/api/v2/reset-movies" ||
+      path === "/api/v2/get-token";
+
+    // User owns this data — any valid JWT, any method
+    const isUserOwnData =
+      path.startsWith("/api/user/") ||
+      path === "/api/auth/device/authorize";
+
+    if ((isAdminOnlyPath || (isMutation && !isUserOwnData)) && user.role !== "admin") {
+      return h.response({ error: "Forbidden" }).code(403).takeover();
+    }
+
     return h.continue;
   });
 

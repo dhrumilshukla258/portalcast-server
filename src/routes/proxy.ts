@@ -90,6 +90,7 @@ export const proxy: ServerRoute[] = [
 
       try {
         const decodedUrl = Buffer.from(url, "base64").toString("utf-8");
+        assertHttpUrl(decodedUrl);
         const referer = ref
           ? Buffer.from(ref, "base64").toString("utf-8")
           : undefined;
@@ -119,10 +120,17 @@ export const proxy: ServerRoute[] = [
         >;
         if (!url) return h.response({ error: "No URL provided" }).code(400);
 
-        const decodedUrl = Buffer.from(url, "base64").toString("utf-8");
+        let decodedUrl = Buffer.from(url, "base64").toString("utf-8");
         const referer = ref
           ? Buffer.from(ref, "base64").toString("utf-8")
           : undefined;
+
+        // Stalker portal cmds (e.g. "ffrt http://...") — hand off to the live route which handles them properly
+        let isHttpUrl = true;
+        try { assertHttpUrl(decodedUrl); } catch { isHttpUrl = false; }
+        if (!isHttpUrl) {
+          return h.redirect(`/live.m3u8?cmd=${encodeURIComponent(decodedUrl)}`);
+        }
 
         const playlistUrl = assertHttpUrl(decodedUrl).href;
         console.log(`[/proxy] ${request.info.remoteAddress} → ${playlistUrl}`);

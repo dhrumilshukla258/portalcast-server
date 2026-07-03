@@ -35,6 +35,8 @@ Connects to a **Stalker portal** or **Xtream Codes API** and re-serves the conte
 - **TMDB metadata** — optional poster/backdrop enrichment for VOD and series
 - **Profiles** — multiple portal accounts, switchable without restart
 - **Portal type auto-detection** — handles mixed VOD+series portals and native series portals automatically
+- **Reverse-proxy friendly** — all generated URLs honor `X-Forwarded-Proto`/`X-Forwarded-Host`, so the same server works via LAN `ip:port` and an HTTPS domain simultaneously (Caddy/nginx/Traefik)
+- **Client-aware live playback** — browsers get CORS-safe proxied HLS; Smart TVs (Tizen/WebOS) get direct redirects with zero server load
 - **HTTPS / TLS** — optional TLS termination built in
 
 ---
@@ -76,19 +78,40 @@ Configure via the browser UI at `http://localhost:3000` — set provider type to
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `3000` | Listen port |
-| `ADMIN_PASSWORD` | `admin` | Content Manager password |
+| `JWT_SECRET` | — | **Required.** JWT signing key — server refuses to start if unset |
+| `ADMIN_EMAIL` | — | **Required for admin login.** Email address of the admin account |
+| `ADMIN_PASSWORD` | — | **Required for admin login.** Admin password — server returns 503 if unset |
 | `PROXY_SECRET` | — | HMAC secret for signed proxy URLs (required in production) |
-| `JWT_SECRET` | — | JWT secret for API tokens |
+| `PUBLIC_BASE_URL` | — | Hard override for all generated URLs (e.g. `https://iptv.example.com`). If unset, URLs are derived per-request from `X-Forwarded-Proto`/`X-Forwarded-Host` (reverse proxy) or the request host — leave unset when the server is reached both via LAN ip:port and a proxied domain |
+| `LIVE_TRANSCODE` | `false` | Set `true` to transcode HEVC live streams to H.264 on the server (ffmpeg) for clients without hardware HEVC decoding. Off by default — streams are proxied untouched and the client decodes |
 | `SERIES_FLAG` | `is_series` | Field that marks series items on mixed portals where VOD and series share the same endpoint |
-| `VOD_CATEGORY_VERSIONING` | `false` | Set `true` to enable category version suffixes (free player trick) |
+| `VOD_CATEGORY_VERSIONING` | `false` | Set `true` to enable category version suffixes (forces IPTV players to re-fetch updated categories) |
 | `STRM_MOVIES_PATH` | — | Output directory for movie `.strm` files |
 | `STRM_SERIES_PATH` | — | Output directory for series `.strm` files |
+| `STRM_BASE_URL` | — | Base URL in `.strm` files — set to the address Jellyfin uses to reach this server (e.g. `http://192.168.1.100:3000`) |
+| `STRM_XTREAM_USERNAME` | — | Email of the dedicated Xtream user whose credentials go into `.strm` file URLs — must have `xtreamEnabled: true` in the DB |
+| `STRM_XTREAM_PASSWORD` | — | Password for the `STRM_XTREAM_USERNAME` account |
 | `TMDB_API_READ_TOKEN` | — | TMDB token for poster/backdrop enrichment |
+| `GOOGLE_CLIENT_ID` | — | Google OAuth client ID (enables Google sign-in) |
 | `TLS_CERT_PATH` | — | TLS certificate path (enables HTTPS on the server) |
 | `TLS_KEY_PATH` | — | TLS key path |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 
 Full variable reference and all features → **[docs/features.md](docs/features.md)**
+
+---
+
+## Authentication
+
+One user store (the `Users` table), reachable through several doors:
+
+**Admin** — log in with `ADMIN_EMAIL` + `ADMIN_PASSWORD` through the normal login, or via the password-only admin login `POST /api/auth/admin` (used by the Content Manager). If `ADMIN_EMAIL` is not set, the server runs in **bootstrap mode**: any email + `ADMIN_PASSWORD` logs in as admin, and a startup warning is printed — set `ADMIN_EMAIL` to lock this down.
+
+**Users** — Email/password or Google OAuth via `/api/auth/*`. New users are pending until an admin approves them. TV apps pair via a device code flow: the TV displays a short code, the user enters it in the web UI, and the TV receives a JWT automatically.
+
+All `/api/` and `/v2/` endpoints require a Bearer JWT in the `Authorization` header unless the path is explicitly exempted (stream proxies, auth endpoints, Xtream player paths). Management endpoints (config, profiles, content manager, user admin) and all write operations additionally require the admin role.
+
+The Xtream Codes API layer (`/player_api.php`, `/live/`, `/movie/`, `/series/`, M3U playlists) authenticates with **per-user credentials**: any active user's email + password (the same account used for web login), or the admin env credentials. There is no shared playlist password.
 
 ---
 
@@ -98,9 +121,9 @@ Full variable reference and all features → **[docs/features.md](docs/features.
 
 | Field | Value |
 |-------|-------|
-| URL | `http://your-server:3000` |
-| Username | *(configured username)* |
-| Password | *(configured password)* |
+| URL | `http://your-server:3000` (or your reverse-proxy domain) |
+| Username | Your account email (same as web login) |
+| Password | Your account password |
 
 ### M3U / EPG
 
@@ -116,6 +139,16 @@ Set `STRM_MOVIES_PATH` and `STRM_SERIES_PATH` to directories your media server s
 
 ---
 
+## Reverse Proxy
+
+Works out of the box behind Caddy, nginx, or Traefik. Every generated URL — the Xtream handshake (`server_info`), M3U playlist entries, TV pairing links — is derived **per request** from `X-Forwarded-Proto`/`X-Forwarded-Host`, falling back to the request host. So `https://iptv.example.com` and `http://192.168.1.x:3010` both work at the same time, each client getting URLs that match how it connected.
+
+- **Caddy**: works with a plain `reverse_proxy` directive — it sets the forwarded headers by default
+- **nginx**: add `proxy_set_header X-Forwarded-Proto $scheme;` and `proxy_set_header Host $host;`
+- Set `PUBLIC_BASE_URL` only if you want to force one canonical address into every URL
+
+---
+
 ## HLS Transcode Proxy
 
 For players that can't handle direct stream URLs (DRM, unusual containers, multi-audio), the built-in FFmpeg proxy at `/api/media/hls/master.m3u8?url=...` transcodes on-the-fly with:
@@ -124,6 +157,8 @@ For players that can't handle direct stream URLs (DRM, unusual containers, multi
 - Multi-audio track selection (language-labeled)
 - Subtitle track passthrough
 - Session-based FFmpeg process management with idle cleanup
+
+For **live** streams, server-side HEVC→H.264 transcoding is available but off by default (`LIVE_TRANSCODE=true` to enable) — by default the server stays a pure proxy and clients decode with their own hardware.
 
 Requires FFmpeg installed in the container (included in the default Docker image).
 

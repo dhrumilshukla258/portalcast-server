@@ -42,7 +42,7 @@ const ConfigDefault: Config = {
   groups: [],
   proxy: false,
   tokens: [],
-  playCensored: false,
+  playCensored: process.env.PLAY_CENSORED === "true",
   providerType: "stalker",
   username: "user",
   password: "password",

@@ -77,7 +77,10 @@ export const configRoutes: ServerRoute[] = [
       try {
         const payload = request.payload as any;
         const providedPassword = payload?.password;
-        const expectedPassword = process.env.ADMIN_PASSWORD || "admin";
+        const expectedPassword = process.env.ADMIN_PASSWORD;
+          if (!expectedPassword) {
+            return h.response({ error: "Server misconfiguration: ADMIN_PASSWORD not set" }).code(503);
+          }
 
         if (providedPassword === expectedPassword) {
           const token = createJWT({ role: "admin" });

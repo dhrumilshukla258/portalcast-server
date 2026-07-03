@@ -47,9 +47,9 @@ function extractYear(str: string): string {
   return m ? m[0] : "";
 }
 
-function portalBase(): string {
-  const proto = initialConfig.https ? "https" : "http";
-  return `${proto}://${initialConfig.hostname}:${initialConfig.port}`;
+function strmBase(): string {
+  if (process.env.STRM_BASE_URL) return process.env.STRM_BASE_URL.replace(/\/$/, "");
+  return `http://localhost:${process.env.PORT || 3000}`;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -77,9 +77,9 @@ async function generateMovies(outputDir: string): Promise<void> {
   logger.info("[STRM] Movies: starting generation...");
   fs.mkdirSync(outputDir, { recursive: true });
 
-  const base = portalBase();
-  const u    = initialConfig.username || "";
-  const p    = initialConfig.password || "";
+  const base = strmBase();
+  const u    = process.env.STRM_XTREAM_USERNAME || initialConfig.username || "admin";
+  const p    = process.env.STRM_XTREAM_PASSWORD || initialConfig.password || "admin";
 
   // ── Phase 1: bulk upsert raw entries (own folder, no merge yet) ──────────────
 
@@ -192,9 +192,9 @@ async function generateSeries(outputDir: string): Promise<void> {
   logger.info("[STRM] Series: starting generation...");
   fs.mkdirSync(outputDir, { recursive: true });
 
-  const base = portalBase();
-  const u    = initialConfig.username || "";
-  const p    = initialConfig.password || "";
+  const base = strmBase();
+  const u    = process.env.STRM_XTREAM_USERNAME || initialConfig.username || "admin";
+  const p    = process.env.STRM_XTREAM_PASSWORD || initialConfig.password || "admin";
 
   // ── Phase 1: bulk upsert raw entries ─────────────────────────────────────────
 

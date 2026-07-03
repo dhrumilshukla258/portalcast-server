@@ -8,13 +8,19 @@ import {
   getVodRefreshStatus,
 } from "@/utils/getM3uUrls";
 import { ServerRoute } from "@hapi/hapi";
+import { resolveXtreamUser } from "./xtream";
+import { getPublicOrigin } from "@/utils/publicUrl";
 
 export const playlistRoutes: ServerRoute[] = [
   {
     method: "GET",
     path: "/playlist.m3u",
-    handler: async (_request, h) => {
-      const m3u = await getM3uV2(h.request.headers.host);
+    handler: async (request, h) => {
+      const { username, password } = request.query as Record<string, string>;
+      if (!await resolveXtreamUser(username, password)) {
+        return h.response("Unauthorized").code(401);
+      }
+      const m3u = await getM3uV2(getPublicOrigin(request));
 
       return h
         .response(m3u)
@@ -25,7 +31,11 @@ export const playlistRoutes: ServerRoute[] = [
   {
     method: "GET",
     path: "/playlist",
-    handler: async () => {
+    handler: async (request, h) => {
+      const { username, password } = request.query as Record<string, string>;
+      if (!await resolveXtreamUser(username, password)) {
+        return h.response({ error: "Unauthorized" }).code(401);
+      }
       const m3u: Channel[] = await getPlaylistV2();
       return m3u;
     },
@@ -33,8 +43,12 @@ export const playlistRoutes: ServerRoute[] = [
   {
     method: "GET",
     path: "/vod/playlist.m3u",
-    handler: async (_request, h) => {
-      const m3u = await getVodM3uV2(h.request.headers.host);
+    handler: async (request, h) => {
+      const { username, password } = request.query as Record<string, string>;
+      if (!await resolveXtreamUser(username, password)) {
+        return h.response("Unauthorized").code(401);
+      }
+      const m3u = await getVodM3uV2(getPublicOrigin(request));
 
       return h
         .response(m3u)
@@ -45,7 +59,11 @@ export const playlistRoutes: ServerRoute[] = [
   {
     method: "GET",
     path: "/epg.xml",
-    handler: async (_request, h) => {
+    handler: async (request, h) => {
+      const { username, password } = request.query as Record<string, string>;
+      if (!await resolveXtreamUser(username, password)) {
+        return h.response("Unauthorized").code(401);
+      }
       const epg = await getEPGV2();
       return h
         .response(epg)
@@ -58,7 +76,7 @@ export const playlistRoutes: ServerRoute[] = [
     path: "/api/refresh/vod",
     handler: async (_request, h) => {
       try {
-        refreshVodCache(h.request.headers.host);
+        refreshVodCache(getPublicOrigin(h.request));
         return h
           .response({ success: true, message: "VOD cache refresh started in background" })
           .code(202);

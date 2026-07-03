@@ -6,6 +6,7 @@ import { createJWT, verifyJWT, authCheck } from "../utils/jwt";
 import { v4 as uuidv4 } from "uuid";
 import { verifyPassword, hashPassword } from "../utils/password";
 import { sendAdminApprovalRequest } from "../utils/email";
+import { getPublicOrigin } from "../utils/publicUrl";
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -174,8 +175,11 @@ export const authRoutes: ServerRoute[] = [
 
         // Check for Admin credentials configured in .env
         const adminEmail = (process.env.ADMIN_EMAIL || "").toLowerCase().trim();
-        const adminEmailsList = (process.env.ADMIN_EMAILS || "").split(",").map(e => e.trim().toLowerCase());
-        const isAdminEmail = email === adminEmail || adminEmailsList.includes(email);
+        const adminEmailsList = (process.env.ADMIN_EMAILS || "").split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
+        // If no admin email is configured at all, the admin password alone
+        // grants admin access (bootstrap mode for fresh deployments).
+        const noAdminEmailConfigured = !adminEmail && adminEmailsList.length === 0;
+        const isAdminEmail = email === adminEmail || adminEmailsList.includes(email) || noAdminEmailConfigured;
         const envAdminPassword = process.env.ADMIN_PASSWORD;
 
         if (isAdminEmail && envAdminPassword && password === envAdminPassword) {
@@ -384,12 +388,8 @@ export const authRoutes: ServerRoute[] = [
           expiresAt
         });
 
-        // Resolve absolute URL dynamically based on host
-        console.log(request);
-        
-        const host = request.info.host || "localhost:3000";
-        const proto = request.headers["x-forwarded-proto"] || "http";
-        const verificationUrl = `${proto}://${host}/#/verify?code=${userCode}`;
+        // Resolve absolute URL dynamically based on host (reverse-proxy aware)
+        const verificationUrl = `${getPublicOrigin(request)}/#/verify?code=${userCode}`;
 
         return {
           deviceCode,

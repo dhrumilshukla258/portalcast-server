@@ -11,6 +11,7 @@ import {
 } from "@/utils/overrides";
 import { xtreamCache } from "@/routes/xtream";
 import { ContentOverride } from "@/models/ContentOverride";
+import { proxiedLogoPath } from "@/utils/portalAssets";
 
 // Cache
 let liveCache: string = "#EXTM3U";
@@ -46,15 +47,12 @@ async function saveToCache(key: string, value: string): Promise<void> {
   }
 }
 
-function channelToM3u(channel: Channel, group: string, host: string): M3ULine {
+// serverUrl is a full origin, e.g. "https://stream.example.com" or "http://192.168.1.2:3010"
+function channelToM3u(channel: Channel, group: string, serverUrl: string): M3ULine {
   const logoUrl = channel.logo
     ? channel.logo.startsWith("http")
       ? channel.logo
-      : decodeURI(
-          `http://${initialConfig.hostname}:${initialConfig.port}${
-            initialConfig.contextPath !== "" ? "/" + initialConfig.contextPath : ""
-          }/misc/logos/320/${channel.logo}`,
-        )
+      : decodeURI(`${serverUrl}${proxiedLogoPath(channel.logo)}`)
     : "";
 
   const cleanName = channel.name.replaceAll(",", "").replaceAll(" - ", "-");
@@ -66,10 +64,10 @@ function channelToM3u(channel: Channel, group: string, host: string): M3ULine {
       logoUrl ? ` tvg-logo="${logoUrl}"` : ""
     } group-title="TV - ${group}",${cleanName}`,
     command: channel.cmd.includes(initialConfig.hostname)
-      ? `http://${host}/portal/proxy?url=${encodeURIComponent(
+      ? `${serverUrl}/portal/proxy?url=${encodeURIComponent(
           btoa(channel.cmd.includes(" ") ? (channel.cmd.split(" ").at(1) ?? "") : channel.cmd),
         )}`
-      : `http://${host}/live.m3u8?cmd=${encodeURIComponent(channel.cmd)}&id=${channel.id}`,
+      : `${serverUrl}/live.m3u8?cmd=${encodeURIComponent(channel.cmd)}&id=${channel.id}`,
   };
 }
 
@@ -91,7 +89,7 @@ export async function getPlaylistV2() {
   return m3u;
 }
 
-export async function getM3uV2(host: string) {
+export async function getM3uV2(serverUrl: string) {
   const activeProfile = await ConfigProfile.findOne({ where: { isActive: true } });
   const profileId = activeProfile?.id;
   const genres = await readGenres("channel", profileId);
@@ -114,7 +112,7 @@ export async function getM3uV2(host: string) {
     })
     .map((channel) => {
       const genre = genreMap.get(channel.tv_genre_id)!;
-      return channelToM3u(channel, genre.title, host);
+      return channelToM3u(channel, genre.title, serverUrl);
     })
     .sort(
       (a, b) => a.title.localeCompare(b.title) || a.name.localeCompare(b.name),
@@ -186,7 +184,7 @@ export async function getEPGV2() {
   return xmltv;
 }
 
-async function buildVodM3u(host: string): Promise<string> {
+async function buildVodM3u(serverUrl: string): Promise<string> {
   const groups = await readGenres("movie");
   const visibleGroups = await applyGenreOverrides(groups, "movie");
   const m3uLines: any[] = [];
@@ -211,7 +209,7 @@ async function buildVodM3u(host: string): Promise<string> {
         title: groupTitle,
         name: cleanName,
         header: `#EXTINF:-1 tvg-id="${item.id}" tvg-name="${cleanName}"${logoUrl ? ` tvg-logo="${logoUrl}"` : ""} group-title="${groupTitle}",${cleanName}`,
-        command: `http://${host}/api/vod/play?id=${encodeURIComponent(item.id)}&category=${encodeURIComponent(group.id)}`,
+        command: `${serverUrl}/api/vod/play?id=${encodeURIComponent(item.id)}&category=${encodeURIComponent(group.id)}`,
       });
     };
 
@@ -274,7 +272,7 @@ export function invalidateVodCache(): void {
   vodCacheTime = 0;
 }
 
-export async function refreshVodCache(host: string) {
+export async function refreshVodCache(serverUrl: string) {
   if (vodRefreshInProgress) {
     console.log("VOD cache refresh already in progress, skipping...");
     return;
@@ -287,7 +285,7 @@ export async function refreshVodCache(host: string) {
   // Run in background, don't await
   (async () => {
     try {
-      vodCache = await buildVodM3u(host);
+      vodCache = await buildVodM3u(serverUrl);
       vodCacheTime = Date.now();
       await saveToCache("vod_cache", vodCache);
       vodRefreshStatus = "complete";
@@ -308,14 +306,14 @@ export function getVodRefreshStatus() {
   };
 }
 
-export async function getVodM3uV2(host: string) {
+export async function getVodM3uV2(serverUrl: string) {
   if (vodCache === "#EXTM3U") {
-    refreshVodCache(host);
+    refreshVodCache(serverUrl);
     return vodCache;
   }
 
   if (Date.now() - vodCacheTime > VOD_CACHE_TTL) {
-    refreshVodCache(host);
+    refreshVodCache(serverUrl);
   }
 
   return vodCache;

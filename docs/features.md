@@ -16,8 +16,10 @@
 10. [EPG Handling](#epg-handling)
 11. [Profiles](#profiles)
 12. [Live Stream Proxy](#live-stream-proxy)
-13. [TMDB Integration](#tmdb-integration)
-14. [API Reference](#api-reference)
+13. [Reverse Proxy & Public URLs](#reverse-proxy--public-urls)
+14. [TMDB Integration](#tmdb-integration)
+15. [Authentication](#authentication)
+16. [API Reference](#api-reference)
 
 ---
 
@@ -43,9 +45,13 @@
 | `PORT` | `3000` | Listen port |
 | `NODE_ENV` | — | `production` enforces `PROXY_SECRET` |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
-| `ADMIN_PASSWORD` | `admin` | Content Manager password |
+| `JWT_SECRET` | — | **Required.** JWT signing key — server refuses to start if unset |
+| `ADMIN_EMAIL` | — | **Required for admin login.** Email address mapped to the admin account |
+| `ADMIN_PASSWORD` | — | **Required for admin login.** Admin password — returns 503 if unset |
 | `PROXY_SECRET` | — | HMAC secret for signed proxy URLs — required in production |
-| `JWT_SECRET` | — | JWT secret for API tokens |
+| `PUBLIC_BASE_URL` | — | Hard override for all generated URLs (e.g. `https://iptv.example.com`). If unset, URLs are derived per-request from `X-Forwarded-*` headers or the request host |
+| `LIVE_TRANSCODE` | `false` | Enable server-side HEVC→H.264 transcode for live streams (ffmpeg). Off by default — clients decode with their own hardware |
+| `GOOGLE_CLIENT_ID` | — | Google OAuth client ID — enables Google sign-in for users and TV pairing |
 | `TLS_CERT_PATH` | — | TLS certificate path (enables HTTPS on the server) |
 | `TLS_KEY_PATH` | — | TLS key path |
 
@@ -57,6 +63,7 @@
 | `VOD_CATEGORY_VERSIONING` | `false` | Set `true` to append version suffix to category IDs in Xtream responses |
 | `STRM_MOVIES_PATH` | — | Directory to write movie `.strm` files for Jellyfin/Emby |
 | `STRM_SERIES_PATH` | — | Directory to write series `.strm` files for Jellyfin/Emby |
+| `STRM_BASE_URL` | — | Base URL written into `.strm` files (e.g. `http://192.168.1.100:3000`). Xtream provider defaults to the upstream server; Stalker defaults to `http://localhost:PORT` |
 | `TMDB_API_READ_TOKEN` | — | TMDB read token for metadata enrichment |
 
 ### Networking
@@ -354,6 +361,21 @@ Multiple portal configurations can be stored and switched without restarting the
 
 ## Live Stream Proxy
 
+### Client-aware mode selection (`/live.m3u8`)
+
+The web UI requests live streams as `/live.m3u8?cmd=...&id=...&proxy=1`. The server picks the delivery mode per client:
+
+| Client | Behavior |
+|--------|----------|
+| Browser (`proxy=1`) | **Always proxied** — playlists rewritten to same-origin signed segment URLs. Browsers cannot follow redirects to the upstream portal (CORS / mixed content), so `proxy=1` overrides the profile's proxy setting |
+| Smart TV (`Tizen`/`SMART-TV`/`WebOS` user-agent) | **Direct 302 redirect** to the resolved CDN URL — TV webviews are not CORS-bound and decode natively, so no server bandwidth is used |
+| `proxy=0` | Forces a direct redirect regardless of config |
+| No `proxy` param (IPTV players) | Follows the active profile's `proxy` setting |
+
+### Optional live HEVC transcode
+
+When `LIVE_TRANSCODE=true`, the server probes the stream codec (ffprobe, cached 1h) and transcodes HEVC channels to H.264 HLS (`libx264 ultrafast`) for clients without hardware HEVC decoding. Sessions live under `/live-hls/{sessionId}/` and are killed after 60s idle. Disabled by default — the server stays a pure proxy and clients decode.
+
 ### Xtream live streams (`LiveStreamService`)
 
 Two modes controlled per-request via `proxy=0` query param (default is proxy-on based on server config):
@@ -382,6 +404,26 @@ Two modes controlled per-request via `proxy=0` query param (default is proxy-on 
 
 ---
 
+## Reverse Proxy & Public URLs
+
+The server can be reached simultaneously via LAN `ip:port` and an HTTPS domain behind a reverse proxy (Caddy, nginx, Traefik). Every generated absolute URL is resolved **per request** by `src/utils/publicUrl.ts` with this priority:
+
+1. `PUBLIC_BASE_URL` env var — hard override, pins one canonical address
+2. `X-Forwarded-Proto` / `X-Forwarded-Host` headers set by the reverse proxy
+3. The `Host` header of the incoming request
+
+When the request arrives with no explicit port through an HTTPS proxy, the Xtream handshake reports port `443`/`https` (not the internal listen port), so players configured with the bare domain build correct stream URLs.
+
+**Affected URLs:** Xtream `server_info` (player handshake), M3U playlist entries (`/playlist.m3u`, `/vod/playlist.m3u`), and TV device-pairing verification links.
+
+**Proxy configuration:**
+- **Caddy** — a plain `reverse_proxy` block is enough (it preserves `Host` and sets `X-Forwarded-Proto` by default)
+- **nginx** — add `proxy_set_header Host $host;` and `proxy_set_header X-Forwarded-Proto $scheme;`
+
+**PWA note:** the web app's service worker (active only on HTTPS origins) serves the SPA shell for page navigations. Server-rendered paths (`/contentmanager`, playlists, EPG, stream endpoints) are on its denylist so they always reach the server. If you add new server-rendered pages, add them to the denylist in `public/sw.js`.
+
+---
+
 ## TMDB Integration
 
 Set `TMDB_API_READ_TOKEN` to enrich VOD and series metadata with posters and backdrops.
@@ -392,6 +434,58 @@ Avatar 4K BluRay  →  search "Avatar"
 ```
 
 Returns `poster`, `backdrop`, and `overview`. Enriched metadata is merged into Xtream `get_vod_info` and `get_series_info` responses. If TMDB is unavailable or the token is not set, the fields are silently omitted — nothing breaks.
+
+---
+
+## Authentication
+
+### Admin auth
+
+Two ways in:
+
+- **Normal login** — `POST /api/auth/login` with `ADMIN_EMAIL` + `ADMIN_PASSWORD` (auto-creates/promotes the admin user record)
+- **Admin login** — `POST /api/auth/admin` with `{ password }` matching `ADMIN_PASSWORD` (used by the Content Manager UI)
+
+**Bootstrap mode:** if neither `ADMIN_EMAIL` nor `ADMIN_EMAILS` is set, *any* email + `ADMIN_PASSWORD` logs in as admin, and a warning is printed at startup. Set `ADMIN_EMAIL` to lock this down.
+
+### User auth
+
+Email/password registration and login via `/api/auth/signup` and `/api/auth/login`. New users start as `pending` and must be approved by an admin before they can log in. Admins can approve, suspend, or promote users via the user management API.
+
+### Google OAuth
+
+`POST /api/auth/google` with a Google ID token. If the email matches `ADMIN_EMAIL` or `ADMIN_EMAILS` (comma-separated), the account is auto-promoted to admin. Otherwise it is created as a pending user awaiting approval. Requires `GOOGLE_CLIENT_ID` to be set.
+
+### TV / device code pairing
+
+For Samsung TV apps and other headless clients that can't do browser-based OAuth:
+
+1. Device calls `POST /api/auth/device/code` — receives a short user code (e.g. `ABC-DEF`), a device code, and a verification URL (reverse-proxy aware)
+2. The TV displays the user code
+3. A logged-in user enters the code in the web UI (`POST /api/auth/device/authorize`)
+4. Device polls `POST /api/auth/device/poll` with its device code — receives access + refresh JWTs once authorized (TV refresh tokens last 6 months)
+
+Codes expire after 5 minutes. The device can poll until expiry.
+
+### JWT scope & role gating
+
+All `/api/` and `/v2/` endpoints require `Authorization: Bearer <token>` unless explicitly exempted:
+- Stream proxies (`/api/proxy`, `/api/media/`, `/api/vod/`, `/api/v2/download`)
+- Auth endpoints (`/api/auth/`), image proxy (`/api/images/`)
+- Player paths (`/live.m3u8`, `/player/`, `/live/`, `/movie/`, `/series/`, `/player_api.php`, `/xmltv.php`)
+- Portal proxy (`/portal/proxy`)
+
+On top of the JWT requirement, a role check applies:
+- **Admin-only paths** (any method): `/api/admin/`, `/api/profiles`, `/api/config`, `/api/upload`, refresh/debug endpoints, `/api/v2/get-token`
+- **All mutations** (POST/PUT/DELETE/PATCH) require the admin role, except user-owned data (`/api/user/*`) and device authorization
+
+### Xtream player credentials
+
+Xtream player paths use URL-embedded credentials (`{username}/{password}`), validated on every request against:
+1. Any **active user** in the `Users` table (email + password — the same account as web login)
+2. The **admin env credentials** (`ADMIN_EMAIL` + `ADMIN_PASSWORD`; email check skipped in bootstrap mode)
+
+There is no shared playlist password — the legacy profile `username`/`password` fallback was removed because its defaults were guessable.
 
 ---
 
@@ -462,9 +556,37 @@ Returns `poster`, `backdrop`, and `overview`. Enriched metadata is merged into X
 |----------|-------------|
 | `GET /api/config` | Get server config |
 | `POST /api/config` | Update server config |
-| `POST /api/auth/admin` | Admin login (returns JWT) |
+| `POST /api/auth/admin` | Admin login — `{ password }` → JWT (Content Manager) |
+| `POST /api/auth/signup` | Register new user — starts as pending |
+| `POST /api/auth/login` | Email/password login → JWT |
+| `POST /api/auth/google` | Google OAuth login → JWT |
+| `POST /api/auth/refresh` | Refresh JWT |
+| `POST /api/auth/device/code` | Request a TV pairing code |
+| `POST /api/auth/device/poll` | Poll for JWT after pairing (device) |
+| `POST /api/auth/device/authorize` | Authorize a pairing code (web UI) |
 | `GET /api/v2/get-token` | Get API token (Stalker only) |
 | `POST /api/v2/clear-tokens` | Revoke all tokens (Stalker only) |
+
+### User Management (admin only)
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/admin/users` | List all users |
+| `POST /api/admin/users` | Create user |
+| `GET /api/admin/users/{id}` | Get user |
+| `PUT /api/admin/users/{id}` | Update user (approve / suspend / role) |
+| `DELETE /api/admin/users/{id}` | Delete user |
+
+### User Profile
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/user/profile` | Get own profile |
+| `PUT /api/user/preferences` | Update preferences |
+| `GET /api/user/progress` | Get watch progress |
+| `POST /api/user/progress` | Save watch progress |
+| `DELETE /api/user/progress/{mediaId}` | Remove progress entry |
+| `POST /api/user/clear-history` | Clear all watch history |
 
 ### Profiles
 
@@ -500,6 +622,7 @@ Returns `poster`, `backdrop`, and `overview`. Enriched metadata is merged into X
 
 | Endpoint | Description |
 |----------|-------------|
+| `POST /api/v2/debug/fix-live-icons` | Rewrite legacy cached channel logo URLs to the proxied `/api/images` format (in-place, no deletion) |
 | `GET /api/v2/debug/epg?id=` | Raw EPG for a channel |
 | `GET /api/v2/debug/vod-item?id=` | Raw portal item |
 | `GET /api/v2/debug/episode-fetch?seriesId=&seasonId=` | Episode fetch diagnostics |

@@ -25,6 +25,8 @@ import {
 } from "@/utils/overrides";
 import crypto from "crypto";
 import { getEpgCache, fetchAndCacheEpg } from "@/utils/epg";
+import { getPublicOrigin } from "@/utils/publicUrl";
+import { channelLogoPath, proxiedLogoPath } from "@/utils/portalAssets";
 
 const CACHE_DURATION_MS = 4 * 60 * 60 * 1000; // 4 hours
 
@@ -44,15 +46,20 @@ const generateCacheKey = (type: string, queryParams: any): string => {
   return `${type}_${crypto.createHash("md5").update(sortedString).digest("hex")}`;
 };
 
-const mapChannel = (channel: any) => {
+// origin is the public base URL of this server (reverse-proxy aware), so the
+// returned cmd is a complete playable URL that can be copied into any player.
+const mapChannel = (channel: any, origin: string) => {
   let cmdUrl = channel.cmd;
+  let logo = channel.logo || channel.screenshot_uri || "";
   if (initialConfig.providerType === "stalker") {
-    cmdUrl = `/live.m3u8?cmd=${encodeURIComponent(channel.cmd)}&id=${channel.id}&proxy=1`;
+    cmdUrl = `${origin}/live.m3u8?cmd=${encodeURIComponent(channel.cmd)}&id=${channel.id}&proxy=1`;
+    // Frontend prefixes non-http values with /api/images — hand it a portal-root path
+    logo = channelLogoPath(logo);
   }
   return {
     ...channel,
     cmd: cmdUrl,
-    screenshot_uri: channel.logo || channel.screenshot_uri || "",
+    screenshot_uri: logo,
     isPortal: initialConfig.providerType === "stalker",
   };
 };
@@ -64,7 +71,8 @@ export const stalkerV2: ServerRoute[] = [
     handler: async (request, h) => {
       try {
         const { slug } = request.params;
-        const targetUrl = `http://${initialConfig.hostname}:${initialConfig.port}/${slug}`;
+        const proto = initialConfig.https ? "https" : "http";
+        const targetUrl = `${proto}://${initialConfig.hostname}:${initialConfig.port}/${slug}`;
         const response = await fetch(targetUrl);
 
         if (!response.ok || !response.body) {
@@ -155,7 +163,8 @@ export const stalkerV2: ServerRoute[] = [
             initialConfig.playCensored || String(channel.censored) !== "1",
         );
         await writeChannels(filteredChannels, profileId);
-        const mappedChannels = filteredChannels.map(mapChannel);
+        const origin = getPublicOrigin(request);
+        const mappedChannels = filteredChannels.map((c) => mapChannel(c, origin));
         const genres = await readGenres("channel", profileId);
         if (genres.length === 0) {
           return mappedChannels ?? [];
@@ -193,10 +202,12 @@ export const stalkerV2: ServerRoute[] = [
         const visibleGenres = await applyGenreOverrides(genres, "channel");
         const visibleGenreIds = new Set(visibleGenres.map((g: any) => g.id));
         const overriddenChannels = await applyChannelOverrides(channels);
+        const origin = getPublicOrigin(request);
         return overriddenChannels
           .filter((channel) => visibleGenreIds.has(channel.tv_genre_id) &&
             (initialConfig.groups.length === 0 ||
               initialConfig.groups.includes(originalTitleMap.get(channel.tv_genre_id) ?? "")))
+          .map((channel) => mapChannel(channel, origin))
           .sort((a, b) => a.name.localeCompare(b.name));
       } catch (err) {
         console.error(err);
@@ -651,6 +662,57 @@ export const stalkerV2: ServerRoute[] = [
         return h
           .response({ success: false, error: "Failed to retrieve movie link." })
           .code(500);
+      }
+    },
+  },
+  {
+    // Rewrites legacy portal-prefixed stream_icon values stored in the
+    // live_streams_* XtreamCache entries to the proxied /api/images format.
+    // One-shot in-place migration — nothing is deleted.
+    method: "POST",
+    path: "/api/v2/debug/fix-live-icons",
+    handler: async (_request, h) => {
+      try {
+        const { Op } = await import("sequelize");
+        const rows = await XtreamCache.findAll({
+          where: { key: { [Op.like]: "live_streams_%" } },
+        });
+        const portalPrefix = `${initialConfig.https ? "https" : "http"}://${initialConfig.hostname}:${initialConfig.port}`;
+        let entriesUpdated = 0;
+        let iconsRewritten = 0;
+
+        for (const row of rows) {
+          let list: any;
+          try { list = JSON.parse(row.value); } catch { continue; }
+          if (!Array.isArray(list)) continue;
+
+          let changed = false;
+          const fixed = list.map((c: any) => {
+            const icon = c?.stream_icon;
+            if (typeof icon === "string" && icon.startsWith(portalPrefix)) {
+              const rawLogo = icon.slice(portalPrefix.length).replace(/^\//, "");
+              changed = true;
+              iconsRewritten++;
+              return { ...c, stream_icon: proxiedLogoPath(rawLogo) };
+            }
+            return c;
+          });
+
+          if (changed) {
+            row.value = JSON.stringify(fixed);
+            await row.save();
+            entriesUpdated++;
+          }
+        }
+
+        return h.response({
+          success: true,
+          cacheEntriesScanned: rows.length,
+          cacheEntriesUpdated: entriesUpdated,
+          iconsRewritten,
+        });
+      } catch (err: any) {
+        return h.response({ success: false, error: err.message }).code(500);
       }
     },
   },
@@ -1174,6 +1236,13 @@ export const stalkerV2: ServerRoute[] = [
         } else {
           if (path.startsWith("/")) {
             targetUrl = `http://${initialConfig.hostname}:${initialConfig.port}${path}`;
+          } else {
+            // Reject arbitrary external URLs to prevent SSRF
+            const parsed = new URL(path);
+            if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+              return h.response({ error: "Invalid URL" }).code(400);
+            }
+            targetUrl = path;
           }
           headers = {
             "User-Agent": "VLC/3.0.16 LibVLC/3.0.16",
