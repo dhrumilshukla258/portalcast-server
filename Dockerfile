@@ -17,7 +17,8 @@ RUN npm prune --omit=dev
 
 FROM node:18-alpine
 
-RUN apk add --no-cache tzdata
+# ffmpeg (with ffprobe) is required at runtime for HEVC live transcode and VOD transcode
+RUN apk add --no-cache tzdata ffmpeg
 
 WORKDIR /app
 

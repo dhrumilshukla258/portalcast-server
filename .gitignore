@@ -35,5 +35,9 @@ stalker-m3u-server.env
 stalker-m3u-server.yml
 compose.override.yml
 database.sqlite
+database.db
+database.db-journal
+database.db-wal
+database.db-shm
 temp
 uploads
