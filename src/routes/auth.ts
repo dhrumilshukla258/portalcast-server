@@ -5,7 +5,7 @@ import { DeviceCode } from "../models/DeviceCode";
 import { createJWT, verifyJWT, authCheck } from "../utils/jwt";
 import { v4 as uuidv4 } from "uuid";
 import { verifyPassword, hashPassword } from "../utils/password";
-import { sendAdminApprovalRequest } from "../utils/email";
+import { sendAdminApprovalRequest, sendPasswordResetEmail } from "../utils/email";
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -288,8 +288,9 @@ export const authRoutes: ServerRoute[] = [
           return h.response({ error: "Missing email, name, or password" }).code(400);
         }
 
-        if (password.trim().length < 6) {
-          return h.response({ error: "Password must be at least 6 characters" }).code(400);
+        const passwordRegex = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]).{8,}$/;
+        if (!passwordRegex.test(password)) {
+          return h.response({ error: "Password is not matching its criteria" }).code(400);
         }
 
         const existing = await User.findOne({ where: { email } });
@@ -512,6 +513,81 @@ export const authRoutes: ServerRoute[] = [
         return { success: true, message: "Device successfully authorized!" };
       } catch (error) {
         console.error("Error authorizing device code:", error);
+        return h.response({ error: "Internal Server Error" }).code(500);
+      }
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/auth/forgot-password",
+    handler: async (request, h) => {
+      try {
+        const payload = request.payload as any;
+        const email = payload?.email?.toLowerCase().trim();
+
+        if (!email) {
+          return h.response({ error: "Missing email address" }).code(400);
+        }
+
+        const user = await User.findOne({ where: { email } });
+        if (!user) {
+          // Return generic success to avoid email enumeration security vulnerability
+          return { success: true, message: "If an account exists with this email, a reset link has been sent." };
+        }
+
+        const token = uuidv4();
+        user.resetToken = token;
+        user.resetTokenExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+        await user.save();
+
+        const referer = request.headers.referer || `http://localhost:5173/`;
+        const baseUrl = referer.split("#")[0];
+        const resetLink = `${baseUrl}#/reset-password?token=${token}`;
+
+        await sendPasswordResetEmail(user.name, user.email, resetLink);
+
+        return { success: true, message: "If an account exists with this email, a reset link has been sent." };
+      } catch (error) {
+        console.error("Error in forgot-password:", error);
+        return h.response({ error: "Internal Server Error" }).code(500);
+      }
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/auth/reset-password",
+    handler: async (request, h) => {
+      try {
+        const payload = request.payload as any;
+        const { token, password } = payload;
+
+        if (!token || !password) {
+          return h.response({ error: "Missing token or password" }).code(400);
+        }
+
+        const passwordRegex = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]).{8,}$/;
+        if (!passwordRegex.test(password)) {
+          return h.response({ error: "Password is not matching its criteria" }).code(400);
+        }
+
+        const user = await User.findOne({
+          where: { resetToken: token }
+        });
+
+        if (!user || !user.resetTokenExpires || new Date() > user.resetTokenExpires) {
+          return h.response({ error: "Invalid or expired reset token." }).code(400);
+        }
+
+        const { hash, salt } = hashPassword(password);
+        user.passwordHash = hash;
+        user.salt = salt;
+        user.resetToken = undefined;
+        user.resetTokenExpires = undefined;
+        await user.save();
+
+        return { success: true, message: "Password reset successfully. You can now log in." };
+      } catch (error) {
+        console.error("Error in reset-password:", error);
         return h.response({ error: "Internal Server Error" }).code(500);
       }
     },

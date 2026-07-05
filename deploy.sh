@@ -51,47 +51,11 @@ COMMAND="${COMMAND:-deploy}"
 # --- Helper Functions ---
 function build_and_push() {
   # 1. Pull remote DB changes first to avoid data loss
-  echo "🔄 Syncing database from remote container before build..."
-  local DB_CONTAINER_NAME="$IMAGE_NAME"
-
-  # Check if remote container exists/is running
-  if ssh "$REMOTE_HOST" "${USE_SUDO} docker ps -a -q -f name=^${DB_CONTAINER_NAME}$ | grep -q ." 2>/dev/null; then
-    echo "📦 Remote container '$DB_CONTAINER_NAME' detected. Pulling remote database..."
-    if ssh "$REMOTE_HOST" "${USE_SUDO} docker cp ${DB_CONTAINER_NAME}:/app/database.sqlite /tmp/remote_database.sqlite" 2>/dev/null; then
-      echo "📥 Downloading remote database..."
-      if scp "$REMOTE_HOST:/tmp/remote_database.sqlite" ./remote_database.sqlite 2>/dev/null; then
-        ssh "$REMOTE_HOST" "${USE_SUDO} rm -f /tmp/remote_database.sqlite"
-
-        if [ ! -f database.sqlite ]; then
-          echo "📄 Local database.sqlite not found. Initializing with remote database."
-          cp remote_database.sqlite database.sqlite
-        else
-          echo "🔄 Merging remote database changes into local database.sqlite..."
-          sqlite3 database.sqlite <<EOF
-ATTACH 'remote_database.sqlite' AS remote;
-INSERT OR REPLACE INTO channels SELECT * FROM remote.channels;
-INSERT OR REPLACE INTO config_profiles SELECT * FROM remote.config_profiles;
-INSERT OR REPLACE INTO content_cache SELECT * FROM remote.content_cache;
-INSERT OR REPLACE INTO device_codes SELECT * FROM remote.device_codes;
-INSERT OR REPLACE INTO epg_cache SELECT * FROM remote.epg_cache;
-INSERT OR REPLACE INTO genres SELECT * FROM remote.genres;
-INSERT OR REPLACE INTO system_config SELECT * FROM remote.system_config;
-INSERT OR REPLACE INTO tokens SELECT * FROM remote.tokens;
-INSERT OR REPLACE INTO users SELECT * FROM remote.users;
-INSERT OR REPLACE INTO user_progress SELECT * FROM remote.user_progress;
-DETACH remote;
-EOF
-        fi
-        rm -f remote_database.sqlite
-        echo "✨ Remote database merge complete!"
-      else
-        echo "⚠️ Failed to download remote database file. Proceeding with local DB."
-      fi
-    else
-      echo "⚠️ Failed to copy database from remote container. Proceeding with local DB."
-    fi
+  echo "🔄 Syncing database from remote containers before build..."
+  if [ "$USE_SUDO" = "sudo" ]; then
+    bash ./pull-db.sh --sudo
   else
-    echo "ℹ️ Remote container '$DB_CONTAINER_NAME' is not running/found. Skipping DB sync."
+    bash ./pull-db.sh
   fi
 
   # Inga thaan namba check panrom
@@ -117,6 +81,12 @@ EOF
 function deploy_remote() {
   echo "🚀 Deploying on $REMOTE_HOST (Sudo Mode: ${USE_SUDO:-Off})..."
   
+  # Ensure remote directories exist and database is copied
+  echo "📂 Creating remote volume directory and copying database..."
+  ssh "$REMOTE_HOST" "mkdir -p ~/stalker-data/$IMAGE_NAME"
+  scp ./database.sqlite "$REMOTE_HOST:~/stalker-data/$IMAGE_NAME/database.sqlite"
+  ssh "$REMOTE_HOST" "chmod 777 ~/stalker-data/$IMAGE_NAME ~/stalker-data/$IMAGE_NAME/database.sqlite"
+
   ssh "$REMOTE_HOST" << EOF
     cd "$REMOTE_DIR" || exit
     
@@ -128,8 +98,12 @@ function deploy_remote() {
     $USE_SUDO docker load < "$TAR_NAME"
     rm "$TAR_NAME"
 
-    echo "🚀 Starting container..."
-    $USE_SUDO docker run -d --restart=always -p $PORT:3000 --name "$IMAGE_NAME" "$IMAGE_NAME"
+    echo "🚀 Starting container with persistent volume..."
+    $USE_SUDO docker run -d --restart=always \
+      -p $PORT:3000 \
+      -v ~/stalker-data/$IMAGE_NAME:/app/data \
+      -e DATABASE_PATH=/app/data/database.sqlite \
+      --name "$IMAGE_NAME" "$IMAGE_NAME"
     
     echo "🧹 Cleaning up old images..."
     $USE_SUDO docker image prune -f

@@ -13,7 +13,7 @@ import { ContentCache } from "../models/ContentCache";
 
 export const sequelize = new Sequelize({
   dialect: "sqlite",
-  storage: path.join(process.cwd(), "database.sqlite"),
+  storage: process.env.DATABASE_PATH || path.join(process.cwd(), "database.sqlite"),
   // 2. Added ContentCache into the Sequelize models array
   models: [Token, SystemConfig, ConfigProfile, Channel, Genre, EpgCache, User, DeviceCode, UserProgress, ContentCache],
   logging: false,
@@ -71,6 +71,18 @@ export async function initDB() {
     try {
       await sequelize.query("ALTER TABLE `users` ADD COLUMN `avatarUrl` TEXT;");
       console.log("Migration: Added avatarUrl column to users table.");
+    } catch {
+      // Ignore if the column already exists
+    }
+    try {
+      await sequelize.query("ALTER TABLE `users` ADD COLUMN `resetToken` TEXT;");
+      console.log("Migration: Added resetToken column to users table.");
+    } catch {
+      // Ignore if the column already exists
+    }
+    try {
+      await sequelize.query("ALTER TABLE `users` ADD COLUMN `resetTokenExpires` DATETIME;");
+      console.log("Migration: Added resetTokenExpires column to users table.");
     } catch {
       // Ignore if the column already exists
     }

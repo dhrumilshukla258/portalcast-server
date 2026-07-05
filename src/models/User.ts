@@ -43,4 +43,10 @@ export class User extends Model {
 
     @Column(DataType.STRING)
     avatarUrl?: string;
+
+    @Column(DataType.STRING)
+    resetToken?: string;
+
+    @Column(DataType.DATE)
+    resetTokenExpires?: Date;
 }

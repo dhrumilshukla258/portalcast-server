@@ -17,6 +17,38 @@ import { getEpgCache } from "@/utils/epg";
 
 const CACHE_DURATION_MS = 4 * 60 * 60 * 1000; // Exact 4 Hours Configuration Window
 
+const resolveStalkerUrl = (stalker: any, urlPath: string): string => {
+  if (!urlPath) return "";
+  
+  let cleanedPath = urlPath.trim();
+  const httpMatch = cleanedPath.match(/(https?:\/\/[^\s"']+)/);
+  if (httpMatch) {
+    cleanedPath = httpMatch[1];
+  } else {
+    const spaceIndex = cleanedPath.indexOf(" ");
+    if (spaceIndex !== -1) {
+      const parts = cleanedPath.split(/\s+/);
+      const pathPart = parts.find(p => p.startsWith("/") || p.includes("."));
+      if (pathPart) {
+        cleanedPath = pathPart;
+      }
+    }
+  }
+
+  if (cleanedPath.startsWith("http://") || cleanedPath.startsWith("https://")) {
+    return cleanedPath;
+  }
+  
+  const baseHost = `http://${initialConfig.hostname}:${initialConfig.port}`;
+  const context = initialConfig.contextPath ? `/${initialConfig.contextPath}` : "";
+  const normalizedPath = cleanedPath.startsWith("/") ? cleanedPath : `/${cleanedPath}`;
+  
+  if (context && normalizedPath.startsWith(context)) {
+    return `${baseHost}${normalizedPath}`;
+  }
+  return `${stalker.getBaseUrl()}${normalizedPath}`;
+};
+
 const getActiveProfileId = async () => {
   const activeProfile = await ConfigProfile.findOne({
     where: { isActive: true },
@@ -725,8 +757,8 @@ export const stalkerV2: ServerRoute[] = [
             }
 
             let resolvedUrl = linkData?.js?.cmd || linkData?.cmd;
-            if (resolvedUrl && resolvedUrl.startsWith("/")) {
-              resolvedUrl = `${stalker.getBaseUrl()}${resolvedUrl}`;
+            if (resolvedUrl) {
+              resolvedUrl = resolveStalkerUrl(stalker, resolvedUrl);
             }
 
             // If we got a valid download link, let's request it
@@ -788,8 +820,8 @@ export const stalkerV2: ServerRoute[] = [
             }
 
             let playUrl = playLinkData?.js?.cmd || playLinkData?.cmd;
-            if (playUrl && playUrl.startsWith("/")) {
-              playUrl = `${stalker.getBaseUrl()}${playUrl}`;
+            if (playUrl) {
+              playUrl = resolveStalkerUrl(stalker, playUrl);
             }
             if (playUrl) {
               const config = stalker._getAxiosRequestConfig({}, token || "");
@@ -880,8 +912,8 @@ export const stalkerV2: ServerRoute[] = [
             token = await stalker.getToken(false);
           }
 
-          if (path.startsWith("/")) {
-            targetUrl = `${stalker.getBaseUrl()}${path}`;
+          if (path) {
+            targetUrl = resolveStalkerUrl(stalker, path);
           }
 
           const config = stalker._getAxiosRequestConfig({}, token || "");
