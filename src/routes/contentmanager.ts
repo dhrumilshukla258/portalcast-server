@@ -1,4 +1,5 @@
 import { ServerRoute } from "@hapi/hapi";
+import { logger } from "@/utils/logger";
 import { authCheck } from "@/utils/jwt";
 import { GenreOverride } from "@/models/GenreOverride";
 import { ContentOverride } from "@/models/ContentOverride";
@@ -1155,7 +1156,7 @@ export const adminRoutes: ServerRoute[] = [
         return h.response({ error: "STRM_MOVIES_PATH and STRM_SERIES_PATH are not configured" }).code(400);
       }
       // Run in background, respond immediately
-      generateStrmFiles().catch((e) => console.error("[STRM] generate error:", e));
+      generateStrmFiles().catch((e) => logger.error({ err: e }, "[STRM] generate error"));
       return h.response({ success: true, message: "STRM generation started in background" });
     },
   },

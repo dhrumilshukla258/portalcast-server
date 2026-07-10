@@ -1,4 +1,5 @@
 import { ServerRoute } from "@hapi/hapi";
+import { logger } from "@/utils/logger";
 import { OAuth2Client } from "google-auth-library";
 import { User } from "../models/User";
 import { DeviceCode } from "../models/DeviceCode";
@@ -48,7 +49,7 @@ export const authRoutes: ServerRoute[] = [
           });
           googlePayload = ticket.getPayload();
         } catch (err: any) {
-          console.error("Google token verification failed:", err);
+          logger.error({ err }, "Google token verification failed");
           return h.response({ error: "Invalid Google ID Token" }).code(401);
         }
 
@@ -114,7 +115,7 @@ export const authRoutes: ServerRoute[] = [
             });
             // Send SMTP approval email to admin
             sendAdminApprovalRequest(name, email).catch(err => {
-              console.error("Failed to send admin approval email:", err);
+              logger.error({ err }, "Failed to send admin approval email");
             });
             return h.response({ error: "Access Denied. Your request for access has been submitted. Please wait for administrator approval." }).code(403);
           }
@@ -155,7 +156,7 @@ export const authRoutes: ServerRoute[] = [
           }
         };
       } catch (error) {
-        console.error("Error during Google auth:", error);
+        logger.error({ err: error }, "Error during Google auth");
         return h.response({ error: "Internal Server Error" }).code(500);
       }
     },
@@ -273,7 +274,7 @@ export const authRoutes: ServerRoute[] = [
           }
         };
       } catch (error) {
-        console.error("Error during credentials login:", error);
+        logger.error({ err: error }, "Error during credentials login");
         return h.response({ error: "Internal Server Error" }).code(500);
       }
     },
@@ -319,7 +320,7 @@ export const authRoutes: ServerRoute[] = [
 
         // Trigger SMTP approval email to admin in background
         sendAdminApprovalRequest(name, email).catch(err => {
-          console.error("Failed to send admin approval email:", err);
+          logger.error({ err }, "Failed to send admin approval email");
         });
 
         return {
@@ -327,7 +328,7 @@ export const authRoutes: ServerRoute[] = [
           message: "Signup successful. Your request for access has been submitted. Please wait for administrator approval."
         };
       } catch (error) {
-        console.error("Error during credentials signup:", error);
+        logger.error({ err: error }, "Error during credentials signup");
         return h.response({ error: "Internal Server Error" }).code(500);
       }
     },
@@ -367,7 +368,7 @@ export const authRoutes: ServerRoute[] = [
           refreshToken
         };
       } catch (error) {
-        console.error("Error during token refresh:", error);
+        logger.error({ err: error }, "Error during token refresh");
         return h.response({ error: "Internal Server Error" }).code(500);
       }
     },
@@ -398,7 +399,7 @@ export const authRoutes: ServerRoute[] = [
           expiresIn: 300 // 5 minutes in seconds
         };
       } catch (error) {
-        console.error("Error generating device code:", error);
+        logger.error({ err: error }, "Error generating device code");
         return h.response({ error: "Internal Server Error" }).code(500);
       }
     },
@@ -469,7 +470,7 @@ export const authRoutes: ServerRoute[] = [
 
         return { status: record.status };
       } catch (error) {
-        console.error("Error polling device code:", error);
+        logger.error({ err: error }, "Error polling device code");
         return h.response({ error: "Internal Server Error" }).code(500);
       }
     },
@@ -511,7 +512,7 @@ export const authRoutes: ServerRoute[] = [
 
         return { success: true, message: "Device successfully authorized!" };
       } catch (error) {
-        console.error("Error authorizing device code:", error);
+        logger.error({ err: error }, "Error authorizing device code");
         return h.response({ error: "Internal Server Error" }).code(500);
       }
     },

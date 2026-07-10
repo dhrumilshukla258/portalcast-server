@@ -1,5 +1,6 @@
 import { Request } from "@hapi/hapi";
 import { serverProtocol } from "@/config/server";
+import { logger } from "@/utils/logger";
 
 // Resolves the URL the client actually used so generated links work both when
 // the server is reached directly (ip:port) and through a reverse proxy (domain).
@@ -16,7 +17,7 @@ function parseBaseUrl(): { proto: "http" | "https"; host: string } | null {
     const u = new URL(raw);
     return { proto: u.protocol === "https:" ? "https" : "http", host: u.host };
   } catch {
-    console.warn(`[publicUrl] Invalid PUBLIC_BASE_URL "${raw}" — ignoring.`);
+    logger.warn(`[publicUrl] Invalid PUBLIC_BASE_URL "${raw}" — ignoring. Fix this env var or generated URLs will be wrong.`);
     return null;
   }
 }

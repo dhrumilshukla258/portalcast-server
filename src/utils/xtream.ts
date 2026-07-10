@@ -1,6 +1,7 @@
 import { initialConfig } from "@/config/server";
 import axios from "axios";
 import pLimit from "p-limit";
+import { logger } from "@/utils/logger";
 
 const requestLimit = pLimit(5);
 
@@ -50,10 +51,7 @@ export class XtreamAPI {
 
         return response.data;
       } catch (error) {
-        console.error(
-          `[XtreamAPI] Error performing action '${action}':`,
-          error,
-        );
+        logger.error({ err: error }, `[XtreamAPI] Error performing action '${action}'`);
         throw error;
       }
     });
@@ -80,7 +78,7 @@ export class XtreamAPI {
         );
         return response.data;
       } catch (error) {
-        console.error("[XtreamAPI] Auth failed", error);
+        logger.error({ err: error }, "[XtreamAPI] Auth failed");
         throw error;
       }
     });

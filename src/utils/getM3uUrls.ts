@@ -12,6 +12,7 @@ import {
 import { xtreamCache } from "@/routes/xtream";
 import { ContentOverride } from "@/models/ContentOverride";
 import { proxiedLogoPath } from "@/utils/portalAssets";
+import { logger } from "@/utils/logger";
 
 // Cache
 let liveCache: string = "#EXTM3U";
@@ -26,16 +27,16 @@ export async function loadPlaylistCache(): Promise<void> {
     const live = await SystemConfig.findByPk("playlist_cache");
     if (live?.value) {
       liveCache = live.value;
-      console.log("Restored live playlist from DB cache.");
+      logger.info("Restored live playlist from DB cache.");
     }
     const vod = await SystemConfig.findByPk("vod_cache");
     if (vod?.value) {
       vodCache = vod.value;
       vodCacheTime = Date.now();
-      console.log("Restored VOD cache from DB.");
+      logger.info("Restored VOD cache from DB.");
     }
   } catch (e) {
-    console.error("Failed to load playlist cache:", e);
+    logger.error(`Failed to load playlist cache: ${e}`);
   }
 }
 
@@ -43,7 +44,7 @@ async function saveToCache(key: string, value: string): Promise<void> {
   try {
     await SystemConfig.upsert({ key, value });
   } catch (e) {
-    console.error(`Failed to save ${key} to cache:`, e);
+    logger.error(`Failed to save ${key} to cache: ${e}`);
   }
 }
 
@@ -172,10 +173,7 @@ export async function getEPGV2() {
           });
         }
       } catch (error) {
-        console.error(
-          `Failed to fetch EPG data for channel ${channel.name}:`,
-          error,
-        );
+        logger.error(`Failed to fetch EPG data for channel ${channel.name}: ${error}`);
       }
     }),
   );
@@ -187,83 +185,87 @@ export async function getEPGV2() {
 async function buildVodM3u(serverUrl: string): Promise<string> {
   const groups = await readGenres("movie");
   const visibleGroups = await applyGenreOverrides(groups, "movie");
-  const m3uLines: any[] = [];
 
   const getVodCache = (catId: string) =>
     xtreamCache.get<any[]>(`vod_streams_${catId}`).then((v) => v ?? []);
   const getSeriesCache = (catId: string) =>
     xtreamCache.get<any[]>(`series_list_${catId}`).then((v) => v ?? []);
 
-  for (const group of visibleGroups) {
-    if (group.id === "*") continue;
-
-    const buildLine = (item: any, isSeries: boolean) => {
-      const rawLogo = (item as any).screenshot_uri || (item as any).stream_icon || (item as any).cover || "";
-      const proto = initialConfig.https ? "https" : "http";
-      const logoUrl = rawLogo
-        ? rawLogo.startsWith("http") ? rawLogo : `${proto}://${initialConfig.hostname}:${initialConfig.port}${rawLogo}`
-        : "";
-      const cleanName = item.name.replaceAll(",", "").replaceAll(" - ", "-");
-      const groupTitle = isSeries ? `Series - ${group.title}` : `VOD - ${group.title}`;
-      m3uLines.push({
-        title: groupTitle,
-        name: cleanName,
-        header: `#EXTINF:-1 tvg-id="${item.id}" tvg-name="${cleanName}"${logoUrl ? ` tvg-logo="${logoUrl}"` : ""} group-title="${groupTitle}",${cleanName}`,
-        command: `${serverUrl}/api/vod/play?id=${encodeURIComponent(item.id)}&category=${encodeURIComponent(group.id)}`,
-      });
+  const buildLine = (item: any, isSeries: boolean, groupTitle: string, groupId: string | number) => {
+    const rawLogo = (item as any).screenshot_uri || (item as any).stream_icon || (item as any).cover || "";
+    const proto = initialConfig.https ? "https" : "http";
+    const logoUrl = rawLogo
+      ? rawLogo.startsWith("http") ? rawLogo : `${proto}://${initialConfig.hostname}:${initialConfig.port}${rawLogo}`
+      : "";
+    const cleanName = item.name.replaceAll(",", "").replaceAll(" - ", "-");
+    const label = isSeries ? `Series - ${groupTitle}` : `VOD - ${groupTitle}`;
+    return {
+      title: label,
+      name: cleanName,
+      header: `#EXTINF:-1 tvg-id="${item.id}" tvg-name="${cleanName}"${logoUrl ? ` tvg-logo="${logoUrl}"` : ""} group-title="${label}",${cleanName}`,
+      command: `${serverUrl}/api/vod/play?id=${encodeURIComponent(item.id)}&category=${encodeURIComponent(groupId)}`,
     };
+  };
 
-    if (String(group.id).startsWith("vcat_")) {
-      // Virtual categories have no portal backing — fetch items from ContentOverride + xtreamCache
-      const movedMovies = await ContentOverride.findAll({
-        where: { item_type: "movie", target_category_id: String(group.id) },
-        raw: true,
-      });
-      for (const ov of movedMovies) {
-        if (ov.hidden || !ov.original_category_id) continue;
-        const itemId = ov.item_key.replace("movie_", "");
-        const srcItems = await getVodCache(ov.original_category_id);
-        const srcItem = srcItems.find((i: any) => String(i.stream_id) === itemId);
-        if (!srcItem) continue;
-        buildLine({ ...srcItem, id: itemId, name: ov.display_name ?? srcItem.name }, false);
-      }
-      const movedSeries = await ContentOverride.findAll({
-        where: { item_type: "series", target_category_id: String(group.id) },
-        raw: true,
-      });
-      for (const ov of movedSeries) {
-        if (ov.hidden || !ov.original_category_id) continue;
-        const itemId = ov.item_key.replace("series_", "");
-        const srcItems = await getSeriesCache(ov.original_category_id);
-        const srcItem = srcItems.find((i: any) => String(i.series_id) === itemId);
-        if (!srcItem) continue;
-        buildLine({ ...srcItem, id: itemId, name: ov.display_name ?? srcItem.name }, true);
-      }
-      continue;
-    }
+  // Process all groups in parallel
+  const groupResults = await Promise.all(
+    visibleGroups
+      .filter((group) => group.id !== "*")
+      .map(async (group) => {
+        const lines: any[] = [];
 
-    // Collect all pages first so moved-in items are added exactly once per group
-    const allRawMovies: any[] = [];
-    const allRawSeries: any[] = [];
-    let page = 1;
-    while (true) {
-      const result = await serverManager.getProvider().getMovies({ category: group.id, page });
-      if (!result?.js?.data) break;
-      const rawItems = Array.isArray(result.js.data) ? result.js.data : [];
-      if (rawItems.length === 0) break;
-      allRawMovies.push(...rawItems.filter((i: any) => i[seriesFlag] != 1));
-      allRawSeries.push(...rawItems.filter((i: any) => i[seriesFlag] == 1));
-      if (rawItems.length < 14) break;
-      page++;
-    }
+        if (String(group.id).startsWith("vcat_")) {
+          // Virtual categories: no portal backing — read from ContentOverride + xtreamCache
+          const [movedMovies, movedSeries] = await Promise.all([
+            ContentOverride.findAll({ where: { item_type: "movie", target_category_id: String(group.id) }, raw: true }),
+            ContentOverride.findAll({ where: { item_type: "series", target_category_id: String(group.id) }, raw: true }),
+          ]);
+          for (const ov of movedMovies) {
+            if (ov.hidden || !ov.original_category_id) continue;
+            const itemId = ov.item_key.replace("movie_", "");
+            const srcItems = await getVodCache(ov.original_category_id);
+            const srcItem = srcItems.find((i: any) => String(i.stream_id) === itemId);
+            if (!srcItem) continue;
+            lines.push(buildLine({ ...srcItem, id: itemId, name: ov.display_name ?? srcItem.name }, false, group.title, group.id));
+          }
+          for (const ov of movedSeries) {
+            if (ov.hidden || !ov.original_category_id) continue;
+            const itemId = ov.item_key.replace("series_", "");
+            const srcItems = await getSeriesCache(ov.original_category_id);
+            const srcItem = srcItems.find((i: any) => String(i.series_id) === itemId);
+            if (!srcItem) continue;
+            lines.push(buildLine({ ...srcItem, id: itemId, name: ov.display_name ?? srcItem.name }, true, group.title, group.id));
+          }
+          return lines;
+        }
 
-    const overriddenMovies = await applyPortalItemOverrides(allRawMovies, "movie", String(group.id), getVodCache);
-    const overriddenSeries = await applyPortalItemOverrides(allRawSeries, "series", String(group.id), getSeriesCache);
+        // Regular category: paginate through provider
+        const allRawMovies: any[] = [];
+        const allRawSeries: any[] = [];
+        let page = 1;
+        while (true) {
+          const result = await serverManager.getProvider().getMovies({ category: group.id, page });
+          if (!result?.js?.data) break;
+          const rawItems = Array.isArray(result.js.data) ? result.js.data : [];
+          if (rawItems.length === 0) break;
+          allRawMovies.push(...rawItems.filter((i: any) => i[seriesFlag] != 1));
+          allRawSeries.push(...rawItems.filter((i: any) => i[seriesFlag] == 1));
+          if (rawItems.length < 14) break;
+          page++;
+        }
 
-    for (const item of overriddenMovies) buildLine(item, false);
-    for (const item of overriddenSeries) buildLine(item, true);
-  }
+        const [overriddenMovies, overriddenSeries] = await Promise.all([
+          applyPortalItemOverrides(allRawMovies, "movie", String(group.id), getVodCache),
+          applyPortalItemOverrides(allRawSeries, "series", String(group.id), getSeriesCache),
+        ]);
 
+        for (const item of overriddenMovies) lines.push(buildLine(item, false, group.title, group.id));
+        for (const item of overriddenSeries) lines.push(buildLine(item, true, group.title, group.id));
+        return lines;
+      }),
+  );
+
+  const m3uLines = groupResults.flat();
   return new M3U(m3uLines).print(initialConfig);
 }
 
@@ -274,13 +276,13 @@ export function invalidateVodCache(): void {
 
 export async function refreshVodCache(serverUrl: string) {
   if (vodRefreshInProgress) {
-    console.log("VOD cache refresh already in progress, skipping...");
+    logger.info("VOD cache refresh already in progress, skipping...");
     return;
   }
 
   vodRefreshInProgress = true;
   vodRefreshStatus = "fetching";
-  console.log("Refreshing VOD cache in background...");
+  logger.info("Refreshing VOD cache in background...");
 
   // Run in background, don't await
   (async () => {
@@ -289,10 +291,10 @@ export async function refreshVodCache(serverUrl: string) {
       vodCacheTime = Date.now();
       await saveToCache("vod_cache", vodCache);
       vodRefreshStatus = "complete";
-      console.log("VOD cache refresh complete.");
+      logger.info("VOD cache refresh complete.");
     } catch (e) {
       vodRefreshStatus = `error: ${e instanceof Error ? e.message : String(e)}`;
-      console.error("VOD cache refresh failed:", e);
+      logger.error(`VOD cache refresh failed: ${e}`);
     } finally {
       vodRefreshInProgress = false;
     }

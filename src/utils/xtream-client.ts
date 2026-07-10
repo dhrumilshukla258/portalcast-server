@@ -13,6 +13,8 @@ import { IProvider } from "@/interfaces/Provider";
 import axios from "axios";
 import { initialConfig } from "@/config/server";
 import NodeCache from "node-cache";
+import { logger } from "@/utils/logger";
+import { CircuitBreaker } from "@/utils/circuitBreaker";
 
 function parseDurationToMinutes(durationStr: string | undefined): number {
   if (!durationStr) return 0;
@@ -81,14 +83,16 @@ function decodeBase64Title(s: string): string {
   }
 }
 
+const PROVIDER_TIMEOUT = parseInt(process.env.PROVIDER_TIMEOUT || "120000", 10);
+
 export class XtreamClient implements IProvider {
   private baseUrl: string;
   private username: string;
   private password: string;
   private lastRequestTime: number = 0;
   private cache = new NodeCache({ stdTTL: 21600, checkperiod: 60 });
-  // Deduplicates concurrent requests for the same upstream key
   private inFlight = new Map<string, Promise<any>>();
+  private breaker = new CircuitBreaker("XtreamClient");
 
   constructor() {
     const protocol = initialConfig.https ? "https" : "http";
@@ -116,6 +120,10 @@ export class XtreamClient implements IProvider {
       return cachedData;
     }
 
+    if (this.breaker.isOpen()) {
+      throw new Error("XtreamClient circuit breaker is open — upstream provider is unavailable");
+    }
+
     // Deduplicate: if an identical request is already in-flight, wait for it
     if (this.inFlight.has(cacheKey)) {
       return this.inFlight.get(cacheKey)!;
@@ -133,14 +141,16 @@ export class XtreamClient implements IProvider {
           Accept: "*/*",
           "Accept-Encoding": "gzip, deflate, br",
         },
-        timeout: 120000, // 120 s — prevents server timeout on massive upstream payloads
+        timeout: PROVIDER_TIMEOUT,
       })
       .then((response) => {
+        this.breaker.recordSuccess();
         this.cache.set(cacheKey, response.data);
         return response.data;
       })
       .catch((error) => {
-        console.error("XtreamClient request failed:", error?.message ?? error);
+        this.breaker.recordFailure();
+        logger.error(`XtreamClient request failed: ${error?.message ?? error}`);
         throw error;
       })
       .finally(() => {
@@ -179,7 +189,7 @@ export class XtreamClient implements IProvider {
     const data = await this.makeRequest({ action: "get_live_categories" });
     
     if (!Array.isArray(data)) {
-      console.warn("XtreamClient.getChannelGroups expected an array, but got:", typeof data, data);
+      logger.warn(`XtreamClient.getChannelGroups expected an array, got: ${typeof data}`);
       return { js: [] };
     }
 
@@ -197,7 +207,7 @@ export class XtreamClient implements IProvider {
     const data = await this.makeRequest({ action: "get_live_streams" });
     
     if (!Array.isArray(data)) {
-      console.warn("XtreamClient.getChannels expected an array, but got:", typeof data, data);
+      logger.warn(`XtreamClient.getChannels expected an array, got: ${typeof data}`);
       return { js: { total_items: 0, max_page_items: 0, data: [] } };
     }
 
@@ -259,7 +269,7 @@ export class XtreamClient implements IProvider {
 
       return { js: epgList };
     } catch (error) {
-      console.error(`XtreamClient.getEPG failed for channel ${channelId}:`, error);
+      logger.error(`XtreamClient.getEPG failed for channel ${channelId}: ${error}`);
       return { js: [] };
     }
   }
@@ -268,7 +278,7 @@ export class XtreamClient implements IProvider {
     const data = await this.makeRequest({ action: "get_vod_categories" });
     
     if (!Array.isArray(data)) {
-      console.warn("XtreamClient.getMoviesGroups expected an array, but got:", typeof data, data);
+      logger.warn(`XtreamClient.getMoviesGroups expected an array, got: ${typeof data}`);
       return { js: [] };
     }
 
@@ -325,7 +335,7 @@ export class XtreamClient implements IProvider {
           };
         }
       } catch (err) {
-        console.error("Error fetching get_vod_info for movieId:", params.movieId, err);
+        logger.error(`Error fetching get_vod_info for movieId ${params.movieId}: ${err}`);
       }
       return { js: { total_items: 0, max_page_items: 1, data: [] } };
     }
@@ -338,7 +348,7 @@ export class XtreamClient implements IProvider {
     const data = await this.makeRequest(reqParams);
     
     if (!Array.isArray(data)) {
-      console.warn("XtreamClient.getMovies expected an array, but got:", typeof data, data);
+      logger.warn(`XtreamClient.getMovies expected an array, got: ${typeof data}`);
       return { js: { total_items: 0, max_page_items: 0, data: [] } };
     }
 
@@ -406,7 +416,7 @@ export class XtreamClient implements IProvider {
         }
       }
     } catch (e) {
-      console.error("Error fetching movie container extension:", e);
+      logger.error(`Error fetching movie container extension: ${e}`);
     }
     const url = `${this.baseUrl}/movie/${this.username}/${this.password}/${params.id}.${extension}`;
 
@@ -421,7 +431,7 @@ export class XtreamClient implements IProvider {
     const data = await this.makeRequest({ action: "get_series_categories" });
     
     if (!Array.isArray(data)) {
-      console.warn("XtreamClient.getSeriesGroups expected an array, but got:", typeof data, data);
+      logger.warn(`XtreamClient.getSeriesGroups expected an array, got: ${typeof data}`);
       return { js: [] };
     }
 
@@ -576,7 +586,7 @@ export class XtreamClient implements IProvider {
     const data = await this.makeRequest(reqParams);
     
     if (!Array.isArray(data)) {
-      console.warn("XtreamClient.getSeries expected an array, but got:", typeof data, data);
+      logger.warn(`XtreamClient.getSeries expected an array, got: ${typeof data}`);
       return { js: { total_items: 0, max_page_items: 0, data: [] } };
     }
 
@@ -659,7 +669,7 @@ export class XtreamClient implements IProvider {
         }
       }
     } catch (e) {
-      console.error("Error fetching episode container extension:", e);
+      logger.error(`Error fetching episode container extension: ${e}`);
     }
     const url = `${this.baseUrl}/series/${this.username}/${this.password}/${params.id}.${extension}`;
     return {

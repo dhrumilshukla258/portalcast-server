@@ -719,7 +719,7 @@ export const liveRoutes: ServerRoute[] = [
             .code(502);
         }
       } catch (err: any) {
-        console.error("[Player] Detailed Error:", err);
+        logger.error({ err }, "[Player] Detailed Error");
         logger.error(`[Player] Error fetching segment: ${err.message || err}`);
 
         return h

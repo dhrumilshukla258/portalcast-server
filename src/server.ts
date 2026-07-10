@@ -26,6 +26,9 @@ import { migrateToProfiles, loadActiveProfileFromDB } from "./config/server";
 import { loadPlaylistCache } from "./utils/getM3uUrls";
 import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres, bumpVodVersion } from "./routes/xtream";
 import { fetchAndCacheEpg, getEpgCache } from "./utils/epg";
+import { EpgCache } from "./models/EpgCache";
+import { Op } from "sequelize";
+import { getVodRefreshStatus } from "./utils/getM3uUrls";
 import { logger } from "./utils/logger";
 import { authCheck } from "./utils/jwt";
 
@@ -34,7 +37,13 @@ const init = async () => {
     logger.warn("ADMIN_PASSWORD is not set — admin login is disabled (returns 503).");
   }
   if (!process.env.ADMIN_EMAIL && !process.env.ADMIN_EMAILS) {
-    logger.warn("ADMIN_EMAIL is not set — any email + ADMIN_PASSWORD logs in as admin (bootstrap mode). Set ADMIN_EMAIL to lock this down.");
+    const msg = "ADMIN_EMAIL is not set — any email + ADMIN_PASSWORD logs in as admin (bootstrap mode). Set ADMIN_EMAIL to lock this down.";
+    if (process.env.NODE_ENV === "production") {
+      logger.error(`SECURITY: ${msg}`);
+      logger.error("Refusing to start in production without ADMIN_EMAIL. Set ADMIN_EMAIL or ADMIN_EMAILS to continue.");
+      process.exit(1);
+    }
+    logger.warn(`SECURITY WARNING: ${msg}`);
   }
 
   await initDB();
@@ -83,6 +92,46 @@ const init = async () => {
   server.route(authRoutes);
   server.route(userRoutes);
   server.route(userManagementRoutes);
+
+  // Rate limiter for unauthenticated public endpoints (stream/media routes)
+  const RL_MAX = parseInt(process.env.RATE_LIMIT_MAX || "120", 10); // requests per window
+  const RL_WINDOW = parseInt(process.env.RATE_LIMIT_WINDOW_MS || "60000", 10); // window in ms
+  const rlMap = new Map<string, { count: number; windowStart: number }>();
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, entry] of rlMap) {
+      if (now - entry.windowStart > RL_WINDOW) rlMap.delete(key);
+    }
+  }, RL_WINDOW);
+
+  server.ext("onPreResponse", (_request, h) => h.continue);
+
+  server.ext("onRequest", (request, h) => {
+    const p = request.path;
+    const isPublicStream =
+      p.startsWith("/live/") ||
+      p.startsWith("/movie/") ||
+      p.startsWith("/series/") ||
+      p.startsWith("/live.m3u8") ||
+      p.startsWith("/player/") ||
+      p.startsWith("/api/media/") ||
+      p.startsWith("/api/vod/play");
+
+    if (isPublicStream) {
+      const ip = request.info.remoteAddress;
+      const now = Date.now();
+      const entry = rlMap.get(ip);
+      if (!entry || now - entry.windowStart > RL_WINDOW) {
+        rlMap.set(ip, { count: 1, windowStart: now });
+      } else {
+        entry.count++;
+        if (entry.count > RL_MAX) {
+          return h.response({ error: "Too Many Requests" }).code(429).takeover();
+        }
+      }
+    }
+    return h.continue;
+  });
 
   // Global Auth Interceptor for Hapi endpoints
   server.ext("onPreHandler", (request, h) => {
@@ -139,6 +188,22 @@ const init = async () => {
     }
 
     return h.continue;
+  });
+
+  const startTime = Date.now();
+  server.route({
+    method: "GET",
+    path: "/api/health",
+    options: { auth: false },
+    handler: (_request, h) => {
+      const { inProgress, status } = getVodRefreshStatus();
+      return h.response({
+        status: "ok",
+        uptimeSeconds: Math.floor((Date.now() - startTime) / 1000),
+        vodCache: { refreshing: inProgress, status },
+        provider: initialConfig.providerType ?? "unknown",
+      }).code(200);
+    },
   });
 
   server.route({
@@ -234,6 +299,19 @@ const init = async () => {
       await warmSeriesInfoCache().catch((e) => logger.error(`[warmSeriesInfoCache interval] ${e}`));
     })();
   }, 24 * 60 * 60 * 1000);
+
+  // Daily DB cleanup: purge stale EPG entries (>7 days old).
+  // XtreamCache content rows are managed exclusively by the warm cycle's diff logic — do not delete them here.
+  const runDbCleanup = async () => {
+    try {
+      const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      const epgDeleted = await EpgCache.destroy({ where: { updatedAt: { [Op.lt]: cutoff } } });
+      if (epgDeleted > 0) logger.info(`[cleanup] Purged ${epgDeleted} stale EpgCache rows older than 7 days.`);
+    } catch (e) { logger.error(`[cleanup] EpgCache purge failed: ${e}`); }
+  };
+
+  runDbCleanup().catch((e) => logger.error(`[cleanup startup] ${e}`));
+  setInterval(() => runDbCleanup().catch((e) => logger.error(`[cleanup interval] ${e}`)), 24 * 60 * 60 * 1000);
 };
 
 process.on("unhandledRejection", (err) => {

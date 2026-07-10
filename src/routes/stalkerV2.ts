@@ -26,6 +26,7 @@ import {
 import crypto from "crypto";
 import { getEpgCache, fetchAndCacheEpg } from "@/utils/epg";
 import { getPublicOrigin } from "@/utils/publicUrl";
+import { getM3uV2, getVodM3uV2 } from "@/utils/getM3uUrls";
 import { channelLogoPath, proxiedLogoPath } from "@/utils/portalAssets";
 
 const CACHE_DURATION_MS = 4 * 60 * 60 * 1000; // 4 hours
@@ -90,7 +91,7 @@ export const stalkerV2: ServerRoute[] = [
           .type(contentType)
           .header("cache-control", "max-age=3600");
       } catch (err) {
-        console.error("Piping error:", err);
+        logger.error({ err }, "Piping error");
         return h
           .response({ success: false, error: "An unexpected error occurred." })
           .code(500);
@@ -110,7 +111,7 @@ export const stalkerV2: ServerRoute[] = [
         await writeGenres(filteredCategory, "channel", profileId);
         return filteredCategory;
       } catch (err) {
-        console.error(err);
+        logger.error({ err }, "error");
         return h
           .response({ success: false, error: "Failed to refresh groups." })
           .code(500);
@@ -144,7 +145,7 @@ export const stalkerV2: ServerRoute[] = [
         );
         return filteredGroups;
       } catch (err) {
-        console.error(err);
+        logger.error({ err }, "error");
         return h
           .response({ success: false, error: "Failed to retrieve groups." })
           .code(500);
@@ -180,7 +181,7 @@ export const stalkerV2: ServerRoute[] = [
           );
         });
       } catch (err) {
-        console.error(err);
+        logger.error({ err }, "error");
         return h
           .response({ success: false, error: "Failed to refresh channels." })
           .code(500);
@@ -210,7 +211,7 @@ export const stalkerV2: ServerRoute[] = [
           .map((channel) => mapChannel(channel, origin))
           .sort((a, b) => a.name.localeCompare(b.name));
       } catch (err) {
-        console.error(err);
+        logger.error({ err }, "error");
         return h
           .response({ success: false, error: "Failed to retrieve channels." })
           .code(500);
@@ -230,10 +231,10 @@ export const stalkerV2: ServerRoute[] = [
 
         await upsertGenres(allCats, "movie", profileId);
         await xtreamCache.delete("vod_cats");
-        warmVodCache().catch((e) => console.error("[warm-xtream-vod]", e));
+        warmVodCache().catch((e) => logger.error({ err: e }, "[warm-xtream-vod]"));
         return allCats;
       } catch (err) {
-        console.error(err);
+        logger.error({ err }, "error");
         return h
           .response({
             success: false,
@@ -265,7 +266,7 @@ export const stalkerV2: ServerRoute[] = [
           isPortal: initialConfig.providerType === "stalker",
         };
       } catch (err) {
-        console.error(err);
+        logger.error({ err }, "error");
         return h
           .response({
             success: false,
@@ -286,7 +287,7 @@ export const stalkerV2: ServerRoute[] = [
         );
         return { success: true, data: filteredChannels };
       } catch (err) {
-        console.error(err);
+        logger.error({ err }, "error");
         return h
           .response({ success: false, error: "Failed to reset movies." })
           .code(500);
@@ -426,7 +427,7 @@ export const stalkerV2: ServerRoute[] = [
                 item.cmd = freshCmd.startsWith("ffrt ") ? freshCmd.slice(5) : freshCmd;
               }
             } catch (err) {
-              console.error(`[episode link] failed for id=${item.id}: ${err}`);
+              logger.error(`[episode link] failed for id=${item.id}: ${err}`);
             }
           }
         }
@@ -458,7 +459,7 @@ export const stalkerV2: ServerRoute[] = [
 
         return responsePayload;
       } catch (err) {
-        console.error(err);
+        logger.error({ err }, "error");
         return h
           .response({ success: false, error: "Failed to retrieve movies." })
           .code(500);
@@ -603,7 +604,7 @@ export const stalkerV2: ServerRoute[] = [
 
         return responsePayload;
       } catch (err) {
-        console.error(err);
+        logger.error({ err }, "error");
         return h
           .response({ success: false, error: "Failed to retrieve series." })
           .code(500);
@@ -658,7 +659,7 @@ export const stalkerV2: ServerRoute[] = [
 
         return movieLink;
       } catch (err) {
-        console.error(err);
+        logger.error({ err }, "error");
         return h
           .response({ success: false, error: "Failed to retrieve movie link." })
           .code(500);
@@ -805,7 +806,7 @@ export const stalkerV2: ServerRoute[] = [
           await upsertGenres(nativeCats, "series", profileId);
           await XtreamCache.upsert({ key: "portal_series_source", value: JSON.stringify("native"), expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) });
           await xtreamCache.delete("series_cats");
-          warmSeriesCache().catch((e) => console.error("[warm-xtream-series]", e));
+          warmSeriesCache().catch((e) => logger.error({ err: e }, "[warm-xtream-series]"));
           return nativeCats;
         }
 
@@ -814,10 +815,10 @@ export const stalkerV2: ServerRoute[] = [
         // VOD category and call upsertGenre("series") for any that contain series.
         await XtreamCache.upsert({ key: "portal_series_source", value: JSON.stringify("vod"), expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) });
         await xtreamCache.delete("series_cats");
-        warmVodCache().catch((e) => console.error("[warm-xtream-vod]", e));
+        warmVodCache().catch((e) => logger.error({ err: e }, "[warm-xtream-vod]"));
         return await readGenres("series", profileId);
       } catch (err) {
-        console.error(err);
+        logger.error({ err }, "error");
         return h
           .response({
             success: false,
@@ -831,7 +832,7 @@ export const stalkerV2: ServerRoute[] = [
     method: "POST",
     path: "/api/v2/catchup-scan",
     handler: async (_request, h) => {
-      catchupScan().catch((e) => console.error("[catchup-scan]", e));
+      catchupScan().catch((e) => logger.error(`[catchup-scan] ${e}`));
       return h.response({ success: true, message: "Catch-up scan started in background." });
     },
   },
@@ -858,7 +859,7 @@ export const stalkerV2: ServerRoute[] = [
           isPortal: initialConfig.providerType === "stalker",
         };
       } catch (err) {
-        console.error(err);
+        logger.error({ err }, "error");
         return h
           .response({
             success: false,
@@ -878,7 +879,7 @@ export const stalkerV2: ServerRoute[] = [
           .getChannelLink(request.query.cmd as any);
         return channelLink;
       } catch (err) {
-        console.error(err);
+        logger.error({ err }, "error");
         return h
           .response({
             success: false,
@@ -897,7 +898,7 @@ export const stalkerV2: ServerRoute[] = [
         if (cache) return cache;
         return [];
       } catch (err) {
-        console.error(err);
+        logger.error({ err }, "error");
         return h
           .response({ success: false, error: "Failed to retrieve EPG." })
           .code(500);
@@ -920,7 +921,7 @@ export const stalkerV2: ServerRoute[] = [
         const expiry = await serverManager.getProvider().getExpiry();
         return { success: true, expiry };
       } catch (err) {
-        console.error(err);
+        logger.error({ err }, "error");
         return h
           .response({
             success: false,
@@ -952,7 +953,7 @@ export const stalkerV2: ServerRoute[] = [
           .response({ success: false, error: "Failed to fetch token" })
           .code(500);
       } catch (err) {
-        console.error("Error fetching new token:", err);
+        logger.error({ err }, "Error fetching new token");
         return h
           .response({ success: false, error: "Failed to fetch new token." })
           .code(500);
@@ -975,7 +976,7 @@ export const stalkerV2: ServerRoute[] = [
         }
         return { success: true, message: "All tokens cleared." };
       } catch (err) {
-        console.error("Error clearing tokens:", err);
+        logger.error({ err }, "Error clearing tokens");
         return h
           .response({ success: false, error: "Failed to clear tokens." })
           .code(500);
@@ -986,7 +987,7 @@ export const stalkerV2: ServerRoute[] = [
     method: "POST",
     path: "/api/v2/warm-xtream-vod",
     handler: async (_request, h) => {
-      warmVodCache().catch((e) => console.error("[warm-xtream-vod]", e));
+      warmVodCache().catch((e) => logger.error({ err: e }, "[warm-xtream-vod]"));
       return { success: true, message: "VOD cache warming started in background." };
     },
   },
@@ -995,8 +996,8 @@ export const stalkerV2: ServerRoute[] = [
     method: "POST",
     path: "/api/v2/warm-xtream-series",
     handler: async (_request, h) => {
-      warmSeriesCache().catch((e) => console.error("[warm-xtream-series]", e));
-      warmSeriesInfoCache().catch((e) => console.error("[warm-xtream-series-info]", e));
+      warmSeriesCache().catch((e) => logger.error({ err: e }, "[warm-xtream-series]"));
+      warmSeriesInfoCache().catch((e) => logger.error({ err: e }, "[warm-xtream-series-info]"));
       return { success: true, message: "Series cache warming started in background." };
     },
   },
@@ -1018,7 +1019,7 @@ export const stalkerV2: ServerRoute[] = [
         const count = await XtreamCache.destroy({ where: {} });
         return { success: true, message: `Cleared ${count} xtream cache entries.` };
       } catch (err) {
-        console.error("Error clearing xtream cache:", err);
+        logger.error({ err }, "Error clearing xtream cache");
         return h
           .response({ success: false, error: "Failed to clear xtream cache." })
           .code(500);
@@ -1276,8 +1277,29 @@ export const stalkerV2: ServerRoute[] = [
         proxyResponse.code(response.status);
         return proxyResponse;
       } catch (error: any) {
-        console.error("Download proxy error:", error.message);
+        logger.error("Download proxy error: " + (error?.message ?? error));
         return h.response({ error: "Failed to proxy download" }).code(500);
+      }
+    },
+  },
+
+  {
+    method: "GET",
+    path: "/api/v2/playlist-download",
+    handler: async (request, h) => {
+      const { type } = request.query as { type?: string };
+      const origin = getPublicOrigin(request);
+
+      if (type === "vod") {
+        const m3u = await getVodM3uV2(origin);
+        return h.response(m3u)
+          .type("application/vnd.apple.mpegurl")
+          .header("Content-Disposition", 'attachment; filename="vod.m3u"');
+      } else {
+        const m3u = await getM3uV2(origin);
+        return h.response(m3u)
+          .type("application/vnd.apple.mpegurl")
+          .header("Content-Disposition", 'attachment; filename="iptv.m3u"');
       }
     },
   },

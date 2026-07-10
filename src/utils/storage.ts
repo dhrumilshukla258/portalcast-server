@@ -3,6 +3,7 @@ import { Genre, GenreType } from "../models/Genre";
 import { EpgCache } from "../models/EpgCache";
 import { Op } from "sequelize";
 import { gzipSync, gunzipSync } from "zlib";
+import { logger } from "@/utils/logger";
 
 export async function writeJSON(filename: string, data: any) {
   try {
@@ -20,7 +21,7 @@ export async function writeJSON(filename: string, data: any) {
       }
     }
   } catch (error) {
-    console.error(`Error writing to database (${filename}):`, error);
+    logger.error({ err: error }, `Error writing to database (${filename})`);
     throw error;
   }
 }
@@ -59,7 +60,7 @@ export async function writeChannels(
       ],
     });
   } catch (error) {
-    console.error("Error writing channels to database:", error);
+    logger.error({ err: error }, "Error writing channels to database");
     throw error;
   }
 }
@@ -76,7 +77,7 @@ export async function readChannels(profileId?: number): Promise<any[]> {
       id: c.id.replace(/^\d+_/, "")
     }));
   } catch (error) {
-    console.error("Error reading channels from database:", error);
+    logger.error({ err: error }, "Error reading channels from database");
     return [];
   }
 }
@@ -114,7 +115,7 @@ export async function writeGenres(
       ],
     });
   } catch (error) {
-    console.error(`Error writing ${type} genres to database:`, error);
+    logger.error({ err: error }, `Error writing ${type} genres to database`);
     throw error;
   }
 }
@@ -175,7 +176,7 @@ export async function readGenres(
       id: g.id.replace(new RegExp(`^\\d+_${type}_`), "").replace(new RegExp(`^${type}_`), ""),
     }));
   } catch (error) {
-    console.error(`Error reading ${type} genres from database:`, error);
+    logger.error({ err: error }, `Error reading ${type} genres from database`);
     return [];
   }
 }
@@ -185,9 +186,10 @@ export async function writeEpgCache(
   profileId?: number,
 ): Promise<void> {
   try {
-    if (profileId !== undefined) {
-      await EpgCache.destroy({ where: { profileId } });
-    }
+    // Always destroy old rows before inserting to prevent accumulation.
+    // profileId=undefined means "no active profile" — destroy the null-profileId row.
+    const destroyWhere = profileId !== undefined ? { profileId } : { profileId: null };
+    await EpgCache.destroy({ where: destroyWhere });
 
     const compressed = gzipSync(JSON.stringify(cacheData.data)).toString("base64");
     await EpgCache.create({
@@ -196,7 +198,6 @@ export async function writeEpgCache(
       profileId: profileId !== undefined ? profileId : null,
     });
   } catch (error) {
-    console.error("Error writing EPG cache to database:", error);
     throw error;
   }
 }
@@ -218,7 +219,7 @@ export async function readEpgCache(profileId?: number): Promise<any | null> {
     }
     return { timestamp: cache.timestamp, data: parsed };
   } catch (error) {
-    console.error("Error reading EPG cache from database:", error);
+    logger.error({ err: error }, "Error reading EPG cache from database");
     return null;
   }
 }

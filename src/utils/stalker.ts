@@ -17,8 +17,10 @@ import NodeCache from "node-cache";
 import { Token } from "@/models/Token";
 import pLimit from "p-limit";
 import { logger } from "@/utils/logger";
+import { CircuitBreaker } from "@/utils/circuitBreaker";
 
 const requestLimit = pLimit(5);
+const PROVIDER_TIMEOUT = parseInt(process.env.PROVIDER_TIMEOUT || "120000", 10);
 
 async function httpRequest<T = any>(
   url: string,
@@ -35,7 +37,7 @@ async function httpRequest<T = any>(
       params,
       method: options.method || "GET",
       headers: options.headers,
-      timeout: 120000,
+      timeout: PROVIDER_TIMEOUT,
     })
     .then((res) => {
       if (res.status !== 200) {
@@ -54,6 +56,7 @@ export class StalkerAPI implements IProvider {
   private profileRefreshPromise: Promise<string | null> | null = null;
   private inFlight = new Map<string, Promise<any>>();
 
+  private breaker = new CircuitBreaker("StalkerAPI");
   private watchdogInterval: NodeJS.Timeout | null = null;
   private watchdogStarted: boolean = false;
   private activeChannelId: string = "0";
@@ -256,7 +259,7 @@ export class StalkerAPI implements IProvider {
         "Content-Type": options?.contentType || "application/json",
         Referrer: options?.referrer || this.getBaseUrl(),
       },
-      timeout: 120000,
+      timeout: PROVIDER_TIMEOUT,
       validateStatus: options?.validateStatus || ((status) => status === 200),
       withCredentials: options?.withCredentials || true,
     };
@@ -570,6 +573,10 @@ export class StalkerAPI implements IProvider {
 
         const url = `${this.getBaseUrl()}${endpoint}`;
 
+        if (this.breaker.isOpen()) {
+          throw new Error("StalkerAPI circuit breaker is open — upstream provider is unavailable");
+        }
+
         try {
           const response = await requestLimit(async () => {
             return httpRequest(
@@ -608,6 +615,7 @@ export class StalkerAPI implements IProvider {
             throw new Error("Authorization Failed.");
           }
 
+          this.breaker.recordSuccess();
           if (cacheable) {
             const ttl = this.getCacheTTL(params.action);
             this.cache.set(cacheKey, response, ttl);
@@ -629,6 +637,9 @@ export class StalkerAPI implements IProvider {
               }
               continue;
             }
+          } else {
+            // Network/timeout errors count against the circuit breaker; auth errors do not
+            this.breaker.recordFailure();
           }
           throw error;
         }

@@ -16,6 +16,7 @@ import { User } from "../models/User";
 import { DeviceCode } from "../models/DeviceCode";
 import { UserProgress } from "../models/UserProgress";
 import { ContentCache } from "../models/ContentCache";
+import { logger } from "../utils/logger";
 
 function resolveDatabasePath(): string {
   const envPath = process.env.SQLITE_DB_PATH;
@@ -57,8 +58,8 @@ export const sequelize = new Sequelize({
 export async function initDB() {
   try {
     await sequelize.authenticate();
-    console.log("Database connection has been established successfully.");
-    console.log(`Using SQLite database at: ${databasePath}`);
+    logger.info("Database connection established successfully.");
+    logger.info(`Using SQLite database at: ${databasePath}`);
 
     // Migrate content_cache: drop old table if it has the wrong PK (auto-increment id instead of cacheKey)
     try {
@@ -66,7 +67,7 @@ export async function initDB() {
       if (columns && columns.length > 0) {
         const pkColumn = columns.find((c: any) => c.pk === 1);
         if (pkColumn && pkColumn.name !== "cacheKey") {
-          console.log("Migration: Recreating content_cache table with cacheKey as primary key...");
+          logger.warn("Migration: content_cache has wrong PK — dropping and recreating. All cached API responses will be lost.");
           await sequelize.query("DROP TABLE `content_cache`;");
         }
       }
@@ -80,7 +81,7 @@ export async function initDB() {
       if (columns && columns.length > 0) {
         const hasProfileId = columns.some((c: any) => c.name === "profileId");
         if (!hasProfileId) {
-          console.log("Migration: Recreating user_progress table to include profileId...");
+          logger.warn("Migration: user_progress lacks profileId column — dropping and recreating. All watch history will be lost.");
           await sequelize.query("DROP TABLE `user_progress`;");
         }
       }
@@ -88,30 +89,56 @@ export async function initDB() {
       // Table may not exist yet
     }
 
+    // Migrate user_progress: remove stray single-column unique constraint on profileId
+    // (caused by an earlier sync that added profileId as a unique PK column instead of composite)
+    try {
+      const [indexes] = await sequelize.query("PRAGMA index_list('user_progress');") as any;
+      let needsRecreate = false;
+      for (const idx of (indexes || [])) {
+        if (idx.unique === 1 && idx.origin !== "pk") {
+          const [cols] = await sequelize.query(`PRAGMA index_info('${idx.name}');`) as any;
+          if (cols && cols.length < 3 && cols.some((c: any) => c.name === "profileId")) {
+            needsRecreate = true;
+            break;
+          }
+        }
+      }
+      if (needsRecreate) {
+        logger.warn("Migration: user_progress has stray unique index on profileId — recreating table to fix, all data preserved.");
+        await sequelize.query("CREATE TABLE `user_progress_new` (`userId` INTEGER NOT NULL, `profileId` INTEGER NOT NULL, `mediaId` VARCHAR(255) NOT NULL, `progress` FLOAT, `completed` TINYINT(1), `meta` TEXT, `createdAt` DATETIME NOT NULL, `updatedAt` DATETIME NOT NULL, PRIMARY KEY (`userId`, `profileId`, `mediaId`));");
+        await sequelize.query("INSERT OR IGNORE INTO `user_progress_new` SELECT * FROM `user_progress`;");
+        await sequelize.query("DROP TABLE `user_progress`;");
+        await sequelize.query("ALTER TABLE `user_progress_new` RENAME TO `user_progress`;");
+        logger.info("Migration: user_progress recreated with correct composite primary key.");
+      }
+    } catch (e) {
+      logger.warn(`Migration: user_progress index check failed: ${e}`);
+    }
+
     await sequelize.sync({ alter: true });
-    console.log("Database models synced.");
+    logger.info("Database models synced.");
 
     // Auto-migrate schema: Add passwordHash and salt columns if they do not exist
     try {
       await sequelize.query("ALTER TABLE `users` ADD COLUMN `passwordHash` TEXT;");
-      console.log("Migration: Added passwordHash column to users table.");
+      logger.info("Migration: Added passwordHash column to users table.");
     } catch {
-      // Ignore if the column already exists
+      // Column already exists — expected
     }
     try {
       await sequelize.query("ALTER TABLE `users` ADD COLUMN `salt` TEXT;");
-      console.log("Migration: Added salt column to users table.");
+      logger.info("Migration: Added salt column to users table.");
     } catch {
-      // Ignore if the column already exists
+      // Column already exists — expected
     }
     try {
       await sequelize.query("ALTER TABLE `users` ADD COLUMN `avatarUrl` TEXT;");
-      console.log("Migration: Added avatarUrl column to users table.");
+      logger.info("Migration: Added avatarUrl column to users table.");
     } catch {
-      // Ignore if the column already exists
+      // Column already exists — expected
     }
 
   } catch (error) {
-    console.error("Unable to connect to the database:", error);
+    logger.error(`Unable to connect to the database: ${error}`);
   }
 }

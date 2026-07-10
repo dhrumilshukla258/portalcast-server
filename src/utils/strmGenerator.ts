@@ -67,6 +67,21 @@ async function bulkUpsert(Model: typeof StrmMovie | typeof StrmSeries, rows: any
 
 export async function generateStrmFiles(): Promise<void> {
   if (!MOVIES_PATH && !SERIES_PATH) return;
+
+  // XtreamCache is global and readGenres() has no profileId filter, so generation
+  // works even when Stalker is the active provider, as long as XtreamCache was
+  // populated by a previous Xtream warm. Credentials fall back to ADMIN_EMAIL /
+  // ADMIN_PASSWORD, so no extra config is needed for the common case.
+  if (initialConfig.providerType !== "xtream") {
+    if (!process.env.STRM_XTREAM_USERNAME && !process.env.ADMIN_EMAIL) {
+      logger.warn(
+        `[STRM] Active provider is "${initialConfig.providerType ?? "stalker"}" and neither STRM_XTREAM_USERNAME ` +
+        "nor ADMIN_EMAIL is set. Stream URLs in .strm files will use a placeholder credential. " +
+        "Set STRM_XTREAM_USERNAME / STRM_XTREAM_PASSWORD (or ADMIN_EMAIL / ADMIN_PASSWORD) to fix this.",
+      );
+    }
+  }
+
   if (MOVIES_PATH) await generateMovies(MOVIES_PATH);
   if (SERIES_PATH) await generateSeries(SERIES_PATH);
 }
@@ -78,8 +93,8 @@ async function generateMovies(outputDir: string): Promise<void> {
   fs.mkdirSync(outputDir, { recursive: true });
 
   const base = strmBase();
-  const u    = process.env.STRM_XTREAM_USERNAME || initialConfig.username || "admin";
-  const p    = process.env.STRM_XTREAM_PASSWORD || initialConfig.password || "admin";
+  const u    = process.env.STRM_XTREAM_USERNAME || process.env.ADMIN_EMAIL || "admin";
+  const p    = process.env.STRM_XTREAM_PASSWORD || process.env.ADMIN_PASSWORD || "admin";
 
   // ── Phase 1: bulk upsert raw entries (own folder, no merge yet) ──────────────
 
@@ -193,8 +208,8 @@ async function generateSeries(outputDir: string): Promise<void> {
   fs.mkdirSync(outputDir, { recursive: true });
 
   const base = strmBase();
-  const u    = process.env.STRM_XTREAM_USERNAME || initialConfig.username || "admin";
-  const p    = process.env.STRM_XTREAM_PASSWORD || initialConfig.password || "admin";
+  const u    = process.env.STRM_XTREAM_USERNAME || process.env.ADMIN_EMAIL || "admin";
+  const p    = process.env.STRM_XTREAM_PASSWORD || process.env.ADMIN_PASSWORD || "admin";
 
   // ── Phase 1: bulk upsert raw entries ─────────────────────────────────────────
 

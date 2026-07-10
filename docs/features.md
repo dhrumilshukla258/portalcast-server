@@ -64,6 +64,8 @@
 | `STRM_MOVIES_PATH` | — | Directory to write movie `.strm` files for Jellyfin/Emby |
 | `STRM_SERIES_PATH` | — | Directory to write series `.strm` files for Jellyfin/Emby |
 | `STRM_BASE_URL` | — | Base URL written into `.strm` files (e.g. `http://192.168.1.100:3000`). Xtream provider defaults to the upstream server; Stalker defaults to `http://localhost:PORT` |
+| `STRM_XTREAM_USERNAME` | `ADMIN_EMAIL` | Username embedded in `.strm` stream URLs. Defaults to `ADMIN_EMAIL` so STRM files share the same credential as web UI and Xtream API. |
+| `STRM_XTREAM_PASSWORD` | `ADMIN_PASSWORD` | Password embedded in `.strm` stream URLs. Defaults to `ADMIN_PASSWORD`. |
 | `TMDB_API_READ_TOKEN` | — | TMDB read token for metadata enrichment |
 
 ### Networking
@@ -72,6 +74,26 @@
 |----------|---------|-------------|
 | `API_TIMEOUT` | `5000` | HTTP request timeout (ms) |
 | `API_RETRIES` | `3` | Retry attempts on failed requests (disabled for streams and aborted requests) |
+| `PROVIDER_TIMEOUT` | `120000` | Timeout (ms) for portal upstream requests (Xtream + Stalker) |
+
+### Rate Limiting
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RATE_LIMIT_MAX` | `120` | Max requests per window per IP for public stream endpoints |
+| `RATE_LIMIT_WINDOW_MS` | `60000` | Sliding window size (ms) for rate limiting |
+
+Applies to: `/live/*`, `/movie/*`, `/series/*`, `/live.m3u8`, `/player/*`, `/api/media/*`, `/api/vod/play`. Returns `429 Too Many Requests` when exceeded.
+
+### Circuit Breaker
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CB_FAILURE_THRESHOLD` | `5` | Consecutive failures before circuit opens |
+| `CB_FAILURE_WINDOW_MS` | `60000` | Window in which failures are counted (ms) |
+| `CB_COOLDOWN_MS` | `30000` | Time circuit stays open before attempting half-open probe (ms) |
+
+Both `XtreamClient` and `StalkerAPI` use a circuit breaker. Auth errors (401/403) do not count as failures — only network/timeout errors do.
 
 ---
 
@@ -139,7 +161,13 @@ Content is cached in SQLite (`XtreamCache` table, 24-hour TTL) so the server nev
 
 ### Full catchup scan
 
-`POST /api/v2/catchup-scan` — use after a long offline period to fill any gaps the incremental scan would miss (it stops at the first known item).
+`POST /api/v2/catchup-scan` — reconciles local XtreamCache against portal totals per genre:
+
+- **diff > 0** (portal has more): incremental scan from page 1, tracking `balance = new items found`; stops when `balance >= diff`. Deletions detected in scanned pages are also removed.
+- **diff < 0** (portal has fewer): scans ALL portal pages; builds a complete portal ID set; removes local items absent from portal; also picks up newly added items.
+- **diff = 0**: skip (already in sync).
+
+Use after a long offline period to fill gaps the incremental warm misses (it stops at the first known item).
 
 ### Cache key patterns
 
@@ -251,6 +279,8 @@ Virtual categories have IDs prefixed `vcat_`. The Xtream response normalizes `vc
 ## Jellyfin / .strm Integration
 
 Set `STRM_MOVIES_PATH` and/or `STRM_SERIES_PATH` to a directory Jellyfin/Emby can scan. On every cache warm the server generates `.strm` files pointing to stream URLs. Files are only written when the URL changes — existing paths with unchanged URLs are left untouched.
+
+STRM generation reads from `XtreamCache` (global) and genres from all profiles, so it works even when the **active provider is Stalker** — as long as XtreamCache was previously populated by an Xtream profile. When the active provider is not Xtream, `STRM_XTREAM_USERNAME` and `STRM_XTREAM_PASSWORD` **must** be set explicitly, otherwise stream URLs will contain Stalker credentials (a `logger.warn` is emitted if missing).
 
 ### Folder layout
 
@@ -486,6 +516,12 @@ Xtream player paths use URL-embedded credentials (`{username}/{password}`), vali
 2. The **admin env credentials** (`ADMIN_EMAIL` + `ADMIN_PASSWORD`; email check skipped in bootstrap mode)
 
 There is no shared playlist password — the legacy profile `username`/`password` fallback was removed because its defaults were guessable.
+
+### Stream token substitution
+
+When a player authenticates via `GET /player_api.php`, the `user_info.password` in the JSON response is a **30-day JWT stream token** (`{ sub: userId, scope: "stream" }`) instead of the real password. IPTV players cache this value and reuse it in all subsequent stream URLs — the real password never appears in `/live/{u}/{token}/...` paths.
+
+`resolveXtreamUser()` validates either a real password or a valid stream token. Env-var-only admin (no DB record) keeps the real password as fallback.
 
 ---
 
