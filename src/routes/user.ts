@@ -4,6 +4,14 @@ import { User } from "../models/User";
 import { UserProgress } from "../models/UserProgress";
 import { ConfigProfile } from "../models/ConfigProfile";
 import { authCheck } from "../utils/jwt";
+import fs from "fs/promises";
+import path from "path";
+
+// Store uploads in the same persistent volume as the database so they survive redeployments
+const dataDir = process.env.DATABASE_PATH
+  ? path.dirname(process.env.DATABASE_PATH)
+  : path.join(process.cwd(), "data");
+const uploadDir = path.join(dataDir, "uploads");
 
 const getActiveProfileId = async () => {
   const activeProfile = await ConfigProfile.findOne({
@@ -188,6 +196,54 @@ export const userRoutes: ServerRoute[] = [
         return { success: true };
       } catch (error) {
         logger.error({ err: error }, "Error deleting progress");
+        return h.response({ error: "Internal Server Error" }).code(500);
+      }
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/user/avatar",
+    options: {
+      payload: {
+        maxBytes: 5 * 1024 * 1024,
+        output: "data",
+        parse: true,
+        multipart: true,
+      },
+    },
+    handler: async (request, h) => {
+      const userPayload = authCheck(request);
+      if (!userPayload) {
+        return h.response({ error: "Unauthorized" }).code(401);
+      }
+
+      try {
+        const user = await User.findByPk(userPayload.userId);
+        if (!user || !user.isActive) {
+          return h.response({ error: "User inactive or not found" }).code(401);
+        }
+
+        const payload = request.payload as any;
+        const file = payload?.file;
+        if (!file) {
+          return h.response({ error: "No file provided" }).code(400);
+        }
+
+        const filename = file.hapi?.filename || `avatar-${Date.now()}`;
+        const cleanFilename = filename.replace(/[^a-zA-Z0-9.\-_]/g, "_");
+        const uniqueFilename = `${Date.now()}-${cleanFilename}`;
+
+        await fs.mkdir(uploadDir, { recursive: true });
+        const filePath = path.join(uploadDir, uniqueFilename);
+        await fs.writeFile(filePath, file);
+
+        const urlPath = `/uploads/${uniqueFilename}`;
+        user.avatarUrl = urlPath;
+        await user.save();
+
+        return { success: true, avatarUrl: urlPath };
+      } catch (error) {
+        console.error("Error uploading avatar:", error);
         return h.response({ error: "Internal Server Error" }).code(500);
       }
     },

@@ -137,7 +137,6 @@ export async function initDB() {
     } catch {
       // Column already exists — expected
     }
-
   } catch (error) {
     logger.error(`Unable to connect to the database: ${error}`);
   }

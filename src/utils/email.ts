@@ -112,3 +112,57 @@ export async function sendUserApprovedEmail(name: string, email: string): Promis
     logger.error({ err: error }, "Failed to send SMTP user approval email");
   }
 }
+
+export async function sendPasswordResetEmail(name: string, email: string, resetLink: string): Promise<void> {
+  const host = process.env.SMTP_HOST;
+  const port = Number(process.env.SMTP_PORT || 587);
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  const from = process.env.SMTP_FROM || `"Stalker Portal" <${user}>`;
+
+  if (!host || !user || !pass) {
+    console.warn("SMTP Warning: Mail server host/user/pass is not configured. Password reset email skipped.");
+    return;
+  }
+
+  const transporter = nodemailer.createTransport({
+    host,
+    port,
+    secure: port === 465,
+    auth: {
+      user,
+      pass,
+    },
+  });
+
+  const mailOptions = {
+    from,
+    to: email,
+    subject: "Stalker VOD - Reset Your Password",
+    text: `Hello ${name},\n\nYou requested a password reset for your Stalker VOD Portal account.\n\nPlease use the following link to reset your password:\n\n${resetLink}\n\nThis link will expire in 1 hour.\n\nIf you did not request this, you can safely ignore this email.\n\nBest regards,\nStalker Team`,
+    html: `<div style="font-family: sans-serif; padding: 20px; color: #333; max-width: 500px; border: 1px solid #e2e8f0; border-radius: 12px;">
+      <h2 style="color: #4f46e5; margin-top: 0;">Reset Your Password</h2>
+      <p>Hello ${name},</p>
+      <p>We received a request to reset the password for your account on the <strong>Stalker VOD Portal</strong>.</p>
+      <p>Click the button below to choose a new password. This link is valid for 1 hour:</p>
+      <div style="text-align: center; margin: 24px 0;">
+        <a href="${resetLink}" style="background-color: #4f46e5; color: #fff; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Reset Password</a>
+      </div>
+      <p style="font-size: 12px; color: #64748b; line-height: 1.5;">
+        If you're having trouble clicking the button, copy and paste the URL below into your web browser:<br/>
+        <a href="${resetLink}" style="color: #4f46e5;">${resetLink}</a>
+      </p>
+      <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
+      <p style="font-size: 12px; color: #64748b;">
+        If you did not request this password reset, please ignore this email. Your password will remain unchanged.
+      </p>
+    </div>`,
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    console.log(`Password reset email successfully sent to: ${email}`);
+  } catch (error) {
+    console.error("Failed to send SMTP password reset email:", error);
+  }
+}

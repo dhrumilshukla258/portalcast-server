@@ -15,7 +15,11 @@ import { Genre } from "@/models/Genre";
 import { EpgCache } from "@/models/EpgCache";
 import { ContentCache } from "@/models/ContentCache";
 
-const uploadDir = path.join(process.cwd(), "uploads");
+// Store uploads in the same persistent volume as the database so they survive redeployments
+const dataDir = process.env.DATABASE_PATH
+  ? path.dirname(process.env.DATABASE_PATH)
+  : path.join(process.cwd(), "data");
+const uploadDir = path.join(dataDir, "uploads");
 
 export const configRoutes: ServerRoute[] = [
   {

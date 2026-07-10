@@ -293,8 +293,9 @@ export const authRoutes: ServerRoute[] = [
           return h.response({ error: "Missing email, name, or password" }).code(400);
         }
 
-        if (password.trim().length < 6) {
-          return h.response({ error: "Password must be at least 6 characters" }).code(400);
+        const passwordRegex = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]).{8,}$/;
+        if (!passwordRegex.test(password)) {
+          return h.response({ error: "Password is not matching its criteria" }).code(400);
         }
 
         const existing = await User.findOne({ where: { email } });
