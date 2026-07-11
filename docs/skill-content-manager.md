@@ -2,7 +2,7 @@
 
 The Content Manager is the admin UI and API for customizing how content appears to players — without touching the portal or cache. Access at `http://your-server:3000/contentmanager` (password: `ADMIN_PASSWORD`).
 
-Related: [[skill-database]], [[skill-xtream-provider]], [[skill-m3u-playlist]]
+Related: [[skill-database]], [[skill-xtream-provider]], [[skill-m3u-playlist]], [[skill-admin-dashboard]], [[skill-stream-tokens]]
 
 ---
 
@@ -90,7 +90,7 @@ Triggered from Content Manager UI or `POST /api/admin/strm/generate`.
 
 **Design decision — STRM is always a shared credential:** `.strm` files are static on disk; the credential is baked into the URL. Any media player (Jellyfin) fetching the file sends those baked-in credentials regardless of which Jellyfin user is watching. Per-user STRM directories are impractical (files multiply per user, Jellyfin library setup per user). Admin credential is the right default — everyone in Jellyfin uses it transparently.
 
-Set `STRM_MOVIES_PATH` and/or `STRM_SERIES_PATH` to a Jellyfin-scannable directory. On every cache warm (or manual trigger), `.strm` files are written pointing to the proxy stream URL. Files are only rewritten if the URL changed.
+Set `STRM_MOVIES_PATH` and/or `STRM_SERIES_PATH` to a Jellyfin-scannable directory. **Generation is manual only** — nothing calls `generateStrmFiles()` automatically (not on cache warm, not on a schedule) — trigger via `POST /api/admin/strm/generate` or the Admin Dashboard. Files are only rewritten if the URL/title changed.
 
 ### Duplicate merging
 Portals often list the same movie multiple times with variant tags (language, quality). The generator:
@@ -99,6 +99,16 @@ Portals often list the same movie multiple times with variant tags (language, qu
 3. Empty secondary folders are removed on regeneration
 
 Variant patterns detected: 4K/UHD/FHD/HD, Dual Audio/Dubbed/Multi, Hindi/Tamil/Telugu/Malayalam/Kannada/Bengali/etc., BluRay/WEBRip/WEB-DL/DVDRip/HDRip.
+
+### Hardening (pruning, renames, concurrency)
+
+`generateStrmFiles()` originally only ever added/updated `.strm` files — content removed upstream, or renamed, left orphan rows/files forever. Fixed:
+
+- **Pruning removed content**: after enumerating current provider data, DB rows/files whose ID wasn't seen in this run are deleted (both file and DB row). **Guarded against partial cache**: if any genre/series wasn't in `xtreamCache` yet (still warming), pruning is skipped entirely for that run — otherwise a not-yet-cached genre would look "removed" and get wrongly deleted. Look for `cacheIncomplete` in `strmGenerator.ts`.
+- **Rename cleanup**: when a title changes upstream (detected via `raw_folder` mismatch, the *pre-merge* own name — not the post-merge `folder_path`, which would false-positive on entries already merged into a duplicate group) or a merge reassigns a secondary's folder, the *old* physical file is deleted via `removeStaleFile()` (also cleans up now-empty parent directories) before the new one is written.
+- **Concurrency guard**: a module-level `isGenerating` flag makes a second `generateStrmFiles()` call while one is in flight a no-op (logged warning), instead of two runs racing on the same rows/files. `POST /api/admin/strm/generate` is fire-and-forget, so without this a double-click could trigger two concurrent generations.
+
+**Known residual gap, not fixed**: STRM URLs embed the admin's shared credential in plaintext on disk (see "Design decision" above) — anyone with filesystem read access to the STRM directory (e.g. the Jellyfin host) can read it. Accepted as a deliberate tradeoff, not an oversight.
 
 ---
 

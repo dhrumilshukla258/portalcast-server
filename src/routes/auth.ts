@@ -129,6 +129,9 @@ export const authRoutes: ServerRoute[] = [
           }
         }
 
+        user.lastLogin = new Date();
+        await user.save();
+
         // Generate Access Token (1 hour)
         const accessToken = createJWT({
           userId: user.id,
@@ -203,6 +206,9 @@ export const authRoutes: ServerRoute[] = [
             await adminUser.save();
           }
 
+          adminUser.lastLogin = new Date();
+          await adminUser.save();
+
           const accessToken = createJWT({
             userId: adminUser.id,
             email: adminUser.email,
@@ -246,6 +252,9 @@ export const authRoutes: ServerRoute[] = [
         if (!isMatch) {
           return h.response({ error: "Invalid email or password" }).code(401);
         }
+
+        user.lastLogin = new Date();
+        await user.save();
 
         // Generate Access Token (1 hour)
         const accessToken = createJWT({

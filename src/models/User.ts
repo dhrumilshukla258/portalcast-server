@@ -49,4 +49,20 @@ export class User extends Model {
 
     @Column(DataType.DATE)
     resetTokenExpires?: Date;
+
+    @Column(DataType.DATE)
+    lastLogin?: Date;
+
+    // Per-user OpenSubtitles account link. Search uses the shared server-wide
+    // API key regardless, but downloads are quota-limited per OpenSubtitles
+    // account (20/day free tier, up to 1000/day VIP) — linking lets each app
+    // user draw from their own quota instead of everyone sharing one. The
+    // password must be recoverable (not just hashed) since OpenSubtitles has
+    // no refresh-token flow — only re-login with the original credentials
+    // when the 24h JWT expires. See src/utils/crypto.ts / opensubtitles.ts.
+    @Column(DataType.STRING)
+    openSubtitlesUsername?: string;
+
+    @Column(DataType.TEXT)
+    openSubtitlesPasswordEnc?: string;
 }

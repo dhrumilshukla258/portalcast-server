@@ -89,8 +89,16 @@ export async function initDB() {
       // Table may not exist yet
     }
 
+    await sequelize.sync({ alter: true });
+    logger.info("Database models synced.");
+
     // Migrate user_progress: remove stray single-column unique constraint on profileId
-    // (caused by an earlier sync that added profileId as a unique PK column instead of composite)
+    // (UserProgress declares its composite key via 3 separate @PrimaryKey decorators
+    // rather than one true composite index — Sequelize's SQLite `alter` dialect can
+    // rebuild the table picking up only `profileId` as a real unique constraint. This
+    // check MUST run after sync(), not before: sync() is what (re)introduces the stray
+    // constraint, so repairing it beforehand gets silently undone by the sync() call
+    // that follows, which is why this bug kept coming back across restarts.)
     try {
       const [indexes] = await sequelize.query("PRAGMA index_list('user_progress');") as any;
       let needsRecreate = false;
@@ -114,9 +122,6 @@ export async function initDB() {
     } catch (e) {
       logger.warn(`Migration: user_progress index check failed: ${e}`);
     }
-
-    await sequelize.sync({ alter: true });
-    logger.info("Database models synced.");
 
     // Auto-migrate schema: Add passwordHash and salt columns if they do not exist
     try {

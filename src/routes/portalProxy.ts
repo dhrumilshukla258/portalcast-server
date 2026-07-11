@@ -3,18 +3,21 @@ import http from "http";
 import https from "https";
 import { initialConfig } from "@/config/server";
 import { logger } from "@/utils/logger";
+import { streamTokenFromRequest } from "@/services/StreamTokens";
+import { streamTracker } from "@/services/StreamTracker";
 
 export const portalProxy: ServerRoute[] = [
   {
     method: "GET",
     path: "/portal/proxy",
     handler: (request, h) => {
-      const { url } = request.query as { url?: string };
-      if (!url) {
-        return h.response("Missing url").code(400);
+      const entry = streamTokenFromRequest(request);
+      if (!entry) {
+        return h.response("Unauthorized").code(401);
       }
 
-      const decodedUrl = Buffer.from(url, "base64").toString("utf-8");
+      const decodedUrl = entry.resource;
+      streamTracker.touch("proxy", request.info.remoteAddress, decodedUrl.replace(/\/[^/]*$/, ""), entry.userLabel);
       const client = decodedUrl.startsWith("https") ? https : http;
 
       return new Promise((resolve, reject) => {

@@ -4,6 +4,8 @@ import { User } from "../models/User";
 import { UserProgress } from "../models/UserProgress";
 import { ConfigProfile } from "../models/ConfigProfile";
 import { authCheck } from "../utils/jwt";
+import { encryptSecret } from "../utils/crypto";
+import { linkOpenSubtitlesAccount } from "../utils/opensubtitles";
 import fs from "fs/promises";
 import path from "path";
 
@@ -99,7 +101,20 @@ export const userRoutes: ServerRoute[] = [
         const progressRecords = await UserProgress.findAll({
           where: { userId: userPayload.userId, profileId }
         });
-        return progressRecords;
+        // Sequelize's SQLite JSON column doesn't reliably auto-parse `meta` on
+        // read in this setup — it can come back as the raw stored string
+        // instead of a nested object, which serializes over HTTP as a
+        // double-encoded JSON string (`"meta": "{\"title\":...}"` instead of
+        // `"meta": {"title":...}`). The frontend's `record.meta as Type` cast
+        // silently accepts either shape at compile time, so every `entry.*`
+        // field reads as undefined at runtime without this — normalize here.
+        return progressRecords.map((r) => {
+          const plain = r.toJSON() as any;
+          if (typeof plain.meta === "string") {
+            try { plain.meta = JSON.parse(plain.meta); } catch { /* leave as-is */ }
+          }
+          return plain;
+        });
       } catch (error) {
         logger.error({ err: error }, "Error fetching user progress");
         return h.response({ error: "Internal Server Error" }).code(500);
@@ -246,6 +261,69 @@ export const userRoutes: ServerRoute[] = [
         console.error("Error uploading avatar:", error);
         return h.response({ error: "Internal Server Error" }).code(500);
       }
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/user/opensubtitles",
+    handler: async (request, h) => {
+      const userPayload = authCheck(request);
+      if (!userPayload) return h.response({ error: "Unauthorized" }).code(401);
+
+      const user = await User.findByPk(userPayload.userId);
+      if (!user) return h.response({ error: "User not found" }).code(404);
+
+      return {
+        linked: Boolean(user.openSubtitlesUsername),
+        username: user.openSubtitlesUsername || null,
+      };
+    },
+  },
+  {
+    method: "PUT",
+    path: "/api/user/opensubtitles",
+    handler: async (request, h) => {
+      const userPayload = authCheck(request);
+      if (!userPayload) return h.response({ error: "Unauthorized" }).code(401);
+
+      const { username, password } = request.payload as { username?: string; password?: string };
+      if (!username || !password) {
+        return h.response({ error: "Missing username or password" }).code(400);
+      }
+
+      // Verify the credentials actually work before storing them — an
+      // unlinkable typo'd account is worse than no linked account at all,
+      // since downloads would silently keep falling back to the shared pool.
+      const result = await linkOpenSubtitlesAccount(username, password);
+      if (!result.success) {
+        return h.response({ error: result.error || "Login failed" }).code(400);
+      }
+
+      const user = await User.findByPk(userPayload.userId);
+      if (!user) return h.response({ error: "User not found" }).code(404);
+
+      user.openSubtitlesUsername = username;
+      user.openSubtitlesPasswordEnc = encryptSecret(password);
+      await user.save();
+
+      return { success: true };
+    },
+  },
+  {
+    method: "DELETE",
+    path: "/api/user/opensubtitles",
+    handler: async (request, h) => {
+      const userPayload = authCheck(request);
+      if (!userPayload) return h.response({ error: "Unauthorized" }).code(401);
+
+      const user = await User.findByPk(userPayload.userId);
+      if (!user) return h.response({ error: "User not found" }).code(404);
+
+      user.openSubtitlesUsername = null as any;
+      user.openSubtitlesPasswordEnc = null as any;
+      await user.save();
+
+      return { success: true };
     },
   },
 ];

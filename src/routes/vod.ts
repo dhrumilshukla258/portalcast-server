@@ -3,52 +3,38 @@ import { serverManager } from "@/serverManager";
 import axios from "axios";
 import { logger } from "@/utils/logger";
 import { initialConfig } from "@/config/server";
+import { streamTokenFromRequest, proxyUrlFor } from "@/services/StreamTokens";
+import { streamTracker } from "@/services/StreamTracker";
 
 export const vodRoutes: ServerRoute[] = [
   {
     method: "GET",
     path: "/api/vod/play",
     handler: async (request, h) => {
-      const { cmd, url, id, series = "", category = "0" } = request.query as {
-        cmd?: string;
-        url?: string;
-        id?: string;
-        series?: string;
-        category?: string;
-      };
+      const { series = "" } = request.query as { series?: string };
 
-      if (!cmd && !id) {
-        return h
-          .response({ error: "Missing cmd or id parameter" })
-          .code(400);
+      const entry = streamTokenFromRequest(request);
+      if (!entry) {
+        return h.response({ error: "Unauthorized" }).code(401);
       }
+      const id = entry.resource; // the provider's own movie/item id — not a secret upstream URL, but still identity-gated
+      const streamUser = entry.userLabel;
 
-      let streamUrl = url;
-      if (!streamUrl) {
-        try {
-          if (cmd) {
-            const linkResult = await serverManager
-              .getProvider()
-              .getChannelLink(cmd);
-            streamUrl = linkResult?.js?.cmd;
-          } else if (id) {
-            const itemId = Number(id);
-            if (Number.isNaN(itemId)) {
-              return h
-                .response({ error: "Invalid id parameter" })
-                .code(400);
-            }
-
-            const linkResult = await serverManager.getProvider().getMovieLink({
-              series,
-              id:       itemId,
-              download: 0,
-            });
-            streamUrl = linkResult?.js?.cmd;
-          }
-        } catch (e) {
-          logger.error(`Error resolving stream URL: ${e}`);
+      let streamUrl: string | undefined;
+      try {
+        const itemId = Number(id);
+        if (Number.isNaN(itemId)) {
+          return h.response({ error: "Invalid id parameter" }).code(400);
         }
+
+        const linkResult = await serverManager.getProvider().getMovieLink({
+          series,
+          id:       itemId,
+          download: 0,
+        });
+        streamUrl = linkResult?.js?.cmd;
+      } catch (e) {
+        logger.error(`Error resolving stream URL: ${e}`);
       }
 
       if (!streamUrl) {
@@ -56,10 +42,10 @@ export const vodRoutes: ServerRoute[] = [
       }
 
       logger.info(`[VOD Proxy] Streaming: ${streamUrl}`);
+      streamTracker.touch("vod", request.info.remoteAddress, streamUrl.replace(/\/[^/]*$/, ""), streamUser);
 
       if (streamUrl.includes(".m3u8")) {
-        const b64url = Buffer.from(streamUrl).toString("base64");
-        return h.redirect(`/api/proxy?url=${b64url}`);
+        return h.redirect(proxyUrlFor(streamUrl, streamUser));
       }
 
       const userAgent =

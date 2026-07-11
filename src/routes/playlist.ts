@@ -20,7 +20,7 @@ export const playlistRoutes: ServerRoute[] = [
       if (!await resolveXtreamUser(username, password)) {
         return h.response("Unauthorized").code(401);
       }
-      const m3u = await getM3uV2(getPublicOrigin(request));
+      const m3u = await getM3uV2(getPublicOrigin(request), `xtream:${username}`);
 
       return h
         .response(m3u)
@@ -48,7 +48,7 @@ export const playlistRoutes: ServerRoute[] = [
       if (!await resolveXtreamUser(username, password)) {
         return h.response("Unauthorized").code(401);
       }
-      const m3u = await getVodM3uV2(getPublicOrigin(request));
+      const m3u = await getVodM3uV2(getPublicOrigin(request), `xtream:${username}`);
 
       return h
         .response(m3u)

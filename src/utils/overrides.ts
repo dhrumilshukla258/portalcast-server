@@ -28,9 +28,19 @@ async function loadVirtualGenres(type: GenreType): Promise<Array<{ id: string; t
     }));
 }
 
+// SQLite has a hard limit on bound parameters per query (historically 999) — a single
+// `WHERE item_key IN (...)` with a large category's full item list (thousands of keys)
+// can exceed that and fail outright. Chunk it so category size can never break this.
+const OVERRIDE_QUERY_CHUNK = 500;
+
 async function loadContentOverrides(keys: string[]): Promise<Map<string, any>> {
   if (keys.length === 0) return new Map();
-  const rows = await ContentOverride.findAll({ where: { item_key: keys }, raw: true });
+  const rows: any[] = [];
+  for (let i = 0; i < keys.length; i += OVERRIDE_QUERY_CHUNK) {
+    const chunk = keys.slice(i, i + OVERRIDE_QUERY_CHUNK);
+    const chunkRows = await ContentOverride.findAll({ where: { item_key: chunk }, raw: true });
+    rows.push(...chunkRows);
+  }
   return new Map(rows.map((r) => [r.item_key, r]));
 }
 

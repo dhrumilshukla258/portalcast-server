@@ -49,15 +49,6 @@ const ConfigDefault: Config = {
   password: "password",
 };
 
-const proxySecret = process.env.PROXY_SECRET;
-if (process.env.NODE_ENV === "production" && !proxySecret) {
-  throw new Error(
-    "FATAL: PROXY_SECRET environment variable is required in production mode.",
-  );
-} else if (!proxySecret) {
-  logger.warn("WARNING: PROXY_SECRET not set, using insecure default.");
-}
-
 const AppConfigDefault: AppConfig = {
   api: {
     timeout: Number(process.env.API_TIMEOUT) || 5000,
@@ -68,9 +59,6 @@ const AppConfigDefault: AppConfig = {
     environment: process.env.NODE_ENV || "production",
     logLevel: process.env.LOG_LEVEL || "info",
   },
-  proxy: {
-    secretKey: proxySecret || "default-secret-key-please-change",
-  },
 };
 
 export const initialConfig: Config = { ...ConfigDefault };
@@ -80,6 +68,8 @@ export const appConfig: AppConfig = { ...AppConfigDefault };
 export const seriesFlag = process.env.SERIES_FLAG || "is_series";
 
 export const tmdbApiToken = process.env.TMDB_API_READ_TOKEN || "";
+
+export const openSubtitlesApiKey = process.env.OPENSUBTITLES_API_KEY || "";
 
 export function getInitialConfig() {
   return initialConfig;

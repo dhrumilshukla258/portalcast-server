@@ -5,7 +5,7 @@
 <h1 align="center">Stalker M3U Server</h1>
 
 <p align="center">
-  A Node.js middleware that bridges Stalker portals and Xtream Codes sources to any IPTV player — with a full content management layer, Jellyfin integration, and an HLS transcode proxy.
+  A Node.js middleware that bridges Stalker portals and Xtream Codes sources to any IPTV player — with a full content management layer and Jellyfin integration.
 </p>
 
 <p align="center">
@@ -19,22 +19,24 @@
 
 ## What it does
 
-Connects to a **Stalker portal** or **Xtream Codes API** and re-serves the content in formats your players actually understand — Xtream Codes API, M3U playlists, and XMLTV EPG. On top of raw passthrough it adds a full content management layer, Jellyfin/.strm integration, HLS transcode proxy, and several quality-of-life features.
+Connects to a **Stalker portal** or **Xtream Codes API** and re-serves the content in formats your players actually understand — Xtream Codes API, M3U playlists, and XMLTV EPG. On top of raw passthrough it adds a full content management layer, Jellyfin/.strm integration, and several quality-of-life features.
 
 **Core features at a glance:**
 
-- **Dual provider support** — Stalker STB portals and Xtream Codes APIs both supported; switch via UI without restart
+- **Dual provider support** — Stalker STB portals and Xtream Codes APIs both supported, configured entirely through the web UI (`/api/profiles`), switchable without restart
+- **Mixed-portal series detection** — portals that list series as VOD items with an `is_series`-style flag (configurable via `SERIES_FLAG`), and portals with a genuinely separate series endpoint, are both auto-detected and handled correctly (`portal_series_source` cache row records which kind each portal is)
 - **Xtream Codes API** — full protocol emulation (live, VOD, series, EPG, XMLTV)
 - **M3U + EPG** — standard playlist and XMLTV endpoints
-- **Content Manager** — browser UI to rename, hide, move, and reorder content without touching the portal
+- **Opaque stream tokens** — every stream URL (`?t=...`) is a random server-side token, never the real upstream address. Nothing a user can copy or inspect ever reveals the portal URL, upstream credentials, or lets an unauthenticated request stream through the server
+- **Admin Dashboard** — user stats, live "who's watching what right now" (type, title, category, user, IP, duration), STRM generation trigger — see `/admin` in the web UI
+- **Content Manager** — browser UI to rename, hide, move, and reorder content without touching the portal — available both standalone (`/contentmanager`) and as a tab inside the Admin Dashboard
 - **Virtual categories** — create custom groupings; move items in from any portal category
 - **Cache warming** — incremental background fetching so players always see fresh content
 - **VOD category versioning** — tricks free IPTV players into re-fetching updated categories on force-refresh
-- **Jellyfin / Emby** — generates `.strm` files with automatic duplicate merging and variant tag detection
-- **HLS transcode proxy** — FFmpeg-based VOD/series proxy with full seek support, multi-audio, and subtitle tracks
+- **Jellyfin / Emby** — generates `.strm` files with automatic duplicate merging, variant tag detection, orphan pruning, and rename handling
 - **TMDB metadata** — optional poster/backdrop enrichment for VOD and series
 - **Profiles** — multiple portal accounts, switchable without restart
-- **Portal type auto-detection** — handles mixed VOD+series portals and native series portals automatically
+- **Portal type auto-detection** — handles both mixed VOD+series portals (`SERIES_FLAG`-based split) and portals with a native, separate series endpoint automatically; detected once and cached (`portal_series_source`)
 - **Reverse-proxy friendly** — all generated URLs honor `X-Forwarded-Proto`/`X-Forwarded-Host`, so the same server works via LAN `ip:port` and an HTTPS domain simultaneously (Caddy/nginx/Traefik)
 - **Client-aware live playback** — browsers get CORS-safe proxied HLS; Smart TVs (Tizen/WebOS) get direct redirects with zero server load
 - **HTTPS / TLS** — optional TLS termination built in
@@ -50,26 +52,30 @@ docker compose up -d
 ```
 
 Open `http://localhost:3000` to configure your portal.
-Open `http://localhost:3000/contentmanager` for the content admin panel.
+Log in as admin in the web UI and open `/admin` for the full dashboard (stats, live streams, content manager, users, logs) — or `http://localhost:3000/contentmanager` for the standalone content admin panel.
 
 ---
 
 ## Provider Setup
 
+Both provider types are configured the same way: through the browser UI at `http://localhost:3000` (profile create/edit form), which writes the full config as JSON into the `ConfigProfile.config` column (`src/models/ConfigProfile.ts`) via `POST/PUT /api/profiles`. **No environment variables are required for either provider** — env vars only supply the *default* values a brand-new profile is pre-filled with (see `src/config/server.ts`), nothing more. Switching or editing a profile calls `serverManager.reloadConfig()` — no restart needed.
+
 ### Stalker Portal
 
-| Variable | Description |
-|----------|-------------|
-| `STALKER_HOST` | Portal hostname (e.g. `portal.example.com`) |
-| `STALKER_PORT` | Portal port (default `80`) |
-| `STALKER_HTTPS` | Set `true` to connect over HTTPS |
-| `STALKER_PATH` | Context path (default `stalker_portal`) |
-| `STALKER_MAC` | Device MAC address for STB emulation |
-| `STALKER_STB` | STB type (default `MAG254`) |
+Fields available in the profile form (with the env var that seeds the default, if any):
+
+| Field | Env var default | Description |
+|-------|------------------|-------------|
+| Hostname | `STALKER_HOST` | Portal hostname (e.g. `portal.example.com`) |
+| Port | `STALKER_PORT` | Portal port (default `80`) |
+| HTTPS | `STALKER_HTTPS` | Connect over HTTPS |
+| Context path | `STALKER_PATH` | Default `stalker_portal` |
+| MAC address | `STALKER_MAC` | Device MAC for STB emulation |
+| STB type | `STALKER_STB` | Default `MAG254` |
 
 ### Xtream Codes API
 
-Configure via the browser UI at `http://localhost:3000` — set provider type to **Xtream**, then enter your host, username, and password. No environment variables needed; all Xtream credentials are stored per-profile in the database.
+Set provider type to **Xtream** in the profile form, then enter host, username, and password — stored per-profile in the database, no env vars involved at all.
 
 ---
 
@@ -81,17 +87,18 @@ Configure via the browser UI at `http://localhost:3000` — set provider type to
 | `JWT_SECRET` | — | **Required.** JWT signing key — server refuses to start if unset |
 | `ADMIN_EMAIL` | — | **Required for admin login.** Email address of the admin account |
 | `ADMIN_PASSWORD` | — | **Required for admin login.** Admin password — server returns 503 if unset |
-| `PROXY_SECRET` | — | HMAC secret for signed proxy URLs (required in production) |
+| `STREAM_IDLE_TIMEOUT_MS` | `60000` | How long (ms) a stream can go quiet with no request before it's dropped from the "active streams" admin view. Raise this if players buffer ahead and legitimately go quiet between segment fetches |
 | `PUBLIC_BASE_URL` | — | Hard override for all generated URLs (e.g. `https://iptv.example.com`). If unset, URLs are derived per-request from `X-Forwarded-Proto`/`X-Forwarded-Host` (reverse proxy) or the request host — leave unset when the server is reached both via LAN ip:port and a proxied domain |
 | `LIVE_TRANSCODE` | `false` | Set `true` to transcode HEVC live streams to H.264 on the server (ffmpeg) for clients without hardware HEVC decoding. Off by default — streams are proxied untouched and the client decodes |
-| `SERIES_FLAG` | `is_series` | Field that marks series items on mixed portals where VOD and series share the same endpoint |
+| `SERIES_FLAG` | `is_series` | Only relevant for **mixed-content portals** — ones that return series and movies from the same VOD endpoint, distinguished by a boolean-ish field. Set this to whatever that field is named on your portal if it isn't `is_series`. Portals with a genuinely separate series endpoint are auto-detected and ignore this entirely — see `docs/skill-stalker-provider.md` / `docs/skill-xtream-provider.md` |
 | `VOD_CATEGORY_VERSIONING` | `false` | Set `true` to enable category version suffixes (forces IPTV players to re-fetch updated categories) |
 | `STRM_MOVIES_PATH` | — | Output directory for movie `.strm` files |
 | `STRM_SERIES_PATH` | — | Output directory for series `.strm` files |
 | `STRM_BASE_URL` | — | Base URL in `.strm` files — set to the address Jellyfin uses to reach this server (e.g. `http://192.168.1.100:3000`) |
-| `STRM_XTREAM_USERNAME` | — | Email of the dedicated Xtream user whose credentials go into `.strm` file URLs — must have `xtreamEnabled: true` in the DB |
-| `STRM_XTREAM_PASSWORD` | — | Password for the `STRM_XTREAM_USERNAME` account |
+| `STRM_XTREAM_USERNAME` | `ADMIN_EMAIL`, then `"admin"` | Username embedded in `.strm` file stream URLs |
+| `STRM_XTREAM_PASSWORD` | `ADMIN_PASSWORD`, then `"admin"` | Password embedded in `.strm` file stream URLs |
 | `TMDB_API_READ_TOKEN` | — | TMDB token for poster/backdrop enrichment |
+| `OPENSUBTITLES_API_KEY` | — | Enables online subtitle search/download in the player. Without it, search silently returns 0 results (a startup-adjacent warning is logged the first time a search is attempted) |
 | `GOOGLE_CLIENT_ID` | — | Google OAuth client ID (enables Google sign-in) |
 | `TLS_CERT_PATH` | — | TLS certificate path (enables HTTPS on the server) |
 | `TLS_KEY_PATH` | — | TLS key path |
@@ -113,6 +120,12 @@ All `/api/` and `/v2/` endpoints require a Bearer JWT in the `Authorization` hea
 
 The Xtream Codes API layer (`/player_api.php`, `/live/`, `/movie/`, `/series/`, M3U playlists) authenticates with **per-user credentials**: any active user's email + password (the same account used for web login), or the admin env credentials. There is no shared playlist password.
 
+### Stream URL security
+
+Stream endpoints (`/live.m3u8`, `/api/proxy`, `/player/*`, `/api/vod/play`, etc.) can't require a Bearer header — `<video src>` and IPTV player HTTP clients can't attach custom headers. Instead, every stream URL handed to a client carries a random opaque token (`?t=...`) minted server-side, mapping to the real upstream address *and* the requester's identity. There is nothing to reverse-engineer from a copied link — no embedded credentials, no derivable portal URL. This also powers the Admin Dashboard's live "who's watching what" view.
+
+No exceptions — every stream-adjacent route (including downloads and embedded-subtitle extraction) requires a valid token bound to that exact resource on every request, not just the initial one. The single unauthenticated route left is `/api/images/{slug*}` (poster/logo relay) — restricted to real image paths, no credentials or streams reachable through it.
+
 ---
 
 ## Connecting Players
@@ -127,15 +140,17 @@ The Xtream Codes API layer (`/player_api.php`, `/live/`, `/movie/`, `/series/`, 
 
 ### M3U / EPG
 
+Each of these requires your account credentials as query params (same email/password as web login) — they're validated on every request, not just once:
+
 | | URL |
 |---|---|
-| Live | `http://your-server:3000/playlist.m3u` |
-| VOD | `http://your-server:3000/vod/playlist.m3u` |
-| EPG | `http://your-server:3000/epg.xml` |
+| Live | `http://your-server:3000/playlist.m3u?username=you@example.com&password=yourpassword` |
+| VOD | `http://your-server:3000/vod/playlist.m3u?username=you@example.com&password=yourpassword` |
+| EPG | `http://your-server:3000/epg.xml?username=you@example.com&password=yourpassword` |
 
 ### Jellyfin / Emby
 
-Set `STRM_MOVIES_PATH` and `STRM_SERIES_PATH` to directories your media server scans. `.strm` files are automatically generated and updated on every cache warm cycle.
+Set `STRM_MOVIES_PATH` and `STRM_SERIES_PATH` to directories your media server scans. Generation is **manual, not automatic** — trigger it from the Admin Dashboard's Stats tab ("Generate STRM Files") or `POST /api/admin/strm/generate`. It is not run on a schedule or on cache warm; if your content changes regularly, you'll want to trigger it yourself on some cadence (e.g. a cron hitting that endpoint).
 
 ---
 
@@ -148,15 +163,6 @@ Works out of the box behind Caddy, nginx, or Traefik. Every generated URL — th
 - Set `PUBLIC_BASE_URL` only if you want to force one canonical address into every URL
 
 ---
-
-## HLS Transcode Proxy
-
-For players that can't handle direct stream URLs (DRM, unusual containers, multi-audio), the built-in FFmpeg proxy at `/api/media/hls/master.m3u8?url=...` transcodes on-the-fly with:
-
-- Full VOD seeking via timestamp-encoded segment URIs
-- Multi-audio track selection (language-labeled)
-- Subtitle track passthrough
-- Session-based FFmpeg process management with idle cleanup
 
 For **live** streams, server-side HEVC→H.264 transcoding is available but off by default (`LIVE_TRANSCODE=true` to enable) — by default the server stays a pure proxy and clients decode with their own hardware.
 

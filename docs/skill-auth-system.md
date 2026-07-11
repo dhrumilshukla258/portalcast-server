@@ -43,6 +43,8 @@ Two login methods: **Google OAuth** and **email/password**. Both share the same 
 - Admin must activate via `PUT /api/admin/users/{id}` with `isActive: true`
 - Activation triggers `sendUserApprovedEmail` to notify the user
 
+All three successful-login paths above (Google, admin-bootstrap, email/password) set `user.lastLogin = new Date()` before issuing tokens — see [[skill-user-system]] / [[skill-admin-dashboard]].
+
 ### Token Refresh (`POST /api/auth/refresh`)
 - Accepts a refresh token, verifies it has `type: "refresh"`
 - Issues a new access token; refresh token is reused (not rotated)

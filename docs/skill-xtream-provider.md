@@ -2,7 +2,7 @@
 
 Covers `XtreamClient`, `XtreamCache`, dual-portal detection, category versioning, stream token substitution, and the Xtream Codes API routes. Key commits: `0d5cfbe`, `1bf9fe8`, `3dda72c`, `584ae8c`.
 
-Related: [[skill-stalker-provider]], [[skill-m3u-playlist]], [[skill-auth-system]]
+Related: [[skill-stalker-provider]], [[skill-m3u-playlist]], [[skill-auth-system]], [[skill-stream-tokens]]
 
 ---
 
@@ -68,20 +68,26 @@ xtreamCache.delete(key)
 
 Wipe all entries via `DELETE /api/v2/clear-xtream-cache` — forces re-detection of portal type.
 
+### `getOrRefreshVodStreams(categoryId)` / `getOrRefreshSeriesList(categoryId)`
+
+Shared by both the Xtream player API (`get_vod_streams`/`get_series`) and the web UI (`/api/v2/movies`/`/api/v2/series`) so both surfaces see identical staleness/refresh behavior. On a cache miss or stale entry, fetches from the portal, merges with the cached rows, and writes back.
+
+**In-flight deduplication**: both functions are wrapped so only one refresh per `categoryId` is ever running at a time (`vodRefreshInFlight`/`seriesRefreshInFlight` maps in `src/routes/xtream.ts`, mirroring `StalkerAPI.makeRequest`'s own `inFlight` pattern). Without this, two concurrent calls for the same category — e.g. a double-fired category click on the frontend — each independently read the same stale snapshot, fetch, merge, and write back; whichever write lands last silently wins, discarding whatever the other one computed. Added after a user report of wrong content appearing under a category (network trace showed the same category request firing twice) — this closes the race, though the specific report turned out inconclusive as to root cause (portal-side data issue was the likelier explanation in that case).
+
 ---
 
-## Dual Portal Detection
+## Mixed-Content vs Native-Series Portal Detection
 
-Two portal layouts are auto-detected on first series warm:
+Not "dual portal support" in the sense of running two portals — this is about **one portal's layout**: whether it exposes series through a separate API or crams them into the VOD list. Two layouts are auto-detected on first series warm and cached in `XtreamCache` under key `portal_series_source`:
 
-**Type 1 — Mixed portal**
-- Movies and series share `get_vod_streams`
-- Items with `{SERIES_FLAG} == 1` are series; env var `SERIES_FLAG` overrides the field name
-- `portal_series_source` cached as `"mixed"`
+**`"vod"` — Mixed-content portal**
+- Movies and series share one `get_vod_streams` endpoint
+- Items are split by the `{SERIES_FLAG}` field (default `is_series`; `1` = series). Only override the `SERIES_FLAG` env var if your portal names this field something else — most portals don't need this touched at all
+- No dedicated series API exists on this portal
 
-**Type 2 — Native series portal**
+**`"native"` — Native series portal**
 - Separate `get_series` / `get_series_categories` API
-- `get_vod_streams` returns movies only
+- `get_vod_streams` returns movies only; `SERIES_FLAG` is irrelevant here since there's nothing to split
 - `portal_series_source` cached as `"native"`
 
 Detection is triggered by `warmSeriesCache()` and written to `XtreamCache`. Clearing the cache forces re-detection.
@@ -122,9 +128,20 @@ Exposes Xtream Codes-compatible endpoints so any player expecting Xtream format 
 
 Override layer (`applyXtreamCatOverrides`, `applyVodOverrides`, `applySeriesOverrides`) is applied transparently to every Xtream response before returning to the player.
 
+### Stream endpoints are gated and tracked, not just proxied
+
+Every stream endpoint above resolves the player's identity via `resolveXtreamUser(username, password)` (already required to reach the handler at all) and:
+- **Live** (`.m3u8`/`.ts`): calls `streamTracker.touch("live", ip, channel.cmd, "xtream:{username}", { kind: "live", label: channel.name })` — this is what powers the Admin Dashboard's live "who's watching" view (see [[skill-stream-tokens]], [[skill-admin-dashboard]])
+- **VOD/series** (stalker-backed, via `handleStalkerVodStream`/`handleStalkerSeriesStream`): redirects through `proxyUrlFor(url, "xtream:{username}", { kind, label })` — i.e. `/api/proxy?t={token}`, never a raw upstream URL, even to the player itself
+- **VOD/series** (native Xtream provider): `handleProxyStream(..., explicitUser: "xtream:{username}")` — same tokenization, in-process rather than via redirect
+
+None of this changes what the player sees on the wire (still standard Xtream URLs) — it changes what the *server* does internally before fetching from upstream.
+
 ---
 
 ## Stream Token Substitution
+
+**Not the same "token" as [[skill-stream-tokens]]** — that's an opaque, server-side-only mapping to a real upstream URL, generated fresh per request. This section covers a JWT the *player itself* stores and reuses, replacing the account password in the URL path. Different mechanism, different purpose, unfortunate name collision.
 
 Xtream stream URLs carry `{username}/{password}` in the path. Sending the real password in every URL is a security risk (logs, proxies, player analytics).
 

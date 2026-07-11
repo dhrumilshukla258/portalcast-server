@@ -1,11 +1,90 @@
 import { ServerRoute } from "@hapi/hapi";
+import { Op } from "sequelize";
 import { logger } from "@/utils/logger";
 import { User } from "../models/User";
 import { authCheck } from "../utils/jwt";
 import { hashPassword } from "../utils/password";
 import { sendUserApprovedEmail } from "@/utils/email";
+import { socketService } from "@/services/SocketService";
+import { StrmMovie } from "@/models/StrmMovie";
+import { StrmSeries } from "@/models/StrmSeries";
+import { streamTracker } from "@/services/StreamTracker";
 
 export const userManagementRoutes: ServerRoute[] = [
+  {
+    method: "GET",
+    path: "/api/admin/streams",
+    handler: (request, h) => {
+      const userPayload = authCheck(request);
+      if (!userPayload || userPayload.role !== "admin") {
+        return h.response({ error: "Forbidden" }).code(403);
+      }
+      return { count: streamTracker.count(), sessions: streamTracker.list() };
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/admin/stats",
+    handler: async (request, h) => {
+      const userPayload = authCheck(request);
+      if (!userPayload || userPayload.role !== "admin") {
+        return h.response({ error: "Forbidden" }).code(403);
+      }
+
+      try {
+        const dayAgo = new Date(Date.now() - 24 * 3600 * 1000);
+        const weekAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000);
+
+        const [
+          totalUsers,
+          activeUsers,
+          pendingUsers,
+          adminUsers,
+          loggedInLast24h,
+          loggedInLast7d,
+          recentLogins,
+          strmMovieCount,
+          strmSeriesCount,
+        ] = await Promise.all([
+          User.count(),
+          User.count({ where: { isActive: true } }),
+          User.count({ where: { isActive: false } }),
+          User.count({ where: { role: "admin" } }),
+          User.count({ where: { lastLogin: { [Op.gte]: dayAgo } } }),
+          User.count({ where: { lastLogin: { [Op.gte]: weekAgo } } }),
+          User.findAll({
+            where: { lastLogin: { [Op.ne]: null } },
+            order: [["lastLogin", "DESC"]],
+            limit: 10,
+            attributes: ["id", "name", "email", "role", "lastLogin"],
+          }),
+          StrmMovie.count(),
+          StrmSeries.count(),
+        ]);
+
+        return {
+          users: {
+            total: totalUsers,
+            active: activeUsers,
+            pending: pendingUsers,
+            admins: adminUsers,
+            loggedInLast24h,
+            loggedInLast7d,
+          },
+          recentLogins,
+          connectedDevices: socketService.getActiveDeviceCount(),
+          activeStreams: streamTracker.count(),
+          strm: {
+            movies: strmMovieCount,
+            episodes: strmSeriesCount,
+          },
+        };
+      } catch (error) {
+        logger.error({ err: error }, "Error loading admin stats");
+        return h.response({ error: "Internal Server Error" }).code(500);
+      }
+    },
+  },
   {
     method: "GET",
     path: "/api/admin/users",
@@ -19,7 +98,19 @@ export const userManagementRoutes: ServerRoute[] = [
         const users = await User.findAll({
           order: [["createdAt", "DESC"]]
         });
-        return users;
+        // Same raw-model-array serialization quirk as GET /api/user/progress
+        // (see the comment there) — `preferences` is also a JSON column and
+        // can come back double-encoded as a string instead of a nested object.
+        return users.map((u) => {
+          const plain = u.toJSON() as any;
+          if (typeof plain.preferences === "string") {
+            try { plain.preferences = JSON.parse(plain.preferences); } catch { /* leave as-is */ }
+          }
+          delete plain.passwordHash;
+          delete plain.salt;
+          delete plain.openSubtitlesPasswordEnc;
+          return plain;
+        });
       } catch (error) {
         logger.error({ err: error }, "Error listing users");
         return h.response({ error: "Internal Server Error" }).code(500);

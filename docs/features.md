@@ -12,20 +12,23 @@
 6. [Content Manager](#content-manager)
 7. [Override System](#override-system)
 8. [Jellyfin / .strm Integration](#jellyfin--strm-integration)
-9. [HLS Transcode Proxy](#hls-transcode-proxy)
-10. [EPG Handling](#epg-handling)
-11. [Profiles](#profiles)
-12. [Live Stream Proxy](#live-stream-proxy)
-13. [Reverse Proxy & Public URLs](#reverse-proxy--public-urls)
-14. [TMDB Integration](#tmdb-integration)
-15. [Authentication](#authentication)
-16. [API Reference](#api-reference)
+9. [EPG Handling](#epg-handling)
+10. [Profiles](#profiles)
+11. [Live Stream Proxy](#live-stream-proxy)
+12. [Reverse Proxy & Public URLs](#reverse-proxy--public-urls)
+13. [TMDB Integration](#tmdb-integration)
+14. [Authentication](#authentication)
+15. [API Reference](#api-reference)
 
 ---
 
 ## Environment Variables
 
 ### Portal (Stalker)
+
+**Neither provider requires environment variables.** Both Stalker and Xtream config (hostname/port/mac/path/stb-type for Stalker; host/username/password for Xtream) are stored per-profile as JSON in `ConfigProfile.config` (`src/models/ConfigProfile.ts`) and set entirely through the browser UI's profile form (`POST`/`PUT /api/profiles`, see [Profiles](#profiles)). Switching or editing the active profile calls `serverManager.reloadConfig()` — no restart.
+
+The `STALKER_*` env vars below only pre-fill the *default* values shown when creating a brand-new profile (`ConfigDefault` in `src/config/server.ts`) — they have no effect on an existing profile's stored config.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -36,21 +39,19 @@
 | `STALKER_MAC` | `00:1A:79:00:00:00` | MAC address for STB emulation |
 | `STALKER_STB` | `MAG254` | STB type |
 
-> Xtream Codes credentials (host, username, password) are stored per-profile in the database and configured via the browser UI — not environment variables.
-
 ### Server
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `3000` | Listen port |
-| `NODE_ENV` | — | `production` enforces `PROXY_SECRET` |
+| `NODE_ENV` | — | `production`/`development` etc. |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 | `JWT_SECRET` | — | **Required.** JWT signing key — server refuses to start if unset |
 | `ADMIN_EMAIL` | — | **Required for admin login.** Email address mapped to the admin account |
 | `ADMIN_PASSWORD` | — | **Required for admin login.** Admin password — returns 503 if unset |
-| `PROXY_SECRET` | — | HMAC secret for signed proxy URLs — required in production |
 | `PUBLIC_BASE_URL` | — | Hard override for all generated URLs (e.g. `https://iptv.example.com`). If unset, URLs are derived per-request from `X-Forwarded-*` headers or the request host |
 | `LIVE_TRANSCODE` | `false` | Enable server-side HEVC→H.264 transcode for live streams (ffmpeg). Off by default — clients decode with their own hardware |
+| `STREAM_IDLE_TIMEOUT_MS` | `60000` | How long a stream session can go quiet (no request) before the admin "active streams" view drops it — see [[skill-stream-tokens]] |
 | `GOOGLE_CLIENT_ID` | — | Google OAuth client ID — enables Google sign-in for users and TV pairing |
 | `TLS_CERT_PATH` | — | TLS certificate path (enables HTTPS on the server) |
 | `TLS_KEY_PATH` | — | TLS key path |
@@ -59,7 +60,7 @@
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SERIES_FLAG` | `is_series` | Field name that marks series items on mixed portals where VOD and series share the same endpoint (value `1` = series) |
+| `SERIES_FLAG` | `is_series` | Only matters for **mixed-content portals** — a single VOD endpoint returning both movies and series, split by this boolean-ish field (value `1` = series). Portals with a genuinely separate series endpoint are auto-detected (`portal_series_source` cache row) and don't use this at all — see [Provider Support](#provider-support) |
 | `VOD_CATEGORY_VERSIONING` | `false` | Set `true` to append version suffix to category IDs in Xtream responses |
 | `STRM_MOVIES_PATH` | — | Directory to write movie `.strm` files for Jellyfin/Emby |
 | `STRM_SERIES_PATH` | — | Directory to write series `.strm` files for Jellyfin/Emby |
@@ -67,6 +68,7 @@
 | `STRM_XTREAM_USERNAME` | `ADMIN_EMAIL` | Username embedded in `.strm` stream URLs. Defaults to `ADMIN_EMAIL` so STRM files share the same credential as web UI and Xtream API. |
 | `STRM_XTREAM_PASSWORD` | `ADMIN_PASSWORD` | Password embedded in `.strm` stream URLs. Defaults to `ADMIN_PASSWORD`. |
 | `TMDB_API_READ_TOKEN` | — | TMDB read token for metadata enrichment |
+| `OPENSUBTITLES_API_KEY` | — | Enables `/api/v2/subtitles/search` and `/download` (online subtitle search in the player). `searchSubtitles()` (`src/utils/opensubtitles.ts`) checks this first and returns `[]` immediately if unset — logs a warning rather than failing loudly, so a missing key looks like "no subtitles found," not an error |
 
 ### Networking
 
@@ -83,7 +85,7 @@
 | `RATE_LIMIT_MAX` | `120` | Max requests per window per IP for public stream endpoints |
 | `RATE_LIMIT_WINDOW_MS` | `60000` | Sliding window size (ms) for rate limiting |
 
-Applies to: `/live/*`, `/movie/*`, `/series/*`, `/live.m3u8`, `/player/*`, `/api/media/*`, `/api/vod/play`. Returns `429 Too Many Requests` when exceeded.
+Applies to: `/live/*`, `/movie/*`, `/series/*`, `/live.m3u8`, `/player/*`, `/api/vod/play`. Returns `429 Too Many Requests` when exceeded.
 
 ### Circuit Breaker
 
@@ -105,7 +107,7 @@ The server supports two backend provider types, switchable per-profile without r
 
 Connects to a Stalker Middleware portal using STB emulation (MAC address + token authentication). All portal API calls go through the Stalker `load.php` endpoint. The `stalkerApi` singleton manages token refresh, watchdog keep-alive, and request queuing.
 
-**Configuration:** `STALKER_HOST`, `STALKER_MAC`, and related env vars.
+**Configuration:** set via the browser UI's profile form, stored in `ConfigProfile.config`. `STALKER_HOST`, `STALKER_MAC`, etc. only seed the default values a new profile starts with — see [Environment Variables](#portal-stalker).
 
 ### Xtream Codes API
 
@@ -278,7 +280,7 @@ Virtual categories have IDs prefixed `vcat_`. The Xtream response normalizes `vc
 
 ## Jellyfin / .strm Integration
 
-Set `STRM_MOVIES_PATH` and/or `STRM_SERIES_PATH` to a directory Jellyfin/Emby can scan. On every cache warm the server generates `.strm` files pointing to stream URLs. Files are only written when the URL changes — existing paths with unchanged URLs are left untouched.
+Set `STRM_MOVIES_PATH` and/or `STRM_SERIES_PATH` to a directory Jellyfin/Emby can scan. Generation is **manual only** — `POST /api/admin/strm/generate` (also reachable from the Admin Dashboard's Stats tab). It is not triggered by cache warming or on any schedule; re-run it yourself when content changes. Files are only rewritten when the URL/name actually changed, and removed/renamed content is pruned on each run — see [[skill-content-manager]] for the full hardening detail.
 
 STRM generation reads from `XtreamCache` (global) and genres from all profiles, so it works even when the **active provider is Stalker** — as long as XtreamCache was previously populated by an Xtream profile. When the active provider is not Xtream, `STRM_XTREAM_USERNAME` and `STRM_XTREAM_PASSWORD` **must** be set explicitly, otherwise stream URLs will contain Stalker credentials (a `logger.warn` is emitted if missing).
 
@@ -317,37 +319,6 @@ Variant tag patterns detected:
 - **Format:** BluRay, WEBRip, WEB-DL, DVDRip, HDRip, HDCAM, CAM, TS
 
 Trigger manual regeneration: `POST /api/admin/strm/generate` or via the Content Manager UI.
-
----
-
-## HLS Transcode Proxy
-
-An FFmpeg-based transcode proxy for VOD and series content. Useful for players that can't handle the portal's native stream format, need seeking in container formats that don't support it natively, or require specific audio track selection.
-
-**Requires FFmpeg** to be installed (included in the default Docker image).
-
-### Endpoints
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/media/info?url=` | Probe a URL — returns duration, audio tracks, subtitle tracks |
-| `GET /api/media/hls/master.m3u8?url=` | Master HLS playlist with all audio tracks |
-| `GET /api/media/hls/session/{sessionId}/{file}` | Individual media playlists and `.ts` segments |
-| `GET /api/media/subtitle?url=&index=` | Extract and serve a subtitle track |
-
-### How it works
-
-1. `GET /api/media/info` — FFprobe probes the URL and returns metadata (duration, audio/subtitle streams). Result cached for 6 hours.
-2. `GET /api/media/hls/master.m3u8` — builds a master playlist listing all audio tracks as `#EXT-X-MEDIA` groups. Each track gets its own `playlist_audio_N.m3u8`.
-3. Media playlists are VOD-type with timestamp-encoded segment URIs (`seg_video_0.ts?start=0.000`). Seeking is exact — the segment handler reads the `start` query param and passes `-ss` to FFmpeg.
-4. FFmpeg is spawned per session with a `SIGKILL` watchdog that fires after 60 seconds of inactivity.
-5. Parallel seek-restart races are guarded (`isRestarting` flag + debounce).
-
-### Session lifecycle
-
-- Sessions are stored in memory in `activeSessions`
-- A watchdog interval (every 10s) kills FFmpeg and deletes temp files for sessions idle > 60 seconds
-- Temp files are written to `temp/hls/{sessionId}/`
 
 ---
 
@@ -393,11 +364,11 @@ Multiple portal configurations can be stored and switched without restarting the
 
 ### Client-aware mode selection (`/live.m3u8`)
 
-The web UI requests live streams as `/live.m3u8?cmd=...&id=...&proxy=1`. The server picks the delivery mode per client:
+The web UI requests live streams as `/live.m3u8?t={token}&id=...&proxy=1` — `t` is an opaque stream token minted server-side (see [[skill-stream-tokens]]), never a raw `cmd`. The server picks the delivery mode per client:
 
 | Client | Behavior |
 |--------|----------|
-| Browser (`proxy=1`) | **Always proxied** — playlists rewritten to same-origin signed segment URLs. Browsers cannot follow redirects to the upstream portal (CORS / mixed content), so `proxy=1` overrides the profile's proxy setting |
+| Browser (`proxy=1`) | **Always proxied** — playlists rewritten to same-origin tokenized segment URLs. Browsers cannot follow redirects to the upstream portal (CORS / mixed content), so `proxy=1` overrides the profile's proxy setting |
 | Smart TV (`Tizen`/`SMART-TV`/`WebOS` user-agent) | **Direct 302 redirect** to the resolved CDN URL — TV webviews are not CORS-bound and decode natively, so no server bandwidth is used |
 | `proxy=0` | Forces a direct redirect regardless of config |
 | No `proxy` param (IPTV players) | Follows the active profile's `proxy` setting |
@@ -411,8 +382,8 @@ When `LIVE_TRANSCODE=true`, the server probes the stream codec (ffprobe, cached 
 Two modes controlled per-request via `proxy=0` query param (default is proxy-on based on server config):
 
 **Proxy mode (default):**
-- `liveStreamService` fetches the master HLS playlist from the portal, rewrites segment URLs to signed `/player/{id}.ts` paths, and caches the segment map
-- Segments are served at `GET /player/{resourceId}.ts` (or handled by `liveStreamService.getSegment`)
+- `liveStreamService` fetches the master HLS playlist from the portal, rewrites segment URLs to tokenized `/player/{token}.ts` paths, and caches the segment map
+- Segments are served at `GET /player/{token}.ts` (`liveStreamService.getSegmentByResourceId`) — the token resolves to the real `cmd<_>seq` resourceId server-side, nothing about it is derivable from the URL itself
 - VLC User-Agent is sent on all upstream HLS fetches
 - Cache miss on a segment triggers a playlist refresh using the stored subpath
 
@@ -424,13 +395,13 @@ Two modes controlled per-request via `proxy=0` query param (default is proxy-on 
 
 1. **Master playlist** — resolved from portal command via `cmdPlayerV2` and cached for 30 seconds
 2. **Segment map** — `#EXT-X-MEDIA-SEQUENCE` number → relative URL, stored per stream
-3. Segments served at `GET /player/{resourceId}.ts` with HMAC-signed URLs
+3. Segments served at `GET /player/{token}.ts` — an opaque per-segment token replaces the older HMAC-signed resource ID scheme (see [[skill-stream-tokens]])
 4. On 301/302/403, server auto-refreshes the master URL and updates the cached base URL
 5. Concurrent requests for the same stream share a single upstream fetch (pending-promise deduplication)
 
 ### Catchup
 
-`GET /live.m3u8?cmd=...&start_time=...&end_time=...` passes timestamps to `cmdPlayerV2`, which forwards them to the portal's catchup endpoint.
+`GET /live.m3u8?t={token}&start_time=...&end_time=...` passes timestamps to `cmdPlayerV2`, which forwards them to the portal's catchup endpoint. The token resolves to `cmd` server-side, same as any other `/live.m3u8` request.
 
 ---
 
@@ -500,7 +471,7 @@ Codes expire after 5 minutes. The device can poll until expiry.
 ### JWT scope & role gating
 
 All `/api/` and `/v2/` endpoints require `Authorization: Bearer <token>` unless explicitly exempted:
-- Stream proxies (`/api/proxy`, `/api/media/`, `/api/vod/`, `/api/v2/download`)
+- Stream proxies (`/api/proxy`, `/api/vod/`, `/api/v2/download`)
 - Auth endpoints (`/api/auth/`), image proxy (`/api/images/`)
 - Player paths (`/live.m3u8`, `/player/`, `/live/`, `/movie/`, `/series/`, `/player_api.php`, `/xmltv.php`)
 - Portal proxy (`/portal/proxy`)
@@ -538,15 +509,6 @@ When a player authenticates via `GET /player_api.php`, the `user_info.password` 
 | `GET /series/{user}/{pass}/{id}.{ext}` | Episode stream (proxy) |
 | `GET /xmltv.php` | EPG (XMLTV) |
 | `GET /{user}/{pass}/{id}` | Legacy redirect (for players omitting `/live/`) |
-
-### HLS Transcode
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/media/info?url=` | Probe URL — returns duration, audio tracks, subtitles |
-| `GET /api/media/hls/master.m3u8?url=` | Master HLS playlist (multi-audio) |
-| `GET /api/media/hls/session/{sessionId}/{file}` | Media playlist or `.ts` segment |
-| `GET /api/media/subtitle?url=&index=` | Subtitle track extraction |
 
 ### Browse (internal UI / custom players)
 

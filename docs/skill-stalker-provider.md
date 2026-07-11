@@ -2,7 +2,7 @@
 
 Covers `StalkerAPI`, token management, watchdog keep-alive, caching strategy, and Stalker-specific routes. Key commits: `3dda72c`, `0d5cfbe`, `79f33b5`.
 
-Related: [[skill-xtream-provider]], [[skill-m3u-playlist]]
+Related: [[skill-xtream-provider]], [[skill-m3u-playlist]], [[skill-stream-tokens]]
 
 ---
 
@@ -10,7 +10,9 @@ Related: [[skill-xtream-provider]], [[skill-m3u-playlist]]
 
 Implements `IProvider`. Connects to a Stalker Middleware portal using STB emulation (MAC address + token auth). All portal calls go through `load.php` (or `portal.php` depending on `contextPath`).
 
-### Configuration (env vars)
+### Configuration
+
+Configured entirely through the browser UI's profile form — `POST`/`PUT /api/profiles` writes hostname/port/https/path/mac/stbType as JSON into `ConfigProfile.config` (`src/models/ConfigProfile.ts`). No environment variables are required. The `STALKER_*` vars below only seed the *default* values a brand-new profile is pre-filled with (`ConfigDefault` in `src/config/server.ts`) — editing an existing profile never reads them again.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -71,7 +73,7 @@ Internal browse API consumed by the web UI and M3U generation. Not Stalker-proto
 Key features added in this branch:
 - **Portal URL parameter support** (commit `79f33b5`): `?portal=` param overrides the active portal temporarily, allowing multi-portal requests without switching profiles
 - **Profile-based data isolation** (commit `eddd29e`): all DB reads scoped to the active `ConfigProfile.id`
-- **VOD series logic refinement**: respects `SERIES_FLAG` env var for mixed portals
+- **VOD series logic refinement**: for mixed portals (single VOD endpoint, no separate series API), items are split by `{SERIES_FLAG}` (default `is_series`, override via env var); portals with a genuinely separate series endpoint are auto-detected instead and ignore `SERIES_FLAG` — result cached as `portal_series_source` (`"native"` vs `"vod"`) in `XtreamCache`
 
 ### Key endpoints
 
@@ -100,12 +102,13 @@ Resolves a Stalker `cmd` string (e.g. `ffmpeg http://...`) to a real stream URL 
 
 `GET /m3u` — returns the live M3U playlist (Stalker channels only).
 
-Live stream via `GET /live.m3u8?cmd=...&id=...`:
-1. Resolves `cmd` via `cmdPlayerV2`
-2. Fetches master HLS playlist from portal, rewrites segment URLs to signed `/player/{id}.ts` paths
-3. Segment cache maps sequence number → relative URL per stream
-4. On 301/302/403, auto-refreshes master URL and updates cached base URL
-5. Concurrent requests for the same stream share one upstream fetch
+Live stream via `GET /live.m3u8?t={token}&id=...` — **`cmd` is never a client-visible query param** — the real cmd is resolved server-side from the opaque token (`mapChannel()` mints it when building the channel list; see [[skill-stream-tokens]]):
+1. Token resolves to the real `cmd`, verified server-side
+2. Resolves `cmd` via `cmdPlayerV2`
+3. Fetches master HLS playlist from portal, rewrites segment URLs to `/player/{token}.ts` paths — a *fresh, per-segment* opaque token, not a signed resource ID
+4. Segment cache maps sequence number → relative URL per stream
+5. On 301/302/403, auto-refreshes master URL and updates cached base URL
+6. Concurrent requests for the same stream share one upstream fetch
 
 ---
 

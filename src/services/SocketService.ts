@@ -143,6 +143,10 @@ class SocketService {
   public broadcastConfigChange(hash: string) {
     this.io?.emit("config_changed", { timestamp: Date.now(), hash });
   }
+
+  public getActiveDeviceCount(): number {
+    return this.devices.size;
+  }
 }
 
 export const socketService = new SocketService();

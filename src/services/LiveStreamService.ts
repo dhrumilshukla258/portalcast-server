@@ -1,10 +1,10 @@
 import { httpClient } from "@/utils/httpClient";
-import { appConfig, initialConfig } from "@/config/server";
+import { initialConfig } from "@/config/server";
 import { serverManager } from "@/serverManager";
 import NodeCache from "node-cache";
 import { AxiosResponse } from "axios";
-import crypto from "crypto";
 import { logger } from "@/utils/logger";
+import { mintStreamToken } from "@/services/StreamTokens";
 
 interface CacheRecord {
   baseUrl: string;
@@ -17,29 +17,18 @@ interface CacheRecord {
 export class LiveStreamService {
   private cache: NodeCache;
   private pendingCommands: Map<string, Promise<string | null>>;
-  private secretKey: string;
   private sequenceRegex = /#EXT-X-MEDIA-SEQUENCE:(\d+)/;
 
   constructor() {
     this.cache = new NodeCache({ stdTTL: 600, checkperiod: 60 });
     this.pendingCommands = new Map();
-    this.secretKey = appConfig.proxy.secretKey;
   }
 
-  public generateSignedUrl(resourceId: string): string {
-    const sig = crypto
-      .createHmac("sha256", this.secretKey)
-      .update(resourceId)
-      .digest("hex");
-    return `/player/${encodeURIComponent(resourceId)}.ts?sig=${sig}`;
-  }
-
-  public verifySignedUrl(resourceId: string, sig: string): boolean {
-    const expectedSig = crypto
-      .createHmac("sha256", this.secretKey)
-      .update(resourceId)
-      .digest("hex");
-    return sig === expectedSig;
+  // Mints an opaque token mapping to resourceId ("cmd<_>seq") + identity —
+  // the client only ever sees /player/{token}.ts, never the real cmd.
+  public generateSignedUrl(resourceId: string, userLabel: string): string {
+    const token = mintStreamToken(resourceId, userLabel);
+    return `/player/${token}.ts`;
   }
 
   private async populateCache(cmd: string): Promise<string> {
@@ -85,30 +74,28 @@ export class LiveStreamService {
     const segments = new Map<number, string>();
     let subpath: string | undefined;
 
-    const modifiedLines = lines.map((line: string) => {
-      if (line.startsWith("#") || line.trim() === "") {
-        return line;
-      }
+    // Only baseUrl/segments/subpath are actually consumed by callers (they
+    // re-read this.cache after awaiting populateCache) — the modified line
+    // text itself is never used, so just populate segments/subpath here.
+    lines.forEach((line: string) => {
+      if (line.startsWith("#") || line.trim() === "") return;
       if (line.endsWith(".m3u8")) {
         if (!subpath) subpath = line.trim();
-        return `/live.m3u8?cmd=${encodeURIComponent(cmd)}&play=1&subpath=${encodeURIComponent(line)}`;
+        return;
       }
-
-      const resourceId = `${cmd}<_>${currentSeq}`;
       segments.set(currentSeq, line);
       currentSeq++;
-
-      return this.generateSignedUrl(resourceId);
     });
 
     this.cache.set(cmd, { baseUrl, segments, subpath } as CacheRecord);
-    return modifiedLines.join("\n");
+    return "";
   }
 
   public async getPlaylist(
     cmd: string,
     play: string | undefined,
-    subpathQuery?: string,
+    subpathQuery: string | undefined,
+    userLabel: string,
   ): Promise<string | { error: string; code: number }> {
     logger.info(
       `[LiveStreamService] getPlaylist called for cmd=${cmd} play=${play} subpath=${subpathQuery}`,
@@ -255,7 +242,7 @@ export class LiveStreamService {
           record.segments.set(currentSeq, line);
           currentSeq++;
 
-          return this.generateSignedUrl(resourceId);
+          return this.generateSignedUrl(resourceId, userLabel);
         });
 
         this.cache.set(cmd, record as CacheRecord);
@@ -294,7 +281,8 @@ export class LiveStreamService {
 
           if (line.startsWith("#EXT-X-MEDIA:")) {
             return line.replace(/URI="([^"]+)"/, (match, uri) => {
-              const newUri = `/live.m3u8?cmd=${encodeURIComponent(cmd)}&play=1&subpath=${encodeURIComponent(uri)}`;
+              const token = mintStreamToken(cmd, userLabel);
+              const newUri = `/live.m3u8?t=${token}&play=1&subpath=${encodeURIComponent(uri)}`;
               return `URI="${newUri}"`;
             });
           }
@@ -302,14 +290,15 @@ export class LiveStreamService {
           if (line.startsWith("#")) return line;
 
           if (line.match(".m3u8")) {
-            return `/live.m3u8?cmd=${encodeURIComponent(cmd)}&play=1&subpath=${encodeURIComponent(line)}`;
+            const token = mintStreamToken(cmd, userLabel);
+            return `/live.m3u8?t=${token}&play=1&subpath=${encodeURIComponent(line)}`;
           }
 
           const resourceId = `${cmd}<_>${currentSeq}`;
           record.segments.set(currentSeq, line);
           currentSeq++;
 
-          return this.generateSignedUrl(resourceId);
+          return this.generateSignedUrl(resourceId, userLabel);
         });
 
         this.cache.set(cmd, record as CacheRecord);
@@ -326,15 +315,14 @@ export class LiveStreamService {
     }
   }
 
-  public async getSegment(
+  // Called by /player/{token} once the token layer has already resolved and
+  // authorized resourceId ("cmd<_>seq") + identity — no separate signature to
+  // check here.
+  public async getSegmentByResourceId(
     resourceId: string,
-    sig: string,
     headers: any,
+    userLabel: string,
   ): Promise<any> {
-    if (!resourceId || !sig) throw new Error("Missing parameters");
-    if (!this.verifySignedUrl(resourceId, sig))
-      throw new Error("Invalid signature");
-
     const [cmd, seqStr] = resourceId.split("<_>");
     const seqId = Number(seqStr);
 
@@ -349,7 +337,7 @@ export class LiveStreamService {
       logger.info(
         `[LiveStreamService] Segment ${seqId} missing in cache for ${cmd}. Refreshing playlist (subpath=${subpath})...`,
       );
-      await this.getPlaylist(cmd, subpath ? "1" : undefined, subpath);
+      await this.getPlaylist(cmd, subpath ? "1" : undefined, subpath, userLabel);
       record = this.cache.get(cmd);
       if (!record || !record.segments.has(seqId)) {
         throw new Error("Segment not found");

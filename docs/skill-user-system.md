@@ -2,7 +2,7 @@
 
 Covers the user data model, progress tracking, preferences, and admin user management. All implemented in `feature/dual-portal-xtream-support` (commit `54846ea`).
 
-Related: [[skill-auth-system]] for login/tokens.
+Related: [[skill-auth-system]] for login/tokens, [[skill-admin-dashboard]] for how `lastLogin` is surfaced, [[skill-subtitles]] for the OpenSubtitles account-linking fields.
 
 ---
 
@@ -21,8 +21,11 @@ Related: [[skill-auth-system]] for login/tokens.
 | `passwordHash` | STRING | PBKDF2 hash (null for Google-only users) |
 | `salt` | STRING | Salt for password hashing |
 | `preferences` | JSON | `{ preferredContentType, favorites[], recentChannels[] }` |
+| `lastLogin` | DATE | Set on every successful login (Google, admin-bootstrap, email/password — see `src/routes/auth.ts`). Powers the Admin Dashboard's "logged in last 24h/7d" stats and recent-logins list — see [[skill-admin-dashboard]] |
+| `openSubtitlesUsername` | STRING | OpenSubtitles account username, if the user has linked one — see [[skill-subtitles]] |
+| `openSubtitlesPasswordEnc` | TEXT | AES-256-GCM encrypted (reversible, not hashed — OpenSubtitles has no refresh-token flow, only re-login) via `src/utils/crypto.ts` |
 
-`passwordHash` and `salt` are stripped from all API responses — never returned to clients.
+`passwordHash` and `salt` are stripped from all API responses — never returned to clients. `openSubtitlesPasswordEnc` is likewise never returned; only `linked: boolean` and the username are exposed via `GET /api/user/opensubtitles`.
 
 ### UserProgress (`src/models/UserProgress.ts`)
 
@@ -66,6 +69,9 @@ All routes require a valid JWT (any role).
 | `PUT` | `/api/user/progress` | Upsert progress: `{ mediaId, progress, completed, meta }` |
 | `DELETE` | `/api/user/progress/{mediaId}` | Remove one progress record |
 | `POST` | `/api/user/clear-history` | Deletes all progress for active profile + clears `recentChannels` |
+| `GET` | `/api/user/opensubtitles` | `{ linked, username }` — link status only, never the password |
+| `PUT` | `/api/user/opensubtitles` | `{ username, password }` — verifies the login works *before* storing (encrypted), see [[skill-subtitles]] |
+| `DELETE` | `/api/user/opensubtitles` | Unlink |
 
 Progress is **profile-scoped** — switching active profile shows different history.
 

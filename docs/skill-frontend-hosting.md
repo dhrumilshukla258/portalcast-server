@@ -2,7 +2,7 @@
 
 **Important:** This repo (`stalker-m3u-server`) does not contain frontend source code. There is no `src/components`, no `.tsx` files, no Vite/React config — only the **compiled build output** lives here, in `public/`. The frontend source is maintained in a separate project/build pipeline and its output is copied into `public/assets/` as part of the release process.
 
-Related: [[skill-database]], [[skill-auth-system]]
+Related: [[skill-database]], [[skill-auth-system]], [[skill-stream-tokens]], [[skill-admin-dashboard]]
 
 ---
 
@@ -52,8 +52,8 @@ Uses `@hapi/inert` (`Inert` plugin) registered once in `init()`.
 A global `onPreHandler` hook in `server.ts` enforces JWT auth on `/api/*` and `/v2/*` paths, with exceptions for:
 - Static pages (anything not under `/api/` or `/v2/`)
 - `/api/auth/*` (login/signup must be reachable unauthenticated)
-- `/api/images/*`, `/api/proxy*`, `/api/media/*`, `/api/vod/*` (stream/image proxies — tokenless by design)
-- `/live.m3u8`, `/player/*`, `/live/*`, `/movie/*`, `/series/*`, `/portal/proxy` (legacy/player-facing stream URLs, secured by HMAC signing instead of JWT — see [[skill-m3u-playlist]])
+- `/api/images/*`, `/api/proxy*`, `/api/vod/*` (stream/image proxies — can't require a Bearer header since `<video src>`/IPTV players can't attach custom headers)
+- `/live.m3u8`, `/player/*`, `/live/*`, `/movie/*`, `/series/*`, `/portal/proxy` (player-facing stream URLs, secured by an opaque per-request token instead of JWT — see [[skill-stream-tokens]])
 
 The frontend SPA itself (served via the catch-all) is never gated — only its API calls are.
 
@@ -75,10 +75,11 @@ The frontend is a SPA client consuming this server's REST + WebSocket APIs. Rele
 |---------------|-------------------|
 | Login, Google Sign-In, device pairing | [[skill-auth-system]] |
 | User profile, preferences, watch progress | [[skill-user-system]] |
-| Content Manager UI (`/contentmanager`) | [[skill-content-manager]] |
-| Video playback (Vidstack player + HLS) | [[skill-hls-proxy]] |
+| Content Manager UI (`/contentmanager` and the Admin panel's Content tab) | [[skill-content-manager]], [[skill-admin-dashboard]] |
+| Video playback (Vidstack player + HLS) | [[skill-stream-tokens]] |
 | Live TV, EPG, profile switching | [[skill-profiles-epg]] |
 | Browse/search (movies, series, channels) | [[skill-xtream-provider]], [[skill-stalker-provider]] |
+| Admin dashboard (stats, live streams) | [[skill-admin-dashboard]] |
 
 Real-time updates (profile switch, cache warm status) are pushed via WebSocket (`SocketService`) rather than polling — see [[skill-profiles-epg]] for event names.
 
@@ -86,11 +87,14 @@ Real-time updates (profile switch, cache warm status) are pushed via WebSocket (
 
 ## Implication for Future Work
 
-Because frontend source isn't versioned here, **any frontend logic bug can only be fixed by**:
-1. Patching the built JS in `public/assets/` directly (fragile, only done for urgent fixes — see `dd178da`), or
-2. Rebuilding from the separate frontend repo and copying the new `public/` output into this repo
+Frontend source isn't versioned in *this* repo — it lives in the separate `stalker-ui` project. If that project is available in your working environment (as an additional working directory, sibling checkout, etc.), fix frontend bugs there at the source level, same as you would in a normal multi-repo setup — do not hand-edit the minified bundles in `public/assets/` unless the source repo is genuinely unavailable (patching built JS directly is fragile and was only ever a last resort — see `dd178da`).
 
-If asked to "fix the UI" or change frontend behavior, check whether the actual frontend source repo is available before attempting to hand-edit minified bundles in `public/assets/`.
+**After any `stalker-ui` change, this repo's `public/` is stale until you sync it**:
+1. `cd stalker-ui && npm run build` (produces `dist/`)
+2. Copy `dist/*` into this repo's `public/` (replace `assets/`, `index.html`, `manifest.webmanifest`, `sw.js`, `workbox-*.js`) — or run `stalker-ui`'s `deploy.sh`, which automates this copy
+3. Rebuild/redeploy this repo's Docker image — the `Dockerfile` here copies `public/` **as-is**, it does not build the frontend itself, so step 1–2 must happen *before* the image build
+
+Forgetting this step is a common source of "I fixed it but it's still broken" — the deployed instance is still running whatever was in `public/` before your fix. If a bug report doesn't match what the current frontend source would produce, suspect a stale `public/` first.
 
 ---
 

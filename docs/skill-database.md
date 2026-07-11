@@ -79,12 +79,17 @@ Virtual categories have IDs prefixed `vcat_`. The Xtream response normalizes `vc
 
 ## Migrations (inline in `initDB`)
 
-`src/db/index.ts` contains two inline migrations run before `sync()`:
+`src/db/index.ts` runs two inline migrations **before** `sequelize.sync({ alter: true })`:
 
 1. **`content_cache` table** — if PK is not `cacheKey`, drop and recreate (added in `d954af5`)
 2. **`user_progress` table** — if `profileId` column is missing, drop and recreate (added in `54846ea`)
 
-After migrations: `sequelize.sync({ alter: true })` adds any missing columns non-destructively.
+And one migration that runs **after** `sync()`:
+
+3. **`user_progress` stray unique index repair** — `UserProgress` declares its composite key via three separate `@PrimaryKey` decorators (`userId`, `profileId`, `mediaId`) rather than one true composite index. Sequelize's SQLite `alter` dialect has a known quirk where rebuilding the table this way can leave only `profileId` as a genuinely unique constraint instead of the full composite — which then rejects any second progress row sharing a `profileId` (even for a different user/media) with `SQLITE_CONSTRAINT: UNIQUE constraint failed: user_progress.profileId`.
+   **This check must run after `sync()`, not before** — `sync()` is what (re)introduces the stray constraint in the first place, so repairing it beforehand just gets silently undone by the `sync()` call that follows. (This ran in the wrong order for a while, which is why the bug kept resurfacing across restarts even though a fix had already shipped once.) On detection, recreates the table with the correct `PRIMARY KEY (userId, profileId, mediaId)`, preserving all rows via `INSERT OR IGNORE`.
+
+After all migrations: `sequelize.sync({ alter: true })` (called between the "before" and "after" migrations above) adds any missing columns non-destructively.
 
 ---
 

@@ -43,9 +43,6 @@ export interface AppConfig {
     environment: string;
     logLevel: string;
   };
-  proxy: {
-    secretKey: string;
-  };
 }
 export type StreamTester = "http";
 

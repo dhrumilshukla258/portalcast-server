@@ -7,32 +7,13 @@ import { readGenres } from "@/utils/storage";
 import { logger } from "@/utils/logger";
 import { StrmMovie } from "@/models/StrmMovie";
 import { StrmSeries } from "@/models/StrmSeries";
+import { normalizeTitleKey, extractVariantTags } from "@/utils/titleClean";
 
 const MOVIES_PATH = process.env.STRM_MOVIES_PATH;
 const SERIES_PATH = process.env.STRM_SERIES_PATH;
 
-// ── Variant / quality / language tag patterns ──────────────────────────────────
-const VARIANT_RE =
-  /\b(Hindi|Tamil|Telugu|Malayalam|Kannada|Bengali|Punjabi|Marathi|Odia|Gujarati|Assamese|Urdu|Bhojpuri|Sindhi|English|French|Spanish|German|Italian|Portuguese|Russian|Arabic|Chinese|Japanese|Korean|Dual\s*Audio|Dubbed|Multi|TriAudio|4K|UHD|FHD|HD|SD|SDR|HDR|HDRip|HDTV|HDCAM|BluRay|Blu-?Ray|BRRip|WEBRip|WEB-?DL|DVDRip|DVD-?Rip|CAM|HDTS|TS|PDVD|480p|720p|1080p|2160p)\b/gi;
-
-const CHANNEL_PREFIX_RE = /^(Colors(?:\s+(?:Kannada|Tamil|Gujarati|Bangla|Marathi|Odia|Punjabi|Rishtey|Super|Infinity))?|Zee(?:\s+(?:TV|Telugu|Tamil|Kannada|Marathi|Bangla|Cafe|Cinema|News|Anmol|Bollywood|Classic|Action|World))?|Star(?:\s+(?:Plus|Vijay|Jalsha|Pravah|Suvarna|Maa|Utsav|Gold|World|Movies|Sports))?|Sony(?:\s+(?:TV|SAB|Liv|Max|Aath|Rox|Marathi))?|Sun(?:\s+(?:TV|Bangla|Marathi|Neo|Life))?|Gemini(?:\s+(?:TV|Music|Movies))?|Maa(?:\s+(?:TV|Gold|Movies))?|ETV(?:\s+(?:Telugu|Plus|Andhra))?|Life\s+OK|Asianet|Vijay\s*TV|SAB\s*TV|Rishtey|Big\s+Magic|Aaj\s+Tak|Republic\s*TV|NDTV|CNN|BBC|Discovery|National\s+Geographic|Nat\s+Geo)\s*/i;
-
-function normalize(name: string): string {
-  return name
-    .replace(CHANNEL_PREFIX_RE, "")
-    .replace(VARIANT_RE, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-}
-
-function extractTags(name: string): string[] {
-  const tags: string[] = [];
-  const ch = name.match(CHANNEL_PREFIX_RE);
-  if (ch) tags.push(ch[0].trim());
-  name.replace(VARIANT_RE, (m) => { tags.push(m.trim()); return ""; });
-  return tags;
-}
+const normalize = normalizeTitleKey;
+const extractTags = extractVariantTags;
 
 function sanitize(name: string): string {
   return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, "").replace(/\.+$/, "").trim();
@@ -63,11 +44,47 @@ async function bulkUpsert(Model: typeof StrmMovie | typeof StrmSeries, rows: any
   }
 }
 
+// Best-effort removal of a stale .strm file plus any now-empty parent folders,
+// so renames/merges/deletions don't leave orphan files behind on disk.
+function removeStaleFile(outputDir: string, folderPath: string, fileName: string): void {
+  try {
+    const filePath = path.join(outputDir, folderPath, fileName);
+    fs.rmSync(filePath, { force: true });
+
+    let dir = path.dirname(filePath);
+    const root = path.resolve(outputDir);
+    while (path.resolve(dir) !== root && path.resolve(dir).startsWith(root)) {
+      const entries = fs.readdirSync(dir);
+      if (entries.length > 0) break;
+      fs.rmdirSync(dir);
+      dir = path.dirname(dir);
+    }
+  } catch {
+    // best-effort — ignore missing files/dirs
+  }
+}
+
 // ── Public entry point ─────────────────────────────────────────────────────────
+
+let isGenerating = false;
 
 export async function generateStrmFiles(): Promise<void> {
   if (!MOVIES_PATH && !SERIES_PATH) return;
 
+  if (isGenerating) {
+    logger.warn("[STRM] generation already in progress — skipping this request");
+    return;
+  }
+  isGenerating = true;
+
+  try {
+    await generateStrmFilesInner();
+  } finally {
+    isGenerating = false;
+  }
+}
+
+async function generateStrmFilesInner(): Promise<void> {
   // XtreamCache is global and readGenres() has no profileId filter, so generation
   // works even when Stalker is the active provider, as long as XtreamCache was
   // populated by a previous Xtream warm. Credentials fall back to ADMIN_EMAIL /
@@ -104,11 +121,12 @@ async function generateMovies(outputDir: string): Promise<void> {
   const genres = await readGenres("movie");
   const seen   = new Set<string>();
   const toUpsert: any[] = [];
+  let cacheIncomplete = false;
 
   for (const genre of genres) {
     if (!genre.id || genre.id === "*") continue;
     const movies = await xtreamCache.get<any[]>(`vod_streams_${genre.id}`);
-    if (!movies) continue;
+    if (!movies) { cacheIncomplete = true; continue; }
 
     for (const movie of movies) {
       const id = String(movie.stream_id);
@@ -124,7 +142,11 @@ async function generateMovies(outputDir: string): Promise<void> {
       const entryId    = `movie_${id}`;
       const existing   = existingById.get(entryId);
 
-      if (!existing || existing.url !== url) {
+      if (!existing || existing.url !== url || existing.raw_folder !== folderName) {
+        if (existing && existing.raw_folder !== folderName) {
+          // title changed upstream — drop the old file, it'll be rewritten under the new name/folder
+          removeStaleFile(outputDir, existing.folder_path, existing.file_name);
+        }
         toUpsert.push({
           id:             entryId,
           canonical_key:  normalize(folderName),
@@ -140,6 +162,24 @@ async function generateMovies(outputDir: string): Promise<void> {
   }
 
   if (toUpsert.length > 0) await bulkUpsert(StrmMovie, toUpsert);
+
+  // ── Phase 1b: prune movies no longer present upstream ────────────────────────
+  // Skipped when any genre's cache wasn't warmed yet — otherwise we'd delete
+  // still-valid content just because it hasn't been fetched into cache.
+
+  if (cacheIncomplete) {
+    logger.warn("[STRM] Movies: xtream cache incomplete for one or more genres — skipping prune this run");
+  } else {
+    const removedMovies = existingRows.filter((r) => !seen.has(r.id.replace(/^movie_/, "")));
+    if (removedMovies.length > 0) {
+      for (const r of removedMovies) removeStaleFile(outputDir, r.folder_path, r.file_name);
+      const removedIds = removedMovies.map((r) => r.id);
+      for (let i = 0; i < removedIds.length; i += CHUNK) {
+        await StrmMovie.destroy({ where: { id: { [Op.in]: removedIds.slice(i, i + CHUNK) } } });
+      }
+      logger.info(`[STRM] Movies: pruned ${removedMovies.length} removed entries`);
+    }
+  }
 
   // ── Phase 2: merge duplicates in DB ──────────────────────────────────────────
 
@@ -166,6 +206,7 @@ async function generateMovies(outputDir: string): Promise<void> {
       const mergedFile = `${sec.raw_folder} [${label}].strm`;
 
       if (sec.folder_path !== primary.folder_path || sec.file_name !== mergedFile) {
+        if (sec.synced_to_disk) removeStaleFile(outputDir, sec.folder_path, sec.file_name);
         await StrmMovie.update(
           { folder_path: primary.folder_path, file_name: mergedFile, synced_to_disk: false },
           { where: { id: sec.id } },
@@ -218,12 +259,14 @@ async function generateSeries(outputDir: string): Promise<void> {
 
   const genres    = await readGenres("series");
   const seenShows = new Set<number>();
+  const seenEpisodes = new Set<string>();
   const toUpsert: any[] = [];
+  let cacheIncomplete = false;
 
   for (const genre of genres) {
     if (!genre.id || genre.id === "*") continue;
     const seriesList = await xtreamCache.get<any[]>(`series_list_${genre.id}`);
-    if (!seriesList) continue;
+    if (!seriesList) { cacheIncomplete = true; continue; }
 
     for (const series of seriesList) {
       const seriesId = series.series_id as number;
@@ -232,7 +275,7 @@ async function generateSeries(outputDir: string): Promise<void> {
 
       try {
         const seriesInfo = await xtreamCache.get<any>(`series_info_${seriesId}`);
-        if (!seriesInfo?.episodes) continue;
+        if (!seriesInfo?.episodes) { cacheIncomplete = true; continue; }
 
         const rawName  = sanitize(series.name || `Series_${seriesId}`);
         const year     = extractYear(series.releaseDate || "");
@@ -248,6 +291,7 @@ async function generateSeries(outputDir: string): Promise<void> {
             const epId     = String(ep.id);
             const entryId  = `seriesep_${epId}`;
             const existing = existingById.get(entryId);
+            seenEpisodes.add(entryId);
 
             const epNum    = pad(parseInt(String(ep.episode_num || 1)));
             const s        = pad(parseInt(seasonNum));
@@ -256,7 +300,11 @@ async function generateSeries(outputDir: string): Promise<void> {
             const ext      = ep.container_extension || "mp4";
             const url      = `${base}/series/${u}/${p}/${epId}.${ext}`;
 
-            if (!existing || existing.url !== url) {
+            if (!existing || existing.url !== url || existing.raw_folder !== showName) {
+              if (existing && existing.raw_folder !== showName) {
+                // show renamed upstream — drop the old file, it'll be rewritten under the new name
+                removeStaleFile(outputDir, existing.folder_path, existing.file_name);
+              }
               toUpsert.push({
                 id:             entryId,
                 canonical_key:  canonicalKey,
@@ -309,10 +357,29 @@ async function generateSeries(outputDir: string): Promise<void> {
     const mergedFile   = e.file_name.replace(e.raw_folder, primaryShow);
 
     if (e.folder_path !== mergedFolder || e.file_name !== mergedFile) {
+      if (e.synced_to_disk) removeStaleFile(outputDir, e.folder_path, e.file_name);
       await StrmSeries.update(
         { folder_path: mergedFolder, file_name: mergedFile, synced_to_disk: false },
         { where: { id: e.id } },
       );
+    }
+  }
+
+  // ── Phase 2b: prune episodes/shows no longer present upstream ───────────────
+  // Skipped when any series' cache wasn't fully warmed — otherwise we'd delete
+  // still-valid episodes just because their info hasn't been fetched into cache.
+
+  if (cacheIncomplete) {
+    logger.warn("[STRM] Series: xtream cache incomplete for one or more genres/shows — skipping prune this run");
+  } else {
+    const removedEpisodes = existingRows.filter((r) => !seenEpisodes.has(r.id));
+    if (removedEpisodes.length > 0) {
+      for (const r of removedEpisodes) removeStaleFile(outputDir, r.folder_path, r.file_name);
+      const removedIds = removedEpisodes.map((r) => r.id);
+      for (let i = 0; i < removedIds.length; i += CHUNK) {
+        await StrmSeries.destroy({ where: { id: { [Op.in]: removedIds.slice(i, i + CHUNK) } } });
+      }
+      logger.info(`[STRM] Series: pruned ${removedEpisodes.length} removed episodes`);
     }
   }
 

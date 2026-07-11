@@ -4,10 +4,12 @@ import { ServerRoute } from "@hapi/hapi";
 import { http, https } from "follow-redirects";
 import { RequestOptions } from "https";
 import NodeCache from "node-cache";
-import { appConfig, initialConfig } from "@/config/server";
+import { initialConfig } from "@/config/server";
 import { ReqRefDefaults, ResponseToolkit } from "@hapi/hapi/lib/types";
 import { stalkerApi } from "@/utils/stalker";
 import { logger } from "@/utils/logger";
+import { streamTracker, type StreamMeta } from "@/services/StreamTracker";
+import { mintStreamToken, streamTokenFromRequest, resolveStreamToken } from "@/services/StreamTokens";
 import { spawn, ChildProcess, execFile } from "child_process";
 import { promisify } from "util";
 import fs from "fs";
@@ -141,26 +143,16 @@ async function ensureTranscodeSession(cmd: string): Promise<string | null> {
   return session.ready ? sessionId : null;
 }
 
-const SECRET_KEY = appConfig.proxy.secretKey;
 const sequenceRegex = /#EXT-X-MEDIA-SEQUENCE:(\d+)/;
 
 const httpAgent = new http.Agent({ keepAlive: true });
 const httpsAgent = new https.Agent({ keepAlive: true });
 
-function generateSignedUrl(resourceId: string): string {
-  const sig = require("crypto")
-    .createHmac("sha256", SECRET_KEY)
-    .update(resourceId)
-    .digest("hex");
-  return `/player/${encodeURIComponent(resourceId)}.ts?sig=${sig}`;
-}
-
-function verifySignedUrl(resourceId: string, sig: string): boolean {
-  const expectedSig = require("crypto")
-    .createHmac("sha256", SECRET_KEY)
-    .update(resourceId)
-    .digest("hex");
-  return sig === expectedSig;
+// Mints an opaque token mapping to resourceId ("cmd<_>seq") + identity — the
+// client only ever sees /player/{token}.ts, never the real cmd.
+function generateSignedUrl(resourceId: string, userLabel: string, meta?: StreamMeta): string {
+  const token = mintStreamToken(resourceId, userLabel, undefined, meta);
+  return `/player/${token}.ts`;
 }
 
 interface CacheRecord {
@@ -255,7 +247,7 @@ async function populateCache(cmd: string): Promise<void> {
   await promise;
 }
 
-async function handleProxy(cmd: string, play: string | undefined, h: any) {
+async function handleProxy(cmd: string, play: string | undefined, h: any, userLabel: string, meta?: StreamMeta) {
   try {
     // Optionally auto-detect HEVC and transcode for clients that can't decode it
     if (LIVE_TRANSCODE_ENABLED) {
@@ -263,7 +255,8 @@ async function handleProxy(cmd: string, play: string | undefined, h: any) {
       if (["hevc", "h265"].includes(codec.toLowerCase())) {
         const sessionId = await ensureTranscodeSession(cmd);
         if (!sessionId) return h.response("Transcoder failed to start").code(503);
-        const playlist = `#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=4000000\n/live-hls/${sessionId}/playlist.m3u8`;
+        const token = mintStreamToken(sessionId, userLabel, undefined, meta);
+        const playlist = `#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=4000000\n/live-hls/${sessionId}/playlist.m3u8?t=${token}`;
         return h.response(playlist).type("application/vnd.apple.mpegurl");
       }
     }
@@ -359,7 +352,7 @@ async function handleProxy(cmd: string, play: string | undefined, h: any) {
         record.segments.set(currentSeq, line);
         currentSeq++;
 
-        return generateSignedUrl(resourceId);
+        return generateSignedUrl(resourceId, userLabel, meta);
       });
 
       cache.set(cmd, record as CacheRecord);
@@ -386,14 +379,15 @@ async function handleProxy(cmd: string, play: string | undefined, h: any) {
         if (line.match(".m3u8")) {
           record.subpath = line;
           cache.set(cmd, record as CacheRecord);
-          return `/live.m3u8?cmd=${encodeURIComponent(cmd)}&play=1&proxy=1`;
+          const token = mintStreamToken(cmd, userLabel, undefined, meta);
+          return `/live.m3u8?t=${token}&play=1&proxy=1`;
         }
 
         const resourceId = `${cmd}<_>${currentSeq}`;
         record.segments.set(currentSeq, line);
         currentSeq++;
 
-        return generateSignedUrl(resourceId);
+        return generateSignedUrl(resourceId, userLabel, meta);
       });
 
       cache.set(cmd, record as CacheRecord);
@@ -438,15 +432,22 @@ export const liveRoutes: ServerRoute[] = [
     method: "GET",
     path: "/live-hls/{sessionId}/playlist.m3u8",
     handler: (request, h) => {
+      const entry = streamTokenFromRequest(request);
+      if (!entry) return h.response("Unauthorized").code(401);
       const { sessionId } = request.params as { sessionId: string };
       const session = transcodeSessions.get(sessionId);
       if (!session) return h.response("Session not found").code(404);
       session.lastAccess = Date.now();
+      streamTracker.touch("live", request.info.remoteAddress, sessionId, entry.userLabel);
       const playlistPath = path.join(process.cwd(), "temp", "live-transcode", sessionId, "playlist.m3u8");
       if (!fs.existsSync(playlistPath)) return h.response("Playlist not ready").code(503);
-      // Rewrite bare segment filenames to full server paths
+      // Rewrite bare segment filenames to full server paths, minting a fresh
+      // token per segment under the same verified identity
       let content = fs.readFileSync(playlistPath, "utf-8");
-      content = content.replace(/^(\d+\.ts)$/gm, `/live-hls/${sessionId}/$1`);
+      content = content.replace(/^(\d+\.ts)$/gm, (_m, file) => {
+        const segToken = mintStreamToken(sessionId, entry.userLabel);
+        return `/live-hls/${sessionId}/${file}?t=${segToken}`;
+      });
       return h.response(content)
         .type("application/vnd.apple.mpegurl")
         .header("Cache-Control", "no-cache")
@@ -458,10 +459,13 @@ export const liveRoutes: ServerRoute[] = [
     method: "GET",
     path: "/live-hls/{sessionId}/{segment}.ts",
     handler: (request, h) => {
+      const entry = streamTokenFromRequest(request);
+      if (!entry) return h.response("Unauthorized").code(401);
       const { sessionId, segment } = request.params as { sessionId: string; segment: string };
       const session = transcodeSessions.get(sessionId);
       if (!session) return h.response("Session not found").code(404);
       session.lastAccess = Date.now();
+      streamTracker.touch("live", request.info.remoteAddress, sessionId, entry.userLabel);
       const segPath = path.join(process.cwd(), "temp", "live-transcode", sessionId, `${segment}.ts`);
       if (!fs.existsSync(segPath)) return h.response("Segment not found").code(404);
       return h.file(segPath)
@@ -474,15 +478,19 @@ export const liveRoutes: ServerRoute[] = [
     method: "GET",
     path: "/live.m3u8",
     handler: async (request, h) => {
-      const { cmd, play, id, start_time, end_time, proxy: proxyParam } = request.query as {
-        cmd?: string;
+      const { play, id, start_time, end_time, proxy: proxyParam } = request.query as {
         play?: string;
         id?: string;
         start_time?: string;
         end_time?: string;
         proxy?: string;
       };
-      if (!cmd) return h.response({ error: "Missing cmd parameter" }).code(400);
+      const entry = streamTokenFromRequest(request);
+      if (!entry) return h.response({ error: "Unauthorized" }).code(401);
+      const cmd = entry.resource;
+      const userLabel = entry.userLabel;
+      const meta: StreamMeta = { kind: entry.kind, label: entry.label, category: entry.category };
+      streamTracker.touch("live", request.info.remoteAddress, cmd, userLabel, meta);
       if (id && initialConfig.providerType !== "xtream") {
         stalkerApi.setActiveChannel(id);
       }
@@ -500,7 +508,7 @@ export const liveRoutes: ServerRoute[] = [
         if (useProxy) {
           const { liveStreamService } = await import("@/services/LiveStreamService");
           const { subpath } = request.query as { subpath?: string };
-          const result = await liveStreamService.getPlaylist(cmd, play, subpath);
+          const result = await liveStreamService.getPlaylist(cmd, play, subpath, userLabel);
           if (typeof result === "string") {
             return h.response(result).type("application/vnd.apple.mpegurl");
           } else {
@@ -538,7 +546,7 @@ export const liveRoutes: ServerRoute[] = [
       }
 
       const useProxy = forceProxy || (initialConfig.proxy && proxyParam !== "0");
-      if (useProxy) return handleProxy(cmd, play, h);
+      if (useProxy) return handleProxy(cmd, play, h, userLabel, meta);
       return handleNonProxy(cmd, h);
     },
   },
@@ -547,21 +555,31 @@ export const liveRoutes: ServerRoute[] = [
     path: "/player/{resourceId}",
     handler: async (request, h) => {
       try {
-        let { resourceId } = request.params as { resourceId: string };
-        const { sig } = request.query as { sig?: string; exp?: string };
-
-        if (!resourceId || !sig) {
-          return h.response("Missing signature parameters").code(400);
+        let { resourceId: token } = request.params as { resourceId: string };
+        if (!token) {
+          return h.response("Missing token").code(400);
+        }
+        if (token.endsWith(".ts")) {
+          token = token.slice(0, -3);
         }
 
-        if (resourceId.endsWith(".ts")) {
-          resourceId = resourceId.slice(0, -3);
+        const entry = resolveStreamToken(token);
+        if (!entry) {
+          return h.response("Invalid or expired token").code(403);
         }
+        const resourceId = entry.resource; // "cmd<_>seq"
+        const segmentUser = entry.userLabel;
+        const segmentMeta: StreamMeta = { kind: entry.kind, label: entry.label, category: entry.category };
 
         if (initialConfig.providerType === "xtream") {
+          // resourceId is `${cmd}<_>${seq}` (see LiveStreamService.populateCache) —
+          // strip the sequence suffix so repeated segment fetches for the same
+          // channel bucket into the same session as the cmd-keyed playlist touch.
+          const streamKey = resourceId.split("<_>")[0];
+          streamTracker.touch("live", request.info.remoteAddress, streamKey, segmentUser, segmentMeta);
           const { liveStreamService } = await import("@/services/LiveStreamService");
           try {
-            const streamResponse = await liveStreamService.getSegment(resourceId, sig, request.headers);
+            const streamResponse = await liveStreamService.getSegmentByResourceId(resourceId, request.headers, segmentUser);
             const response = h
               .response(streamResponse.data)
               .code(streamResponse.status)
@@ -581,10 +599,6 @@ export const liveRoutes: ServerRoute[] = [
           }
         }
 
-        if (!verifySignedUrl(resourceId, sig)) {
-          return h.response("Invalid or expired signature").code(403);
-        }
-
         const parts = resourceId.split("<_>");
         if (parts.length !== 2) {
           return h.response("Invalid resource ID format").code(400);
@@ -596,6 +610,8 @@ export const liveRoutes: ServerRoute[] = [
         if (isNaN(seqId)) {
           return h.response("Invalid sequence ID").code(400);
         }
+
+        streamTracker.touch("live", request.info.remoteAddress, cmd, segmentUser, segmentMeta);
 
         let record: CacheRecord | undefined = cache.get(cmd);
 

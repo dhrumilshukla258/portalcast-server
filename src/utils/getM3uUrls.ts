@@ -13,6 +13,7 @@ import { xtreamCache } from "@/routes/xtream";
 import { ContentOverride } from "@/models/ContentOverride";
 import { proxiedLogoPath } from "@/utils/portalAssets";
 import { logger } from "@/utils/logger";
+import { mintStreamToken } from "@/services/StreamTokens";
 
 // Cache
 let liveCache: string = "#EXTM3U";
@@ -49,7 +50,11 @@ async function saveToCache(key: string, value: string): Promise<void> {
 }
 
 // serverUrl is a full origin, e.g. "https://stream.example.com" or "http://192.168.1.2:3010"
-function channelToM3u(channel: Channel, group: string, serverUrl: string): M3ULine {
+// userLabel is the caller's already-validated identity (e.g. "xtream:name")
+// — this legacy plain-M3U export is consumed directly by external players, so
+// every embedded link gets its own opaque token minted under that identity
+// rather than exposing the real upstream URL.
+function channelToM3u(channel: Channel, group: string, serverUrl: string, userLabel?: string): M3ULine {
   const logoUrl = channel.logo
     ? channel.logo.startsWith("http")
       ? channel.logo
@@ -57,6 +62,21 @@ function channelToM3u(channel: Channel, group: string, serverUrl: string): M3ULi
     : "";
 
   const cleanName = channel.name.replaceAll(",", "").replaceAll(" - ", "-");
+  const isPortalCmd = channel.cmd.includes(initialConfig.hostname);
+  const rawTarget = isPortalCmd
+    ? (channel.cmd.includes(" ") ? (channel.cmd.split(" ").at(1) ?? "") : channel.cmd)
+    : channel.cmd;
+
+  let command: string;
+  if (!userLabel) {
+    // No resolved identity — omit the token entirely; the target route will 401.
+    command = isPortalCmd ? `${serverUrl}/portal/proxy` : `${serverUrl}/live.m3u8?id=${channel.id}`;
+  } else {
+    const token = mintStreamToken(rawTarget, userLabel);
+    command = isPortalCmd
+      ? `${serverUrl}/portal/proxy?t=${token}`
+      : `${serverUrl}/live.m3u8?t=${token}&id=${channel.id}`;
+  }
 
   return {
     title: `TV - ${group}`,
@@ -64,11 +84,7 @@ function channelToM3u(channel: Channel, group: string, serverUrl: string): M3ULi
     header: `#EXTINF:-1 tvg-id="${channel.id}" tvg-name="${cleanName}"${
       logoUrl ? ` tvg-logo="${logoUrl}"` : ""
     } group-title="TV - ${group}",${cleanName}`,
-    command: channel.cmd.includes(initialConfig.hostname)
-      ? `${serverUrl}/portal/proxy?url=${encodeURIComponent(
-          btoa(channel.cmd.includes(" ") ? (channel.cmd.split(" ").at(1) ?? "") : channel.cmd),
-        )}`
-      : `${serverUrl}/live.m3u8?cmd=${encodeURIComponent(channel.cmd)}&id=${channel.id}`,
+    command,
   };
 }
 
@@ -90,7 +106,7 @@ export async function getPlaylistV2() {
   return m3u;
 }
 
-export async function getM3uV2(serverUrl: string) {
+export async function getM3uV2(serverUrl: string, userLabel?: string) {
   const activeProfile = await ConfigProfile.findOne({ where: { isActive: true } });
   const profileId = activeProfile?.id;
   const genres = await readGenres("channel", profileId);
@@ -113,13 +129,19 @@ export async function getM3uV2(serverUrl: string) {
     })
     .map((channel) => {
       const genre = genreMap.get(channel.tv_genre_id)!;
-      return channelToM3u(channel, genre.title, serverUrl);
+      return channelToM3u(channel, genre.title, serverUrl, userLabel);
     })
     .sort(
       (a, b) => a.title.localeCompare(b.title) || a.name.localeCompare(b.name),
     );
 
   const result = new M3U(m3u).print(initialConfig);
+
+  // Per-viewer tokens are baked into every link above — this playlist must
+  // not be cached/reused across different callers, unlike the
+  // identity-free case (empty genres/programs, handled above).
+  if (userLabel) return result;
+
   liveCache = result;
   await saveToCache("playlist_cache", result);
   return result;
@@ -182,7 +204,15 @@ export async function getEPGV2() {
   return xmltv;
 }
 
-async function buildVodM3u(serverUrl: string): Promise<string> {
+// NOTE: the VOD playlist is cached for VOD_CACHE_TTL (6h) and shared across
+// all callers for performance (rebuilding it walks the whole catalog). The
+// identity baked into each token is whoever happened to trigger the most
+// recent rebuild — every embedded link stays valid (tokens don't expire for
+// 6h either) but "who is this" attribution in the live-streams view can be
+// stale/wrong for other viewers until the next refresh. A fully
+// per-viewer-accurate version would mean never caching this, which is too
+// expensive given how much this walks.
+async function buildVodM3u(serverUrl: string, userLabel?: string): Promise<string> {
   const groups = await readGenres("movie");
   const visibleGroups = await applyGenreOverrides(groups, "movie");
 
@@ -199,11 +229,14 @@ async function buildVodM3u(serverUrl: string): Promise<string> {
       : "";
     const cleanName = item.name.replaceAll(",", "").replaceAll(" - ", "-");
     const label = isSeries ? `Series - ${groupTitle}` : `VOD - ${groupTitle}`;
+    const command = userLabel
+      ? `${serverUrl}/api/vod/play?t=${mintStreamToken(String(item.id), userLabel)}&category=${encodeURIComponent(groupId)}`
+      : `${serverUrl}/api/vod/play`; // no resolved identity — omit token; will 401
     return {
       title: label,
       name: cleanName,
       header: `#EXTINF:-1 tvg-id="${item.id}" tvg-name="${cleanName}"${logoUrl ? ` tvg-logo="${logoUrl}"` : ""} group-title="${label}",${cleanName}`,
-      command: `${serverUrl}/api/vod/play?id=${encodeURIComponent(item.id)}&category=${encodeURIComponent(groupId)}`,
+      command,
     };
   };
 
@@ -274,7 +307,7 @@ export function invalidateVodCache(): void {
   vodCacheTime = 0;
 }
 
-export async function refreshVodCache(serverUrl: string) {
+export async function refreshVodCache(serverUrl: string, userLabel?: string) {
   if (vodRefreshInProgress) {
     logger.info("VOD cache refresh already in progress, skipping...");
     return;
@@ -287,7 +320,7 @@ export async function refreshVodCache(serverUrl: string) {
   // Run in background, don't await
   (async () => {
     try {
-      vodCache = await buildVodM3u(serverUrl);
+      vodCache = await buildVodM3u(serverUrl, userLabel);
       vodCacheTime = Date.now();
       await saveToCache("vod_cache", vodCache);
       vodRefreshStatus = "complete";
@@ -308,14 +341,14 @@ export function getVodRefreshStatus() {
   };
 }
 
-export async function getVodM3uV2(serverUrl: string) {
+export async function getVodM3uV2(serverUrl: string, userLabel?: string) {
   if (vodCache === "#EXTM3U") {
-    refreshVodCache(serverUrl);
+    refreshVodCache(serverUrl, userLabel);
     return vodCache;
   }
 
   if (Date.now() - vodCacheTime > VOD_CACHE_TTL) {
-    refreshVodCache(serverUrl);
+    refreshVodCache(serverUrl, userLabel);
   }
 
   return vodCache;

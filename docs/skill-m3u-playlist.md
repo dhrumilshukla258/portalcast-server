@@ -2,7 +2,7 @@
 
 Covers how live M3U, VOD M3U, and EPG XML are built, cached, and served. Key file: `src/utils/getM3uUrls.ts`. Commits: `eddd29e`, `0d5cfbe`.
 
-Related: [[skill-xtream-provider]], [[skill-stalker-provider]], [[skill-content-manager]]
+Related: [[skill-xtream-provider]], [[skill-stalker-provider]], [[skill-content-manager]], [[skill-stream-tokens]]
 
 ---
 
@@ -21,10 +21,14 @@ Served at `GET /m3u` or as needed by connected players.
 
 ### Stream URL format per channel type
 
+Both forms below now carry an opaque `?t={token}` instead of the old `cmd=`/`url=` query params — see [[skill-stream-tokens]]. `channelToM3u()` mints a fresh token per channel per playlist request, scoped to the requesting player's identity (`xtream:{username}`, resolved via `resolveXtreamUser` before the playlist is built — this route is external-player-facing, not JWT-gated).
+
 | Condition | URL format |
 |-----------|-----------|
-| `cmd` contains portal hostname | Proxy via `/portal/proxy?url={base64(cmd)}` |
-| Otherwise | `/live.m3u8?cmd={encodedCmd}&id={id}` (live proxy) |
+| `cmd` contains portal hostname | `/portal/proxy?t={token}` |
+| Otherwise | `/live.m3u8?t={token}&id={id}` (live proxy) |
+
+**No identity → no token**: if `channelToM3u()` is ever called without a resolved `userLabel`, the command is omitted entirely rather than emitting an unauthenticated link — the resulting URL 401s if hit, same fail-closed rule as everywhere else in the token system.
 
 ### Logo URL normalization
 - Absolute URLs (`http://...`) used as-is
@@ -32,6 +36,8 @@ Served at `GET /m3u` or as needed by connected players.
 
 ### In-memory cache
 `liveCache` string — rebuilt on every call to `getM3uV2()` and persisted to DB. Restored from `SystemConfig.playlist_cache` on startup via `loadPlaylistCache()`.
+
+**Caching is skipped entirely when a `userLabel` is resolved** (i.e. on every real request, since the route requires one) — each viewer's links are individually tokenized, so caching one viewer's signed playlist and serving it to another would hand them someone else's tokens. The `liveCache`/`SystemConfig` persistence path only fires for the (effectively unused) unauthenticated case. In practice this route rebuilds the playlist on every request now, not once per change.
 
 ---
 
@@ -65,7 +71,7 @@ For each visible genre (after override filtering):
 - Paginated: fetches all pages from provider until an empty page (page size < 14 = last page)
 - Splits by `SERIES_FLAG`: movies vs series items
 - Applies `applyPortalItemOverrides` (handles hide, rename, move-in, move-out)
-- Each item → `#EXTINF` line with URL `GET /api/vod/play?id=...&category=...`
+- Each item → `#EXTINF` line with URL `GET /api/vod/play?t={token}&category=...` — token resource is the provider's own item **id** (not a URL); `/api/vod/play` resolves the real stream URL fresh via `getMovieLink` when the token is redeemed. Same per-viewer-token caveat as the live M3U — the VOD cache below is shared/6h despite this, since rebuilding it walks the whole catalog (see [[skill-stream-tokens]] for the tradeoff this accepts: stale attribution across viewers, not stale/broken links).
 
 ---
 
@@ -98,7 +104,7 @@ Channel names have `,` and ` - ` stripped to avoid M3U parsing issues.
 
 ## Proxy URL Signing
 
-Live segment URLs (`/player/{resourceId}.ts`) are HMAC-signed when `PROXY_SECRET` is set in production. The signature covers the resource ID and prevents unauthorized segment fetches. Non-production environments skip signing.
+Live segment URLs (`/player/{token}.ts`) carry an opaque, server-side, randomly-minted token instead of the resource ID — the token *is* the credential now, replacing the old `PROXY_SECRET`-based HMAC signing entirely. See [[skill-stream-tokens]] for the full token/gating system.
 
 ---
 
@@ -107,4 +113,5 @@ Live segment URLs (`/player/{resourceId}.ts`) are HMAC-signed when `PROXY_SECRET
 - `src/utils/getM3uUrls.ts` — `getM3uV2`, `getVodM3uV2`, `getEPGV2`, `buildVodM3u`
 - `src/types/types.ts` — `M3U`, `M3ULine` classes
 - `src/utils/overrides.ts` — `applyGenreOverrides`, `applyChannelOverrides`, `applyPortalItemOverrides`
-- `src/routes/proxy.ts` — `handleProxyStream`, URL signing
+- `src/routes/proxy.ts` — `handleProxyStream`
+- `src/services/StreamTokens.ts` — token minting used throughout this file, see [[skill-stream-tokens]]

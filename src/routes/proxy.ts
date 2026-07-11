@@ -4,6 +4,21 @@ import http from "http";
 import https, { RequestOptions } from "https";
 import { initialConfig } from "@/config/server";
 import { logger } from "@/utils/logger";
+import { streamTracker } from "@/services/StreamTracker";
+import { mintStreamToken, streamTokenFromRequest } from "@/services/StreamTokens";
+import type { StreamMeta } from "@/services/StreamTracker";
+
+// HLS segment files sit alongside each other in the same directory (e.g.
+// .../seg-00001.ts, seg-00002.ts) — dropping the filename gives a stable
+// per-stream resource key instead of a new one on every segment request.
+function resourceKeyFor(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.origin + u.pathname.replace(/\/[^/]*$/, "");
+  } catch {
+    return url;
+  }
+}
 
 function assertHttpUrl(raw: string) {
   const u = new URL(raw);
@@ -13,20 +28,22 @@ function assertHttpUrl(raw: string) {
   return u;
 }
 
-export function getProxiedUrl(url: string, referer?: string): string {
-  const b64url = Buffer.from(url).toString("base64");
-  if (referer) {
-    const b64ref = Buffer.from(referer).toString("base64");
-    return `/api/proxy/stream?url=${b64url}&ref=${b64ref}`;
-  }
-  return `/api/proxy/stream?url=${b64url}`;
+// Mints an opaque token for a real upstream URL — the client only ever sees
+// `/api/proxy/stream?t=<random>`, never the real address (even base64 is
+// trivially reversible by anyone who copies the link, which is exactly what
+// this replaces).
+export function getProxiedUrl(url: string, userLabel: string, referer?: string, meta?: StreamMeta): string {
+  const token = mintStreamToken(url, userLabel, referer, meta);
+  return `/api/proxy/stream?t=${token}`;
 }
 
 export async function handleProxyStream(
   request: any,
   h: any,
   decodedUrl: string,
-  referer?: string,
+  referer: string | undefined,
+  userLabel: string,
+  meta?: StreamMeta,
 ) {
   const requestHeaders: Record<string, string | undefined> = {
     Referer: referer,
@@ -36,6 +53,8 @@ export async function handleProxyStream(
   if (request.headers.range) {
     requestHeaders["Range"] = request.headers.range;
   }
+
+  streamTracker.touch("proxy", request.info.remoteAddress, resourceKeyFor(decodedUrl), userLabel, meta);
 
   const response = await httpClient.get(decodedUrl, {
     responseType: "stream",
@@ -84,20 +103,15 @@ export const proxy: ServerRoute[] = [
     method: "GET",
     path: "/api/proxy/stream",
     handler: async (request, h) => {
-      const { url, ref } = request.query as Record<string, string | undefined>;
-      if (!url) {
-        return h.response({ error: "No URL provided" }).code(400);
+      const entry = streamTokenFromRequest(request);
+      if (!entry) {
+        return h.response({ error: "Unauthorized" }).code(401);
       }
 
       try {
-        const decodedUrl = Buffer.from(url, "base64").toString("utf-8");
-        assertHttpUrl(decodedUrl);
-        const referer = ref
-          ? Buffer.from(ref, "base64").toString("utf-8")
-          : undefined;
-
-        logger.info(`[/proxy/stream] ${request.info.remoteAddress} → ${decodedUrl}`);
-        return await handleProxyStream(request, h, decodedUrl, referer);
+        assertHttpUrl(entry.resource);
+        logger.info(`[/proxy/stream] ${request.info.remoteAddress} → ${entry.resource}`);
+        return await handleProxyStream(request, h, entry.resource, entry.referer, entry.userLabel, entry);
       } catch (error: any) {
         logger.error("[/proxy/stream] error: " + (error?.message ?? error));
         if (error.response) {
@@ -114,23 +128,22 @@ export const proxy: ServerRoute[] = [
     method: "GET",
     path: "/api/proxy",
     handler: async (request, h) => {
-      try {
-        const { url, ref } = request.query as Record<
-          string,
-          string | undefined
-        >;
-        if (!url) return h.response({ error: "No URL provided" }).code(400);
+      const entry = streamTokenFromRequest(request);
+      if (!entry) {
+        return h.response({ error: "Unauthorized" }).code(401);
+      }
 
-        let decodedUrl = Buffer.from(url, "base64").toString("utf-8");
-        const referer = ref
-          ? Buffer.from(ref, "base64").toString("utf-8")
-          : undefined;
+      try {
+        const decodedUrl = entry.resource;
+        const referer = entry.referer;
+        const userLabel = entry.userLabel;
 
         // Stalker portal cmds (e.g. "ffrt http://...") — hand off to the live route which handles them properly
         let isHttpUrl = true;
         try { assertHttpUrl(decodedUrl); } catch { isHttpUrl = false; }
         if (!isHttpUrl) {
-          return h.redirect(`/live.m3u8?cmd=${encodeURIComponent(decodedUrl)}`);
+          const cmdToken = mintStreamToken(decodedUrl, userLabel);
+          return h.redirect(`/live.m3u8?t=${cmdToken}`);
         }
 
         const playlistUrl = assertHttpUrl(decodedUrl).href;
@@ -157,7 +170,7 @@ export const proxy: ServerRoute[] = [
         ].some((ext) => pathLower.endsWith(ext));
 
         if (isBinaryExt) {
-          return await handleProxyStream(request, h, playlistUrl, referer);
+          return await handleProxyStream(request, h, playlistUrl, referer, userLabel, entry);
         }
 
         const headers: Record<string, string> = {};
@@ -175,7 +188,7 @@ export const proxy: ServerRoute[] = [
             contentType.includes("application/octet-stream")
           ) {
             logger.info(`[SmartProxy] Detected binary content (${contentType}), streaming directly.`);
-            return await handleProxyStream(request, h, playlistUrl, referer);
+            return await handleProxyStream(request, h, playlistUrl, referer, userLabel, entry);
           }
         } catch (headErr) {
           logger.warn({ err: headErr }, "[SmartProxy] HEAD request failed, falling back to GET");
@@ -210,21 +223,25 @@ export const proxy: ServerRoute[] = [
             if (!urlToRewrite) return match;
 
             const absolute = new URL(urlToRewrite, finalUrl).href;
-            const b64url = Buffer.from(absolute).toString("base64");
-            const b64ref = referer
-              ? Buffer.from(referer).toString("base64")
-              : undefined;
 
             let proxiedUrl: string;
+
+            // Only carry kind/label/category forward — NOT the full resolved
+            // `entry`, which still has the *parent* playlist's `resource`.
+            // Spreading that wholesale into mintStreamToken's meta would
+            // silently overwrite the new segment/sub-playlist URL with the
+            // old one (object spread order), making every segment re-fetch
+            // the parent playlist instead of real video data.
+            const subMeta: StreamMeta = { kind: entry.kind, label: entry.label, category: entry.category };
 
             if (
               urlToRewrite.endsWith(".m3u8") ||
               urlToRewrite.includes(".m3u8?")
             ) {
-              proxiedUrl =
-                `/api/proxy?url=${b64url}` + (b64ref ? `&ref=${b64ref}` : "");
+              const subToken = mintStreamToken(absolute, userLabel, referer, subMeta);
+              proxiedUrl = `/api/proxy?t=${subToken}`;
             } else {
-              proxiedUrl = getProxiedUrl(absolute, referer);
+              proxiedUrl = getProxiedUrl(absolute, userLabel, referer, subMeta);
             }
 
             if (uriValue) {

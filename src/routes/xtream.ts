@@ -25,6 +25,8 @@ import { cmdPlayerV2 } from "@/utils/cmdPlayer";
 import { User } from "@/models/User";
 import { verifyPassword } from "@/utils/password";
 import { createJWT, verifyJWT } from "@/utils/jwt";
+import { streamTracker } from "@/services/StreamTracker";
+import { proxyUrlFor } from "@/services/StreamTokens";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -260,6 +262,18 @@ function mapVodItem(m: any, num: number, categoryId: string | number): any {
     container_extension: "m3u8",
     custom_sid:          "",
     direct_source:       "",
+    // Portal-native fields the Xtream protocol doesn't use, but the web UI does — this
+    // cache entry is shared by both consumers, so keep them alongside the Xtream shape.
+    screenshot_uri:      m.screenshot_uri || "",
+    description:         m.description || "",
+    actors:              m.actors || "",
+    director:            m.director || "",
+    genres_str:          m.genres_str || "",
+    rating_imdb:         m.rating_imdb,
+    rating_mpaa:         m.rating_mpaa || "",
+    age:                 m.age || "",
+    country:             m.country || "",
+    duration:            m.duration,
   };
 }
 
@@ -280,7 +294,150 @@ function mapSeriesItem(s: any, num: number, categoryId: string | number): any {
     youtube_trailer:  "",
     episode_run_time: "",
     backdrop_path:    [],
+    // Portal-native fields the Xtream protocol doesn't use, but the web UI does — this
+    // cache entry is shared by both consumers, so keep them alongside the Xtream shape.
+    screenshot_uri:   s.screenshot_uri || "",
+    description:      s.description || "",
+    actors:           s.actors || "",
+    genres_str:       s.genres_str || "",
+    rating_imdb:      s.rating_imdb,
+    rating_mpaa:      s.rating_mpaa || "",
+    age:              s.age || "",
+    country:          s.country || "",
   };
+}
+
+// Concurrent calls for the same category (e.g. a double-fired category click,
+// or the web UI and a warm cycle overlapping) previously each independently
+// read the same stale cache snapshot, fetched, merged, and wrote back — a
+// classic read-modify-write race where whichever write lands last silently
+// wins, discarding or duplicating whatever the other one computed. Dedupe by
+// categoryId so only one refresh per category is ever in flight at a time.
+const vodRefreshInFlight = new Map<string, Promise<any[]>>();
+const seriesRefreshInFlight = new Map<string, Promise<any[]>>();
+
+// Shared by both the Xtream player API (get_vod_streams) and the web UI (/api/v2/movies)
+// so both surfaces see identical staleness/refresh behavior instead of diverging.
+export async function getOrRefreshVodStreams(categoryId: string): Promise<any[]> {
+  const pending = vodRefreshInFlight.get(categoryId);
+  if (pending) return pending;
+  const promise = getOrRefreshVodStreamsInner(categoryId).finally(() => {
+    vodRefreshInFlight.delete(categoryId);
+  });
+  vodRefreshInFlight.set(categoryId, promise);
+  return promise;
+}
+
+async function getOrRefreshVodStreamsInner(categoryId: string): Promise<any[]> {
+  const provider = serverManager.getProvider();
+  const cacheKey = `vod_streams_${categoryId}`;
+  const { value: cached, isStale } = await xtreamCache.getWithStaleness<any[]>(cacheKey);
+
+  if (cached && !isStale) return cached;
+
+  if (cached) {
+    // Stale — fetch only new items; stop on first known item
+    const existingMovieIds = new Set(cached.map((m: any) => String(m.stream_id)));
+    const existingSeries = await xtreamCache.get<any[]>(`series_list_${categoryId}`);
+    const existingSeriesIds = new Set((existingSeries || []).map((s: any) => String(s.series_id)));
+    const newRaw = await fetchUntilKnown(
+      async (page) => {
+        const res = await provider.getMovies({ category: categoryId, page });
+        return res?.js?.data || [];
+      },
+      (item) => existingMovieIds.has(String(item.id)) || existingSeriesIds.has(String(item.id)),
+    );
+    const newItems = newRaw.filter((i: any) => i[seriesFlag] != 1);
+    if (newItems.length === 0) {
+      await xtreamCache.set(cacheKey, cached);
+      return cached;
+    }
+    const result = [
+      ...newItems.map((m, idx) => mapVodItem(m, idx + 1, categoryId)),
+      ...cached.map((m: any, idx: number) => ({ ...m, num: newItems.length + idx + 1 })),
+    ];
+    await xtreamCache.set(cacheKey, result);
+    return result;
+  }
+
+  // Cache miss — full fetch
+  const allRawVod = await fetchAllPages(async (page) => {
+    const res = await provider.getMovies({ category: categoryId, page });
+    return res?.js?.data || [];
+  });
+  if (allRawVod.length === 0) return [];
+  const vodItems = allRawVod.filter((i: any) => i[seriesFlag] != 1);
+  const result = vodItems.map((m, idx) => mapVodItem(m, idx + 1, categoryId));
+  await xtreamCache.set(cacheKey, result);
+  return result;
+}
+
+export async function getOrRefreshSeriesList(categoryId: string): Promise<any[]> {
+  const pending = seriesRefreshInFlight.get(categoryId);
+  if (pending) return pending;
+  const promise = getOrRefreshSeriesListInner(categoryId).finally(() => {
+    seriesRefreshInFlight.delete(categoryId);
+  });
+  seriesRefreshInFlight.set(categoryId, promise);
+  return promise;
+}
+
+async function getOrRefreshSeriesListInner(categoryId: string): Promise<any[]> {
+  const provider = serverManager.getProvider();
+  const cacheKey = `series_list_${categoryId}`;
+  const { value: cached, isStale } = await xtreamCache.getWithStaleness<any[]>(cacheKey);
+  const sourceRow = await XtreamCache.findOne({ where: { key: "portal_series_source" } });
+  const isNativeSeries = sourceRow ? JSON.parse(sourceRow.value) === "native" : false;
+
+  if (cached && !isStale) return cached;
+
+  if (cached) {
+    // Stale — fetch only new items
+    const existingSeriesIds = new Set(cached.map((s: any) => String(s.series_id)));
+    const existingMovies = isNativeSeries ? null : await xtreamCache.get<any[]>(`vod_streams_${categoryId}`);
+    const existingMovieIds = new Set((existingMovies || []).map((m: any) => String(m.stream_id)));
+    const newRaw = await fetchUntilKnown(
+      async (page) => {
+        const res = isNativeSeries
+          ? await provider.getSeries({ category: categoryId, page })
+          : await provider.getMovies({ category: categoryId, page });
+        return res?.js?.data || [];
+      },
+      (item) => existingSeriesIds.has(String(item.id)) || existingMovieIds.has(String(item.id)),
+    );
+    const newItems = isNativeSeries ? newRaw : newRaw.filter((i: any) => i[seriesFlag] == 1);
+    if (newItems.length === 0) {
+      await xtreamCache.set(cacheKey, cached);
+      return cached;
+    }
+    const result = [
+      ...newItems.map((s, idx) => mapSeriesItem(s, idx + 1, categoryId)),
+      ...cached.map((s: any, idx: number) => ({ ...s, num: newItems.length + idx + 1 })),
+    ];
+    await xtreamCache.set(cacheKey, result);
+    return result;
+  }
+
+  // Cache miss — full fetch
+  let allRaw: any[];
+  let seriesItems: any[];
+  if (isNativeSeries) {
+    allRaw = await fetchAllPages(async (page) => {
+      const res = await provider.getSeries({ category: categoryId, page });
+      return res?.js?.data || [];
+    });
+    seriesItems = allRaw;
+  } else {
+    allRaw = await fetchAllPages(async (page) => {
+      const res = await provider.getMovies({ category: categoryId, page });
+      return res?.js?.data || [];
+    });
+    seriesItems = allRaw.filter((i: any) => i[seriesFlag] == 1);
+  }
+  if (allRaw.length === 0) return [];
+  const result = seriesItems.map((s, idx) => mapSeriesItem(s, idx + 1, categoryId));
+  await xtreamCache.set(cacheKey, result);
+  return result;
 }
 
 export async function warmSeriesCache(): Promise<boolean> {
@@ -899,8 +1056,7 @@ async function handleStalkerVodStream(request: any, h: any) {
     let url: string = link?.js?.cmd || (item.cmd || item.url) || "";
     if (url.startsWith("ffrt ")) url = url.slice(5);
     logger.info(`[VOD stream] ${streamId} portal_id=${item.id} → ${url}`);
-    const b64 = Buffer.from(url).toString("base64");
-    return h.redirect(`/api/proxy?url=${b64}`).code(302);
+    return h.redirect(proxyUrlFor(url, `xtream:${request.params.username}`, { kind: "movie", label: item.name })).code(302);
   } catch (err: any) {
     logger.error(`[VOD stream] ${err.message}`);
     return h.response({ error: err.message }).code(500);
@@ -913,6 +1069,7 @@ async function handleStalkerSeriesStream(request: any, h: any) {
   try {
     const provider = serverManager.getProvider();
     let url: string | undefined;
+    let label: string | undefined;
     const epInfo = await xtreamCache.get<{ movieId: number; seasonId: number; seriesNum: number }>(`ep_info_${id}`);
     if (epInfo) {
       const epData = await provider.getMovies({
@@ -925,6 +1082,7 @@ async function handleStalkerSeriesStream(request: any, h: any) {
       const epItem = (epData?.js?.data || []).find((e: any) => String(e.id) === id)
         || epData?.js?.data?.[0];
       if (epItem) {
+        label = epItem.name;
         const seriesNum = epItem.series_number ?? epInfo.seriesNum;
         const link = await provider.getMovieLink({
           series:   String(seriesNum),
@@ -956,8 +1114,7 @@ async function handleStalkerSeriesStream(request: any, h: any) {
     }
     if (!url) return h.response({ error: "Episode not found" }).code(404);
     logger.info(`[Series stream] ep ${id} → ${url}`);
-    const b64 = Buffer.from(url).toString("base64");
-    return h.redirect(`/api/proxy?url=${b64}`).code(302);
+    return h.redirect(proxyUrlFor(url, `xtream:${request.params.username}`, { kind: "series", label })).code(302);
   } catch (err: any) {
     logger.error(`[Series stream] ${err.message}`);
     return h.response({ error: err.message }).code(500);
@@ -1162,45 +1319,7 @@ export const xtreamRoutes: ServerRoute[] = [
           } else if (category_id.startsWith("vcat_")) {
             rawResult = [];
           } else {
-            const cacheKey = `vod_streams_${category_id}`;
-            const { value: cached, isStale } = await xtreamCache.getWithStaleness<any[]>(cacheKey);
-
-            if (cached && !isStale) {
-              rawResult = cached;
-            } else if (cached) {
-              // Stale — fetch only new items; stop on first known item
-              const existingMovieIds = new Set(cached.map((m: any) => String(m.stream_id)));
-              const existingSeries = await xtreamCache.get<any[]>(`series_list_${category_id}`);
-              const existingSeriesIds = new Set((existingSeries || []).map((s: any) => String(s.series_id)));
-              const newRaw = await fetchUntilKnown(
-                async (page) => {
-                  const res = await provider.getMovies({ category: category_id, page });
-                  return res?.js?.data || [];
-                },
-                (item) => existingMovieIds.has(String(item.id)) || existingSeriesIds.has(String(item.id)),
-              );
-              const newItems = newRaw.filter((i: any) => i[seriesFlag] != 1);
-              if (newItems.length === 0) {
-                rawResult = cached;
-                await xtreamCache.set(cacheKey, cached);
-              } else {
-                rawResult = [
-                  ...newItems.map((m, idx) => mapVodItem(m, idx + 1, category_id)),
-                  ...cached.map((m: any, idx: number) => ({ ...m, num: newItems.length + idx + 1 })),
-                ];
-                await xtreamCache.set(cacheKey, rawResult);
-              }
-            } else {
-              // Cache miss — full fetch
-              const allRawVod = await fetchAllPages(async (page) => {
-                const res = await provider.getMovies({ category: category_id, page });
-                return res?.js?.data || [];
-              });
-              if (allRawVod.length === 0) return h.response([]);
-              const vodItems = allRawVod.filter((i: any) => i[seriesFlag] != 1);
-              rawResult = vodItems.map((m, idx) => mapVodItem(m, idx + 1, category_id));
-              await xtreamCache.set(cacheKey, rawResult);
-            }
+            rawResult = await getOrRefreshVodStreams(category_id);
           }
 
           const vodOverridden = await applyVodOverrides(rawResult, category_id ?? null, getVodCache);
@@ -1243,7 +1362,9 @@ export const xtreamRoutes: ServerRoute[] = [
                 cover_big:     tmdb.poster   ?? cached.info?.cover_big,
                 movie_image:   tmdb.poster   ?? cached.info?.movie_image,
                 backdrop_path: tmdb.backdrop ? [tmdb.backdrop] : (cached.info?.backdrop_path ?? []),
-                plot:          tmdb.overview ?? cached.info?.plot,
+                plot:          cached.info?.plot || tmdb.overview,
+                cast:          cached.info?.cast || tmdb.cast,
+                director:      cached.info?.director || tmdb.director,
               },
             });
           }
@@ -1308,59 +1429,7 @@ export const xtreamRoutes: ServerRoute[] = [
           } else if (category_id.startsWith("vcat_")) {
             rawResult = [];
           } else {
-            const cacheKey = `series_list_${category_id}`;
-            const { value: cached, isStale } = await xtreamCache.getWithStaleness<any[]>(cacheKey);
-            const sourceRow = await XtreamCache.findOne({ where: { key: "portal_series_source" } });
-            const isNativeSeries = sourceRow ? JSON.parse(sourceRow.value) === "native" : false;
-
-            if (cached && !isStale) {
-              rawResult = cached;
-            } else if (cached) {
-              // Stale — fetch only new items
-              const existingSeriesIds = new Set(cached.map((s: any) => String(s.series_id)));
-              const existingMovies = isNativeSeries ? null : await xtreamCache.get<any[]>(`vod_streams_${category_id}`);
-              const existingMovieIds = new Set((existingMovies || []).map((m: any) => String(m.stream_id)));
-              const newRaw = await fetchUntilKnown(
-                async (page) => {
-                  const res = isNativeSeries
-                    ? await provider.getSeries({ category: category_id, page })
-                    : await provider.getMovies({ category: category_id, page });
-                  return res?.js?.data || [];
-                },
-                (item) => existingSeriesIds.has(String(item.id)) || existingMovieIds.has(String(item.id)),
-              );
-              const newItems = isNativeSeries ? newRaw : newRaw.filter((i: any) => i[seriesFlag] == 1);
-              if (newItems.length === 0) {
-                rawResult = cached;
-                await xtreamCache.set(cacheKey, cached);
-              } else {
-                rawResult = [
-                  ...newItems.map((s, idx) => mapSeriesItem(s, idx + 1, category_id)),
-                  ...cached.map((s: any, idx: number) => ({ ...s, num: newItems.length + idx + 1 })),
-                ];
-                await xtreamCache.set(cacheKey, rawResult);
-              }
-            } else {
-              // Cache miss — full fetch
-              let allRaw: any[];
-              let seriesItems: any[];
-              if (isNativeSeries) {
-                allRaw = await fetchAllPages(async (page) => {
-                  const res = await provider.getSeries({ category: category_id, page });
-                  return res?.js?.data || [];
-                });
-                seriesItems = allRaw;
-              } else {
-                allRaw = await fetchAllPages(async (page) => {
-                  const res = await provider.getMovies({ category: category_id, page });
-                  return res?.js?.data || [];
-                });
-                seriesItems = allRaw.filter((i: any) => i[seriesFlag] == 1);
-              }
-              if (allRaw.length === 0) return h.response([]);
-              rawResult = seriesItems.map((s, idx) => mapSeriesItem(s, idx + 1, category_id));
-              await xtreamCache.set(cacheKey, rawResult);
-            }
+            rawResult = await getOrRefreshSeriesList(category_id);
           }
 
           const seriesOverridden = await applySeriesOverrides(rawResult, category_id ?? null, getSeriesCache);
@@ -1619,10 +1688,12 @@ export const xtreamRoutes: ServerRoute[] = [
         return h.response("Channel not found").code(404);
       }
 
+      streamTracker.touch("live", request.info.remoteAddress, channel.cmd, `xtream:${username}`, { kind: "live", label: channel.name });
+
       const useProxy = initialConfig.proxy && proxyParam !== "0";
 
       if (useProxy) {
-        const result = await liveStreamService.getPlaylist(channel.cmd, undefined);
+        const result = await liveStreamService.getPlaylist(channel.cmd, undefined, undefined, `xtream:${username}`);
         if (typeof result === "string") {
           return h.response(result).type("application/vnd.apple.mpegurl");
         } else {
@@ -1670,6 +1741,8 @@ export const xtreamRoutes: ServerRoute[] = [
       }
       if (!channel) return h.response("Channel not found").code(404);
 
+      streamTracker.touch("live", request.info.remoteAddress, channel.cmd, `xtream:${username}`, { kind: "live", label: channel.name });
+
       try {
         if (initialConfig.providerType === "stalker") {
           stalkerApi.setActiveChannel(streamId);
@@ -1711,7 +1784,7 @@ export const xtreamRoutes: ServerRoute[] = [
         // Xtream provider path
         const useProxy = initialConfig.proxy && proxyParam !== "0";
         if (useProxy) {
-          return await handleProxyStream(request, h, channel.cmd);
+          return await handleProxyStream(request, h, channel.cmd, undefined, `xtream:${username}`);
         }
         const redirectedUrl = await serverManager
           .getProvider()
@@ -1749,7 +1822,7 @@ export const xtreamRoutes: ServerRoute[] = [
       const upstreamUrl = `http://${initialConfig.hostname}:${initialConfig.port}/movie/${initialConfig.username}/${initialConfig.password}/${streamId}.${extension}`;
       if (initialConfig.proxy) {
         try {
-          return await handleProxyStream(request, h, upstreamUrl);
+          return await handleProxyStream(request, h, upstreamUrl, undefined, `xtream:${username}`);
         } catch (err: any) {
           logger.error(`Error proxying movie stream: ${err.message || err}`);
           return h.response({ error: "Stream proxy failed" }).code(502);
@@ -1770,7 +1843,7 @@ export const xtreamRoutes: ServerRoute[] = [
       const upstreamUrl = `http://${initialConfig.hostname}:${initialConfig.port}/series/${initialConfig.username}/${initialConfig.password}/${episodeId}.${extension}`;
       if (initialConfig.proxy) {
         try {
-          return await handleProxyStream(request, h, upstreamUrl);
+          return await handleProxyStream(request, h, upstreamUrl, undefined, `xtream:${username}`);
         } catch (err: any) {
           logger.error(`Error proxying series stream: ${err.message || err}`);
           return h.response({ error: "Stream proxy failed" }).code(502);
