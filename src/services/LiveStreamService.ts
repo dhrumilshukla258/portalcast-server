@@ -4,7 +4,7 @@ import { serverManager } from "@/serverManager";
 import NodeCache from "node-cache";
 import { AxiosResponse } from "axios";
 import { logger } from "@/infra/logger";
-import { mintStreamToken } from "@/services/StreamTokens";
+import { mintOrReuseStreamToken } from "@/services/StreamTokens";
 
 interface CacheRecord {
   baseUrl: string;
@@ -27,7 +27,7 @@ export class LiveStreamService {
   // Mints an opaque token mapping to resourceId ("cmd<_>seq") + identity —
   // the client only ever sees /player/{token}.ts, never the real cmd.
   public generateSignedUrl(resourceId: string, userLabel: string): string {
-    const token = mintStreamToken(resourceId, userLabel);
+    const token = mintOrReuseStreamToken(resourceId, userLabel);
     return `/player/${token}.ts`;
   }
 
@@ -281,7 +281,7 @@ export class LiveStreamService {
 
           if (line.startsWith("#EXT-X-MEDIA:")) {
             return line.replace(/URI="([^"]+)"/, (match, uri) => {
-              const token = mintStreamToken(cmd, userLabel);
+              const token = mintOrReuseStreamToken(cmd, userLabel);
               const newUri = `/live.m3u8?t=${token}&play=1&subpath=${encodeURIComponent(uri)}`;
               return `URI="${newUri}"`;
             });
@@ -290,7 +290,7 @@ export class LiveStreamService {
           if (line.startsWith("#")) return line;
 
           if (line.match(".m3u8")) {
-            const token = mintStreamToken(cmd, userLabel);
+            const token = mintOrReuseStreamToken(cmd, userLabel);
             return `/live.m3u8?t=${token}&play=1&subpath=${encodeURIComponent(line)}`;
           }
 

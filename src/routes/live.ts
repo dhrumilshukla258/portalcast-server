@@ -9,7 +9,7 @@ import { ReqRefDefaults, ResponseToolkit } from "@hapi/hapi/lib/types";
 import { stalkerApi } from "@/providers/stalker";
 import { logger } from "@/infra/logger";
 import { streamTracker, type StreamMeta } from "@/services/StreamTracker";
-import { mintStreamToken, streamTokenFromRequest, resolveStreamToken } from "@/services/StreamTokens";
+import { mintOrReuseStreamToken, streamTokenFromRequest, resolveStreamToken } from "@/services/StreamTokens";
 
 const sequenceRegex = /#EXT-X-MEDIA-SEQUENCE:(\d+)/;
 
@@ -17,9 +17,13 @@ const httpAgent = new http.Agent({ keepAlive: true });
 const httpsAgent = new https.Agent({ keepAlive: true });
 
 // Mints an opaque token mapping to resourceId ("cmd<_>seq") + identity — the
-// client only ever sees /player/{token}.ts, never the real cmd.
+// client only ever sees /player/{token}.ts, never the real cmd. Reuses the
+// same token across repeated playlist polls for the same segment — hls.js
+// correlates segments between two overlapping live playlists by sequence
+// number and requires their URLs to match, so a fresh token per poll for an
+// unchanged segment reads to it as a fatal "media sequence mismatch".
 function generateSignedUrl(resourceId: string, userLabel: string, meta?: StreamMeta): string {
-  const token = mintStreamToken(resourceId, userLabel, undefined, meta);
+  const token = mintOrReuseStreamToken(resourceId, userLabel, undefined, meta);
   return `/player/${token}.ts`;
 }
 
@@ -235,7 +239,7 @@ async function handleProxy(cmd: string, play: string | undefined, h: any, userLa
         if (line.match(".m3u8")) {
           record.subpath = line;
           cache.set(cmd, record as CacheRecord);
-          const token = mintStreamToken(cmd, userLabel, undefined, meta);
+          const token = mintOrReuseStreamToken(cmd, userLabel, undefined, meta);
           return `/live.m3u8?t=${token}&play=1&proxy=1`;
         }
 
