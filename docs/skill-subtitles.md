@@ -19,7 +19,7 @@ Both require `?t=` — a **stream token** (see [[skill-stream-tokens]]), not a J
 
 This code used to live inside the now-deleted `hls.ts` (VOD transcode proxy). When that feature was removed, these two routes were carved out into their own file because the frontend (`VideoContext.tsx`) genuinely depends on them — unlike the transcode-proxy routes, which had zero callers.
 
-**Frontend gating bug (found and fixed after this file was first written)**: `VideoContext.tsx` decided whether to even *call* these routes by extension-sniffing the stream URL (`.endsWith('.mp4')` etc.) — which stopped working once stream URLs became opaque tokens with no real file extension, meaning `isProgressive` was always `false` and these routes were silently never called at all, for any content. Fixed in `stalker-ui` to check for absence of the `&m3u8=1` tag instead — see `stalker-ui/docs/skill-video-playback.md`. Worth knowing if a future "restored" or "unused" backend route turns out to have a client-side gate silently never triggering it — check the *caller's* trigger condition, not just whether the route itself works.
+**Frontend gating bug (found and fixed after this file was first written)**: `VideoContext.tsx` decided whether to even *call* these routes by extension-sniffing the stream URL (`.endsWith('.mp4')` etc.) — which stopped working once stream URLs became opaque tokens with no real file extension, meaning `isProgressive` was always `false` and these routes were silently never called at all, for any content. Fixed in `portalcast-webui` to check for absence of the `&m3u8=1` tag instead — see `portalcast-webui/docs/skill-video-playback.md`. Worth knowing if a future "restored" or "unused" backend route turns out to have a client-side gate silently never triggering it — check the *caller's* trigger condition, not just whether the route itself works.
 
 ---
 
@@ -52,7 +52,7 @@ These are regular `fetch()` calls from an already-authenticated web UI session, 
 
 ### Frontend
 
-`stalker-ui/src/components/molecules/OpenSubtitlesModal.tsx` — link/unlink UI, opened from the "Subtitle Account" item in `Header.tsx`'s user dropdown. Calls `GET/PUT/DELETE /api/user/opensubtitles` via the standard authenticated `api` client — no other frontend change needed, since the backend resolves which credential set to use per-request based on the JWT identity already attached to every `/api/v2/subtitles/download` call.
+`portalcast-webui/src/components/molecules/OpenSubtitlesModal.tsx` — link/unlink UI, opened from the "Subtitle Account" item in `Header.tsx`'s user dropdown. Calls `GET/PUT/DELETE /api/user/opensubtitles` via the standard authenticated `api` client — no other frontend change needed, since the backend resolves which credential set to use per-request based on the JWT identity already attached to every `/api/v2/subtitles/download` call.
 
 ---
 
@@ -64,4 +64,4 @@ These are regular `fetch()` calls from an already-authenticated web UI session, 
 - `src/models/User.ts` — `openSubtitlesUsername`, `openSubtitlesPasswordEnc`
 - `src/routes/user.ts` — `/api/user/opensubtitles` link/unlink/status
 - `src/routes/stalkerV2/` — `/api/v2/subtitles/search`, `/api/v2/subtitles/download`
-- `stalker-ui/src/components/molecules/OpenSubtitlesModal.tsx` — link/unlink UI
+- `portalcast-webui/src/components/molecules/OpenSubtitlesModal.tsx` — link/unlink UI

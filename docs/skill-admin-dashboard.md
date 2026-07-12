@@ -10,7 +10,7 @@ Related: [[skill-stream-tokens]], [[skill-content-manager]], [[skill-auth-system
 
 `/contentmanager` (`src/routes/contentmanager/`) is a fully self-contained legacy mini-app — its own login (via `POST /api/auth/admin`), own vanilla JS/CSS, ~750 lines, served as one big HTML string. It still works and its backend API (`/api/admin/genres`, `/api/admin/items`, etc. — see [[skill-content-manager]]) is unchanged. But it required visiting a separate, unlinked URL.
 
-The React admin panel (`stalker-ui`'s `Admin.tsx`) now has a **Content** tab that reimplements the same genre/item CRUD + reordering against the *same* backend endpoints, inside the normal app navigation — no separate URL needed. See stalker-ui's `skill-admin-panel.md`.
+The React admin panel (`portalcast-webui`'s `Admin.tsx`) now has a **Content** tab that reimplements the same genre/item CRUD + reordering against the *same* backend endpoints, inside the normal app navigation — no separate URL needed. See portalcast-webui's `skill-admin-panel.md`.
 
 ---
 

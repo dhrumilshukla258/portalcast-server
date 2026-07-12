@@ -87,11 +87,11 @@ Real-time updates (profile switch, cache warm status) are pushed via WebSocket (
 
 ## Implication for Future Work
 
-Frontend source isn't versioned in *this* repo — it lives in the separate `stalker-ui` project. If that project is available in your working environment (as an additional working directory, sibling checkout, etc.), fix frontend bugs there at the source level, same as you would in a normal multi-repo setup — do not hand-edit the minified bundles in `public/assets/` unless the source repo is genuinely unavailable (patching built JS directly is fragile and was only ever a last resort — see `dd178da`).
+Frontend source isn't versioned in *this* repo — it lives in the separate `portalcast-webui` project. If that project is available in your working environment (as an additional working directory, sibling checkout, etc.), fix frontend bugs there at the source level, same as you would in a normal multi-repo setup — do not hand-edit the minified bundles in `public/assets/` unless the source repo is genuinely unavailable (patching built JS directly is fragile and was only ever a last resort — see `dd178da`).
 
-**After any `stalker-ui` change, this repo's `public/` is stale until you sync it**:
-1. `cd stalker-ui && npm run build` (produces `dist/`)
-2. Copy `dist/*` into this repo's `public/` (replace `assets/`, `index.html`, `manifest.webmanifest`, `sw.js`, `workbox-*.js`) — or run `stalker-ui`'s `deploy.sh`, which automates this copy
+**After any `portalcast-webui` change, this repo's `public/` is stale until you sync it**:
+1. `cd portalcast-webui && npm run build` (produces `dist/`)
+2. Copy `dist/*` into this repo's `public/` (replace `assets/`, `index.html`, `manifest.webmanifest`, `sw.js`, `workbox-*.js`) — or run `portalcast-webui`'s `deploy.sh`, which automates this copy
 3. Rebuild/redeploy this repo's Docker image — the `Dockerfile` here copies `public/` **as-is**, it does not build the frontend itself, so step 1–2 must happen *before* the image build
 
 Forgetting this step is a common source of "I fixed it but it's still broken" — the deployed instance is still running whatever was in `public/` before your fix. If a bug report doesn't match what the current frontend source would produce, suspect a stale `public/` first.
