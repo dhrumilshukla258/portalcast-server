@@ -14,28 +14,28 @@ import {
 export class Channel extends Model {
     @PrimaryKey
     @Column(DataType.STRING)
-    id!: string;
+    declare id: string;
 
     @Column(DataType.STRING)
-    name!: string;
+    declare name: string;
 
     @Column(DataType.TEXT)
-    cmd!: string;
+    declare cmd: string;
 
     @Column(DataType.STRING)
-    logo!: string;
+    declare logo: string;
 
     @Index
     @Column(DataType.STRING)
-    tv_genre_id!: string;
+    declare tv_genre_id: string;
 
     @Column(DataType.STRING)
-    censored!: string;
+    declare censored: string;
 
     @Column(DataType.INTEGER)
-    number?: number;
+    declare number?: number;
 
     @Index
     @Column(DataType.INTEGER)
-    profileId?: number;
+    declare profileId?: number;
 }

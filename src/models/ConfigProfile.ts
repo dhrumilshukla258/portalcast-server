@@ -9,23 +9,23 @@ export class ConfigProfile extends Model {
     @PrimaryKey
     @AutoIncrement
     @Column(DataType.INTEGER)
-    id!: number;
+    declare id: number;
 
     @Unique
     @Column(DataType.STRING)
-    name!: string;
+    declare name: string;
 
     @Column(DataType.TEXT)
-    description?: string;
+    declare description?: string;
 
     @Column(DataType.JSON)
-    config!: Config;
+    declare config: Config;
 
     @Default(false)
     @Column(DataType.BOOLEAN)
-    isActive!: boolean;
+    declare isActive: boolean;
 
     @Default(true)
     @Column(DataType.BOOLEAN)
-    isEnabled!: boolean;
+    declare isEnabled: boolean;
 }

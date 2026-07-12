@@ -7,8 +7,8 @@ import { Table, Column, Model, DataType, PrimaryKey } from "sequelize-typescript
 export class SystemConfig extends Model {
     @PrimaryKey
     @Column(DataType.STRING)
-    key!: string;
+    declare key: string;
 
     @Column(DataType.JSON)
-    value!: any;
+    declare value: any;
 }

@@ -13,11 +13,11 @@ import {
 export class XtreamCache extends Model {
   @PrimaryKey
   @Column(DataType.STRING)
-  key!: string;
+  declare key: string;
 
   @Column(DataType.TEXT)
-  value!: string;
+  declare value: string;
 
   @Column(DataType.DATE)
-  expiresAt!: Date;
+  declare expiresAt: Date;
 }

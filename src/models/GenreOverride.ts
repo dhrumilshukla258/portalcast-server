@@ -11,22 +11,22 @@ import {
 export class GenreOverride extends Model {
   @PrimaryKey
   @Column(DataType.STRING)
-  genre_key!: string; // "{type}_{genre_id}" e.g. "movie_42"
+  declare genre_key: string; // "{type}_{genre_id}" e.g. "movie_42"
 
   @Column({ type: DataType.STRING, allowNull: true })
-  display_name!: string | null;
+  declare display_name: string | null;
 
   @Default(false)
   @Column(DataType.BOOLEAN)
-  hidden!: boolean;
+  declare hidden: boolean;
 
   @Column({ type: DataType.INTEGER, allowNull: true })
-  sort_order!: number | null;
+  declare sort_order: number | null;
 
   @Default(false)
   @Column(DataType.BOOLEAN)
-  virtual!: boolean;
+  declare virtual: boolean;
 
   @Column({ type: DataType.STRING, allowNull: true })
-  virtual_title!: string | null;
+  declare virtual_title: string | null;
 }

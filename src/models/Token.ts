@@ -8,11 +8,11 @@ export class Token extends Model {
     @PrimaryKey
     @Unique
     @Column(DataType.STRING)
-    token!: string;
+    declare token: string;
 
     @Column({
         type: DataType.BOOLEAN,
         defaultValue: true,
     })
-    isValid!: boolean;
+    declare isValid: boolean;
 }

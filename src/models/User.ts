@@ -8,25 +8,25 @@ export class User extends Model {
     @PrimaryKey
     @AutoIncrement
     @Column(DataType.INTEGER)
-    id!: number;
+    declare id: number;
 
     @Unique
     @Column(DataType.STRING)
-    email!: string;
+    declare email: string;
 
     @Column(DataType.STRING)
-    name!: string;
+    declare name: string;
 
     @Default("user")
     @Column(DataType.STRING)
-    role!: string; // 'admin' | 'user'
+    declare role: string; // 'admin' | 'user'
 
     @Default(true)
     @Column(DataType.BOOLEAN)
-    isActive!: boolean;
+    declare isActive: boolean;
 
     @Column(DataType.JSON)
-    preferences?: {
+    declare preferences?: {
         preferredContentType?: "movie" | "series" | "tv";
         favorites?: string[];
         recentChannels?: string[];
@@ -36,22 +36,22 @@ export class User extends Model {
     };
 
     @Column(DataType.STRING)
-    passwordHash?: string;
+    declare passwordHash?: string;
 
     @Column(DataType.STRING)
-    salt?: string;
+    declare salt?: string;
 
     @Column(DataType.STRING)
-    avatarUrl?: string;
+    declare avatarUrl?: string;
 
     @Column(DataType.STRING)
-    resetToken?: string;
+    declare resetToken?: string;
 
     @Column(DataType.DATE)
-    resetTokenExpires?: Date;
+    declare resetTokenExpires?: Date;
 
     @Column(DataType.DATE)
-    lastLogin?: Date;
+    declare lastLogin?: Date;
 
     // Per-user OpenSubtitles account link. Search uses the shared server-wide
     // API key regardless, but downloads are quota-limited per OpenSubtitles
@@ -59,10 +59,10 @@ export class User extends Model {
     // user draw from their own quota instead of everyone sharing one. The
     // password must be recoverable (not just hashed) since OpenSubtitles has
     // no refresh-token flow — only re-login with the original credentials
-    // when the 24h JWT expires. See src/utils/crypto.ts / opensubtitles.ts.
+    // when the 24h JWT expires. See src/auth/crypto.ts / src/content/opensubtitles.ts.
     @Column(DataType.STRING)
-    openSubtitlesUsername?: string;
+    declare openSubtitlesUsername?: string;
 
     @Column(DataType.TEXT)
-    openSubtitlesPasswordEnc?: string;
+    declare openSubtitlesPasswordEnc?: string;
 }

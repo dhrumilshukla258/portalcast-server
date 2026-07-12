@@ -16,25 +16,25 @@ export type GenreType = "channel" | "movie" | "series";
 export class Genre extends Model {
     @PrimaryKey
     @Column(DataType.STRING)
-    id!: string;
+    declare id: string;
 
     @Column(DataType.STRING)
-    title!: string;
+    declare title: string;
 
     @Column(DataType.INTEGER)
-    number!: number;
+    declare number: number;
 
     @Column(DataType.STRING)
-    alias!: string;
+    declare alias: string;
 
     @Column(DataType.INTEGER)
-    censored!: number;
+    declare censored: number;
 
     @Index
     @Column(DataType.STRING)
-    type!: GenreType;
+    declare type: GenreType;
 
     @Index
     @Column(DataType.INTEGER)
-    profileId?: number;
+    declare profileId?: number;
 }

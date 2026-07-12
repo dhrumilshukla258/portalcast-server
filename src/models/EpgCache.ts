@@ -16,15 +16,15 @@ export class EpgCache extends Model {
   @PrimaryKey
   @AutoIncrement
   @Column(DataType.INTEGER)
-  id!: number;
+  declare id: number;
 
   @Column(DataType.DATE)
-  timestamp!: Date;
+  declare timestamp: Date;
 
   @Column(DataType.TEXT)
-  data!: string;
+  declare data: string;
 
   @Index
   @Column(DataType.INTEGER)
-  profileId?: number;
+  declare profileId?: number;
 }
