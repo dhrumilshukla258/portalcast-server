@@ -1,11 +1,11 @@
 import { ServerRoute } from "@hapi/hapi";
-import { logger } from "@/utils/logger";
+import { logger } from "@/infra/logger";
 import { User } from "../models/User";
 import { UserProgress } from "../models/UserProgress";
 import { ConfigProfile } from "../models/ConfigProfile";
-import { authCheck } from "../utils/jwt";
-import { encryptSecret } from "../utils/crypto";
-import { linkOpenSubtitlesAccount } from "../utils/opensubtitles";
+import { authCheck } from "../auth/jwt";
+import { encryptSecret } from "../auth/crypto";
+import { linkOpenSubtitlesAccount } from "../content/opensubtitles";
 import fs from "fs/promises";
 import path from "path";
 

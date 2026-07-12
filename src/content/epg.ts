@@ -3,12 +3,12 @@ import {
   readGenres,
   readEpgCache,
   writeEpgCache,
-} from "./storage";
+} from "../infra/storage";
 import { serverManager } from "@/serverManager";
 import { Channel, EPG_List, Genre } from "@/types/types";
 import { initialConfig } from "@/config/server";
 import { ConfigProfile } from "@/models/ConfigProfile";
-import { logger } from "@/utils/logger";
+import { logger } from "@/infra/logger";
 
 const CACHE_DURATION_MS = 12 * 60 * 60 * 1000;
 

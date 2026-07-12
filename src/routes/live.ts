@@ -1,4 +1,4 @@
-import { cmdPlayerV2 } from "@/utils/cmdPlayer";
+import { cmdPlayerV2 } from "@/streaming/cmdPlayer";
 import axios, { AxiosError, AxiosResponse } from "axios";
 import { ServerRoute } from "@hapi/hapi";
 import { http, https } from "follow-redirects";
@@ -6,8 +6,8 @@ import { RequestOptions } from "https";
 import NodeCache from "node-cache";
 import { initialConfig } from "@/config/server";
 import { ReqRefDefaults, ResponseToolkit } from "@hapi/hapi/lib/types";
-import { stalkerApi } from "@/utils/stalker";
-import { logger } from "@/utils/logger";
+import { stalkerApi } from "@/providers/stalker";
+import { logger } from "@/infra/logger";
 import { streamTracker, type StreamMeta } from "@/services/StreamTracker";
 import { mintStreamToken, streamTokenFromRequest, resolveStreamToken } from "@/services/StreamTokens";
 import { spawn, ChildProcess, execFile } from "child_process";
@@ -162,13 +162,13 @@ interface CacheRecord {
   masterUrl?: string;
 }
 
-const cache = new NodeCache({ stdTTL: 30, checkperiod: 10 });
+const cache = new NodeCache({ stdTTL: 600, checkperiod: 60 });
 
 // ── Segment read-ahead ────────────────────────────────────────────────────────
 // When a segment is served, the next one is prefetched in the background so the
 // browser's next request is answered from memory instead of paying the full
 // portal round-trip — the main cause of stutter through the proxy.
-const segmentPrefetch = new NodeCache({ stdTTL: 30, checkperiod: 10, useClones: false });
+const segmentPrefetch = new NodeCache({ stdTTL: 60, checkperiod: 10, useClones: false });
 
 type PrefetchedSegment = { data: Buffer; contentType: string } | undefined;
 
@@ -179,7 +179,7 @@ function prefetchNextSegment(cmd: string, nextSeq: number, record: CacheRecord):
   if (segmentPrefetch.has(key)) return;
   const url = new URL(segPath, record.baseUrl).href;
   const promise: Promise<PrefetchedSegment> = axios
-    .get<ArrayBuffer>(url, { responseType: "arraybuffer", timeout: 10_000 })
+    .get<ArrayBuffer>(url, { responseType: "arraybuffer", timeout: 25_000 })
     .then((res) => ({
       data: Buffer.from(res.data as any),
       contentType: String(res.headers["content-type"] || "video/mp2t"),
@@ -270,7 +270,7 @@ async function handleProxy(cmd: string, play: string | undefined, h: any, userLa
     }
 
     const fetchPlaylist = async (url: string, isSubpath: boolean = false) => {
-      const res = await axios.get(url, { validateStatus: () => true });
+      const res = await axios.get(url, { validateStatus: () => true, timeout: 15_000 });
 
       if (!isSubpath && [301, 302, 403].includes(res.status)) {
         const newMasterUrl = await cmdPlayerV2(cmd);
@@ -715,7 +715,7 @@ export const liveRoutes: ServerRoute[] = [
               resolve(response);
             });
 
-            req.setTimeout(10000, () => {
+            req.setTimeout(25000, () => {
               req.destroy();
               reject(new Error("Stream request timeout"));
             });

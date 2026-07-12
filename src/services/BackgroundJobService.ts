@@ -1,6 +1,6 @@
-import { fetchAndCacheEpg, getEpgCache } from "@/utils/epg";
+import { fetchAndCacheEpg, getEpgCache } from "@/content/epg";
 import { serverManager } from "@/serverManager";
-import { logger } from "@/utils/logger";
+import { logger } from "@/infra/logger";
 
 const EPG_UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const IDLE_THRESHOLD_MS = 2 * 60 * 1000;

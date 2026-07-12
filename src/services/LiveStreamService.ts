@@ -1,9 +1,9 @@
-import { httpClient } from "@/utils/httpClient";
+import { httpClient } from "@/streaming/httpClient";
 import { initialConfig } from "@/config/server";
 import { serverManager } from "@/serverManager";
 import NodeCache from "node-cache";
 import { AxiosResponse } from "axios";
-import { logger } from "@/utils/logger";
+import { logger } from "@/infra/logger";
 import { mintStreamToken } from "@/services/StreamTokens";
 
 interface CacheRecord {

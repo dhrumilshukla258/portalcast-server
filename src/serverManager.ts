@@ -1,9 +1,9 @@
 import { Server } from "@hapi/hapi";
 import { IProvider } from "@/interfaces/Provider";
-import { stalkerApi } from "@/utils/stalker";
-import { XtreamClient } from "@/utils/xtream-client";
+import { stalkerApi } from "@/providers/stalker";
+import { XtreamClient } from "@/providers/xtream-client";
 import { initialConfig, loadActiveProfileFromDB } from "@/config/server";
-import { logger } from "@/utils/logger";
+import { logger } from "@/infra/logger";
 
 class ServerManager {
   private static instance: ServerManager;

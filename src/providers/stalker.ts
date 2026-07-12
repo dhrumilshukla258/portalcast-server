@@ -12,12 +12,12 @@ import {
 } from "@/types/types";
 import { IProvider } from "@/interfaces/Provider";
 import axios, { AxiosError, AxiosRequestConfig } from "axios";
-import { httpClient } from "@/utils/httpClient";
+import { httpClient } from "@/streaming/httpClient";
 import NodeCache from "node-cache";
 import { Token } from "@/models/Token";
 import pLimit from "p-limit";
-import { logger } from "@/utils/logger";
-import { CircuitBreaker } from "@/utils/circuitBreaker";
+import { logger } from "@/infra/logger";
+import { CircuitBreaker } from "@/streaming/circuitBreaker";
 
 const requestLimit = pLimit(5);
 const PROVIDER_TIMEOUT = parseInt(process.env.PROVIDER_TIMEOUT || "120000", 10);

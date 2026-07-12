@@ -67,7 +67,7 @@ fi
 # 3. Merge Databases
 if [ "$LIVE_PULLED" = "true" ]; then
   echo "🔄 Merging live DB changes..."
-  npx ts-node -r tsconfig-paths/register src/utils/mergeDatabases.ts database.sqlite remote_live.sqlite
+  npx ts-node -r tsconfig-paths/register src/infra/mergeDatabases.ts database.sqlite remote_live.sqlite
   rm -f remote_live.sqlite
 else
   echo "⚠️ Live DB was not found on remote."
@@ -75,7 +75,7 @@ fi
 
 if [ "$BETA_PULLED" = "true" ]; then
   echo "🔄 Merging beta DB changes..."
-  npx ts-node -r tsconfig-paths/register src/utils/mergeDatabases.ts database.sqlite remote_beta.sqlite
+  npx ts-node -r tsconfig-paths/register src/infra/mergeDatabases.ts database.sqlite remote_beta.sqlite
   rm -f remote_beta.sqlite
 else
   echo "⚠️ Beta DB was not found on remote."

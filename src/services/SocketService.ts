@@ -1,6 +1,6 @@
 import { Server as SocketIOServer, Socket } from "socket.io";
 import { Server } from "http";
-import { logger, setLogBroadcaster } from "@/utils/logger";
+import { logger, setLogBroadcaster } from "@/infra/logger";
 
 interface Device {
   id: string;

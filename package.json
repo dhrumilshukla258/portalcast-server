@@ -1,12 +1,12 @@
 {
-  "name": "stalker-m3u-server",
+  "name": "portalcast-server",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only -r tsconfig-paths/register src/server.ts",
     "build": "tsup",
     "start": "node dist/server.js",
-    "migrate": "ts-node -r tsconfig-paths/register src/utils/migration.ts"
+    "migrate": "ts-node -r tsconfig-paths/register src/infra/migration.ts"
   },
   "author": "",
   "license": "ISC",

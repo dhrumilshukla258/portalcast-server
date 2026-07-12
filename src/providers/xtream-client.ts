@@ -13,8 +13,8 @@ import { IProvider } from "@/interfaces/Provider";
 import axios from "axios";
 import { initialConfig } from "@/config/server";
 import NodeCache from "node-cache";
-import { logger } from "@/utils/logger";
-import { CircuitBreaker } from "@/utils/circuitBreaker";
+import { logger } from "@/infra/logger";
+import { CircuitBreaker } from "@/streaming/circuitBreaker";
 
 function parseDurationToMinutes(durationStr: string | undefined): number {
   if (!durationStr) return 0;

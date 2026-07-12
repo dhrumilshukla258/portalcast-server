@@ -1,6 +1,6 @@
 import { PassThrough } from "stream";
-import { httpClient } from "@/utils/httpClient";
-import { logger } from "@/utils/logger";
+import { httpClient } from "@/streaming/httpClient";
+import { logger } from "@/infra/logger";
 
 interface Segment {
   url: string;

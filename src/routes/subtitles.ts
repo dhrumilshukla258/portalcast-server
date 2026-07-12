@@ -2,7 +2,7 @@ import { ServerRoute } from "@hapi/hapi";
 import { spawn, execFile } from "child_process";
 import { promisify } from "util";
 import NodeCache from "node-cache";
-import { logger } from "@/utils/logger";
+import { logger } from "@/infra/logger";
 import { streamTokenFromRequest } from "@/services/StreamTokens";
 
 const execFileAsync = promisify(execFile);

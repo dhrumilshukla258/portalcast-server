@@ -1,8 +1,8 @@
 import axios from "axios";
 import { openSubtitlesApiKey } from "@/config/server";
-import { stripReleaseNoise } from "@/utils/titleClean";
-import { logger } from "@/utils/logger";
-import { decryptSecret } from "@/utils/crypto";
+import { stripReleaseNoise } from "@/content/titleClean";
+import { logger } from "@/infra/logger";
+import { decryptSecret } from "@/auth/crypto";
 import { User } from "@/models/User";
 
 const OS_BASE = "https://api.opensubtitles.com/api/v1";

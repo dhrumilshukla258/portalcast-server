@@ -1,9 +1,9 @@
 import { ServerRoute, Request, ResponseToolkit } from "@hapi/hapi";
-import { httpClient } from "@/utils/httpClient";
+import { httpClient } from "@/streaming/httpClient";
 import http from "http";
 import https, { RequestOptions } from "https";
 import { initialConfig } from "@/config/server";
-import { logger } from "@/utils/logger";
+import { logger } from "@/infra/logger";
 import { streamTracker } from "@/services/StreamTracker";
 import { mintStreamToken, streamTokenFromRequest } from "@/services/StreamTokens";
 import type { StreamMeta } from "@/services/StreamTracker";

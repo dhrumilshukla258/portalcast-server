@@ -1,6 +1,6 @@
 import axios from "axios";
 import { tmdbApiToken } from "@/config/server";
-import { stripReleaseNoise } from "@/utils/titleClean";
+import { stripReleaseNoise } from "@/content/titleClean";
 
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const IMG_BASE  = "https://image.tmdb.org/t/p";

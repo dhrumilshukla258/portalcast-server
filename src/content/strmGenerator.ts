@@ -2,12 +2,12 @@ import fs from "fs";
 import path from "path";
 import { Op } from "sequelize";
 import { initialConfig } from "@/config/server";
-import { xtreamCache } from "@/routes/xtream";
-import { readGenres } from "@/utils/storage";
-import { logger } from "@/utils/logger";
+import { xtreamCache } from "@/services/xtreamCache";
+import { readGenres } from "@/infra/storage";
+import { logger } from "@/infra/logger";
 import { StrmMovie } from "@/models/StrmMovie";
 import { StrmSeries } from "@/models/StrmSeries";
-import { normalizeTitleKey, extractVariantTags } from "@/utils/titleClean";
+import { normalizeTitleKey, extractVariantTags } from "@/content/titleClean";
 
 const MOVIES_PATH = process.env.STRM_MOVIES_PATH;
 const SERIES_PATH = process.env.STRM_SERIES_PATH;

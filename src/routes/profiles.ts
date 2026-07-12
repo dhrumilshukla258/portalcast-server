@@ -1,5 +1,5 @@
 import { ServerRoute } from "@hapi/hapi";
-import { logger } from "@/utils/logger";
+import { logger } from "@/infra/logger";
 import { ConfigProfile } from "@/models/ConfigProfile";
 import { CreateProfileRequest, UpdateProfileRequest } from "@/types/types";
 import {
@@ -8,13 +8,13 @@ import {
   loadActiveProfileFromDB,
 } from "@/config/server";
 import { serverManager } from "@/serverManager";
-import { stalkerApi } from "@/utils/stalker";
+import { stalkerApi } from "@/providers/stalker";
 import { Channel } from "@/models/Channel";
 import { Genre } from "@/models/Genre";
 import { EpgCache } from "@/models/EpgCache";
 import crypto from "crypto";
 import { socketService } from "@/services/SocketService";
-import { authCheck } from "@/utils/jwt";
+import { authCheck } from "@/auth/jwt";
 
 export const profileRoutes: ServerRoute[] = [
   {

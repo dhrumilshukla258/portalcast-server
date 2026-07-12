@@ -1,10 +1,10 @@
 import { ServerRoute } from "@hapi/hapi";
 import { Op } from "sequelize";
-import { logger } from "@/utils/logger";
+import { logger } from "@/infra/logger";
 import { User } from "../models/User";
-import { authCheck } from "../utils/jwt";
-import { hashPassword } from "../utils/password";
-import { sendUserApprovedEmail } from "@/utils/email";
+import { authCheck } from "../auth/jwt";
+import { hashPassword } from "../auth/password";
+import { sendUserApprovedEmail } from "@/auth/email";
 import { socketService } from "@/services/SocketService";
 import { StrmMovie } from "@/models/StrmMovie";
 import { StrmSeries } from "@/models/StrmSeries";

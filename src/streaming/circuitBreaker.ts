@@ -1,4 +1,4 @@
-import { logger } from "@/utils/logger";
+import { logger } from "@/infra/logger";
 
 const FAILURE_THRESHOLD = parseInt(process.env.CB_FAILURE_THRESHOLD || "5", 10);
 const FAILURE_WINDOW_MS = parseInt(process.env.CB_FAILURE_WINDOW_MS || "60000", 10);

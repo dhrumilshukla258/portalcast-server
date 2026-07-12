@@ -1,13 +1,13 @@
 import { ServerRoute } from "@hapi/hapi";
-import { logger } from "@/utils/logger";
+import { logger } from "@/infra/logger";
 import { OAuth2Client } from "google-auth-library";
 import { User } from "../models/User";
 import { DeviceCode } from "../models/DeviceCode";
-import { createJWT, verifyJWT, authCheck } from "../utils/jwt";
+import { createJWT, verifyJWT, authCheck } from "../auth/jwt";
 import { v4 as uuidv4 } from "uuid";
-import { verifyPassword, hashPassword } from "../utils/password";
-import { sendAdminApprovalRequest } from "../utils/email";
-import { getPublicOrigin } from "../utils/publicUrl";
+import { verifyPassword, hashPassword } from "../auth/password";
+import { sendAdminApprovalRequest } from "../auth/email";
+import { getPublicOrigin } from "../infra/publicUrl";
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 

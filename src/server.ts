@@ -10,7 +10,7 @@ import { serverManager } from "./serverManager";
 import { stalkerV2 } from "./routes/stalkerV2";
 import path from "path";
 import { proxy } from "./routes/proxy";
-import { stalkerApi } from "./utils/stalker";
+import { stalkerApi } from "./providers/stalker";
 import { portalProxy } from "./routes/portalProxy";
 import { xtreamRoutes } from "./routes/xtream";
 import { vodRoutes } from "./routes/vod";
@@ -23,14 +23,14 @@ import { socketService } from "./services/SocketService";
 
 import { initDB } from "./db";
 import { migrateToProfiles, loadActiveProfileFromDB } from "./config/server";
-import { loadPlaylistCache } from "./utils/getM3uUrls";
-import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres, bumpVodVersion } from "./routes/xtream";
-import { fetchAndCacheEpg, getEpgCache } from "./utils/epg";
+import { loadPlaylistCache } from "./providers/getM3uUrls";
+import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres, bumpVodVersion } from "./services/xtreamCache";
+import { fetchAndCacheEpg, getEpgCache } from "./content/epg";
 import { EpgCache } from "./models/EpgCache";
 import { Op } from "sequelize";
-import { getVodRefreshStatus } from "./utils/getM3uUrls";
-import { logger } from "./utils/logger";
-import { authCheck } from "./utils/jwt";
+import { getVodRefreshStatus } from "./providers/getM3uUrls";
+import { logger } from "./infra/logger";
+import { authCheck } from "./auth/jwt";
 
 const init = async () => {
   if (!process.env.ADMIN_PASSWORD) {

@@ -1,14 +1,14 @@
 import { ServerRoute } from "@hapi/hapi";
 import * as fs from "fs/promises";
 import * as path from "path";
-import { logger } from "@/utils/logger";
+import { logger } from "@/infra/logger";
 import { serverManager } from "../serverManager";
 import { initialConfig } from "@/config/server";
-import { stalkerApi } from "@/utils/stalker";
+import { stalkerApi } from "@/providers/stalker";
 import { ConfigProfile } from "@/models/ConfigProfile";
 import crypto from "crypto";
 import { socketService } from "@/services/SocketService";
-import { createJWT, authCheck } from "@/utils/jwt";
+import { createJWT, authCheck } from "@/auth/jwt";
 import { SystemConfig } from "../models/SystemConfig";
 import { Channel } from "@/models/Channel";
 import { Genre } from "@/models/Genre";

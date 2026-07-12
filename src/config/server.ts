@@ -2,7 +2,7 @@ import fs from "fs";
 import { AppConfig, Config } from "@/types/types";
 import { ConfigProfile } from "@/models/ConfigProfile";
 import { Token } from "@/models/Token";
-import { logger } from "@/utils/logger";
+import { logger } from "@/infra/logger";
 
 function buildTlsConfig() {
   const cert = process.env.TLS_CERT_PATH;

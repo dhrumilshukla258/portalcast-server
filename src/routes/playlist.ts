@@ -6,10 +6,10 @@ import {
   getVodM3uV2,
   refreshVodCache,
   getVodRefreshStatus,
-} from "@/utils/getM3uUrls";
+} from "@/providers/getM3uUrls";
 import { ServerRoute } from "@hapi/hapi";
-import { resolveXtreamUser } from "./xtream";
-import { getPublicOrigin } from "@/utils/publicUrl";
+import { resolveXtreamUser } from "@/services/xtreamAuth";
+import { getPublicOrigin } from "@/infra/publicUrl";
 
 export const playlistRoutes: ServerRoute[] = [
   {

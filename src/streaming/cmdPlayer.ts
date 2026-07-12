@@ -1,6 +1,6 @@
-import { stalkerApi } from "./stalker";
+import { stalkerApi } from "../providers/stalker";
 
-import { logger } from "./logger";
+import { logger } from "../infra/logger";
 
 const pendingCmds = new Map<string, Promise<string | null>>();
 

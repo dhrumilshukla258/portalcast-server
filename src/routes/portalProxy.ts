@@ -2,7 +2,7 @@ import { ServerRoute } from "@hapi/hapi";
 import http from "http";
 import https from "https";
 import { initialConfig } from "@/config/server";
-import { logger } from "@/utils/logger";
+import { logger } from "@/infra/logger";
 import { streamTokenFromRequest } from "@/services/StreamTokens";
 import { streamTracker } from "@/services/StreamTracker";
 

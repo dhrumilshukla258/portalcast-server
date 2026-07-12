@@ -1,7 +1,7 @@
 import { ServerRoute } from "@hapi/hapi";
 import { serverManager } from "@/serverManager";
 import axios from "axios";
-import { logger } from "@/utils/logger";
+import { logger } from "@/infra/logger";
 import { initialConfig } from "@/config/server";
 import { streamTokenFromRequest, proxyUrlFor } from "@/services/StreamTokens";
 import { streamTracker } from "@/services/StreamTracker";

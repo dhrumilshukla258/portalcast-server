@@ -1,6 +1,6 @@
 import { Request } from "@hapi/hapi";
 import { serverProtocol } from "@/config/server";
-import { logger } from "@/utils/logger";
+import { logger } from "@/infra/logger";
 
 // Resolves the URL the client actually used so generated links work both when
 // the server is reached directly (ip:port) and through a reverse proxy (domain).

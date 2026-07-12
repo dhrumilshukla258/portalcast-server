@@ -16,7 +16,7 @@ import { User } from "../models/User";
 import { DeviceCode } from "../models/DeviceCode";
 import { UserProgress } from "../models/UserProgress";
 import { ContentCache } from "../models/ContentCache";
-import { logger } from "../utils/logger";
+import { logger } from "../infra/logger";
 
 function resolveDatabasePath(): string {
   const envPath = process.env.SQLITE_DB_PATH;

@@ -1,6 +1,6 @@
 import { Channel, M3U, M3ULine } from "@/types/types";
 import { initialConfig, seriesFlag } from "@/config/server";
-import { readChannels, readGenres } from "./storage";
+import { readChannels, readGenres } from "../infra/storage";
 import { serverManager } from "@/serverManager";
 import { SystemConfig } from "@/models/SystemConfig";
 import { ConfigProfile } from "@/models/ConfigProfile";
@@ -8,11 +8,11 @@ import {
   applyGenreOverrides,
   applyChannelOverrides,
   applyPortalItemOverrides,
-} from "@/utils/overrides";
-import { xtreamCache } from "@/routes/xtream";
+} from "@/content/overrides";
+import { xtreamCache } from "@/services/xtreamCache";
 import { ContentOverride } from "@/models/ContentOverride";
-import { proxiedLogoPath } from "@/utils/portalAssets";
-import { logger } from "@/utils/logger";
+import { proxiedLogoPath } from "@/providers/portalAssets";
+import { logger } from "@/infra/logger";
 import { mintStreamToken } from "@/services/StreamTokens";
 
 // Cache

@@ -3,7 +3,7 @@ import { Genre, GenreType } from "../models/Genre";
 import { EpgCache } from "../models/EpgCache";
 import { Op } from "sequelize";
 import { gzipSync, gunzipSync } from "zlib";
-import { logger } from "@/utils/logger";
+import { logger } from "@/infra/logger";
 
 export async function writeJSON(filename: string, data: any) {
   try {

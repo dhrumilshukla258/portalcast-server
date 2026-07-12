@@ -1,5 +1,5 @@
 import nodemailer from "nodemailer";
-import { logger } from "@/utils/logger";
+import { logger } from "@/infra/logger";
 
 /**
  * Sends an email notification to the ADMIN_EMAIL when a new user registers and is pending approval.

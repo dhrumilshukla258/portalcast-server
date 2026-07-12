@@ -2,7 +2,7 @@ import axios, { AxiosInstance, AxiosError } from "axios";
 import http from "http";
 import https from "https";
 import { appConfig } from "@/config/server";
-import { logger } from "@/utils/logger";
+import { logger } from "@/infra/logger";
 
 const httpAgent = new http.Agent({ keepAlive: true });
 const httpsAgent = new https.Agent({ keepAlive: true });

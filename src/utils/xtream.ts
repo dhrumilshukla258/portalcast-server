@@ -1,7 +1,7 @@
 import { initialConfig } from "@/config/server";
 import axios from "axios";
 import pLimit from "p-limit";
-import { logger } from "@/utils/logger";
+import { logger } from "@/infra/logger";
 
 const requestLimit = pLimit(5);
 
