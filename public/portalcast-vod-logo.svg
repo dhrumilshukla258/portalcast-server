@@ -1,10 +1,17 @@
 <svg width="200" height="80" viewBox="0 0 200 80" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <rect width="200" height="80" fill="#1A202C"/>
-  <text x="10" y="40" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="#4299E1">
+  <defs>
+    <linearGradient id="pcGradientCard" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#7C3AED;" />
+      <stop offset="100%" style="stop-color:#06B6D4;" />
+    </linearGradient>
+  </defs>
+  <rect width="200" height="80" fill="#111827"/>
+  <circle cx="34" cy="40" r="20" fill="none" stroke="url(#pcGradientCard)" stroke-width="4" stroke-linecap="round" stroke-dasharray="108 8" />
+  <path d="M28 32 L44 40 L28 49 Z" fill="url(#pcGradientCard)" />
+  <text x="64" y="35" font-family="Arial, sans-serif" font-size="19" font-weight="bold" fill="url(#pcGradientCard)">
     Portalcast
   </text>
-  <text x="10" y="65" font-family="Arial, sans-serif" font-size="18" fill="#CBD5E0">
-    Stream Anywhere
+  <text x="64" y="56" font-family="Arial, sans-serif" font-size="10.5" fill="#94A3B8" letter-spacing="0.5">
+    STREAM ANYWHERE
   </text>
-  <path d="M160 40 L180 50 L160 60 Z" fill="#F6AD55"/>
 </svg>

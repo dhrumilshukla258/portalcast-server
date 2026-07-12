@@ -1,38 +1,34 @@
-<svg width="100%" height="100%" viewBox="0 0 430 90" xmlns="http://www.w3.org/2000/svg">
-    <!-- Gradient Definition -->
+<svg width="100%" height="100%" viewBox="0 0 420 90" xmlns="http://www.w3.org/2000/svg">
     <defs>
-        <linearGradient id="logoGradient" x1="0%" y1="50%" x2="100%" y2="50%">
-            <stop offset="0%" style="stop-color:#00C6FF;" />
-            <stop offset="100%" style="stop-color:#0072FF;" />
+        <linearGradient id="pcGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#7C3AED;" />
+            <stop offset="100%" style="stop-color:#06B6D4;" />
         </linearGradient>
     </defs>
 
-    <!-- Icon Group: play mark + broadcast chevrons -->
-    <g id="icon" fill="url(#logoGradient)">
-        <path d="M20 10 L 85 45 L 20 80 L 40 65 L 40 25 Z" />
-        <g>
-            <path d="M90 32 L 105 45 L 90 58 L 94 45 Z" opacity="0.9" />
-            <path d="M108 32 L 123 45 L 108 58 L 112 45 Z" opacity="0.7" />
-        </g>
+    <!-- Icon: portal ring + play mark + broadcast arcs -->
+    <g transform="translate(0, -3)">
+        <circle cx="42" cy="45" r="30" fill="none" stroke="url(#pcGradient)" stroke-width="6" stroke-linecap="round" stroke-dasharray="162 12" />
+        <path d="M34 33 L60 45 L34 58 Z" fill="url(#pcGradient)" />
+        <path d="M67 21 A 19 19 0 0 1 76 33" fill="none" stroke="url(#pcGradient)" stroke-width="5" stroke-linecap="round" opacity="0.85" />
+        <path d="M73 12 A 31 31 0 0 1 85 30" fill="none" stroke="url(#pcGradient)" stroke-width="5" stroke-linecap="round" opacity="0.55" />
     </g>
 
-    <!-- Text Group -->
-    <g id="text-group" transform="translate(145, 0)">
-        <!-- "PORTALCAST" Text -->
+    <!-- Wordmark -->
+    <g id="text-group" transform="translate(105, 0)">
         <text
             x="0"
-            y="42"
-            fill="url(#logoGradient)"
-            style="font-family: 'Montserrat', sans-serif; font-size: 34px; font-weight: 800; text-transform: uppercase; letter-spacing: 0px; dominant-baseline: middle;">
-            PORTALCAST
+            y="46"
+            fill="url(#pcGradient)"
+            style="font-family: 'Montserrat', sans-serif; font-size: 36px; font-weight: 800; letter-spacing: 1px; dominant-baseline: middle;">
+            Portalcast
         </text>
-        <!-- Subtitle -->
         <text
-            x="0"
-            y="68"
-            fill="url(#logoGradient)"
-            style="font-family: 'Montserrat', sans-serif; font-size: 16px; font-weight: 600; text-transform: uppercase; letter-spacing: 2px; dominant-baseline: middle; opacity: 0.9;">
-            STREAMING PLATFORM
+            x="2"
+            y="70"
+            fill="url(#pcGradient)"
+            style="font-family: 'Montserrat', sans-serif; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 3px; dominant-baseline: middle; opacity: 0.8;">
+            Stream · Watch · Cast
         </text>
     </g>
 </svg>
