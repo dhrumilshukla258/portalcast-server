@@ -1,6 +1,6 @@
 # Stream Tokens & Proxy Gating — Skill Reference
 
-Covers the opaque-token system that gates and tracks every stream URL (`/api/proxy`, `/api/proxy/stream`, `/portal/proxy`, `/live.m3u8`, `/player/{token}`, `/live-hls/*`, `/api/vod/play`) and the live "who's watching what" admin view built on top of it. This replaced an earlier base64 `url=`/`cmd=` query-param scheme and a separate HMAC uid-signing scheme — both are gone now.
+Covers the opaque-token system that gates and tracks every stream URL (`/api/proxy`, `/api/proxy/stream`, `/portal/proxy`, `/live.m3u8`, `/player/{token}`, `/api/vod/play`) and the live "who's watching what" admin view built on top of it. This replaced an earlier base64 `url=`/`cmd=` query-param scheme and a separate HMAC uid-signing scheme — both are gone now.
 
 Related: [[skill-stalker-provider]], [[skill-xtream-provider]], [[skill-content-manager]], [[skill-subtitles]]
 
@@ -82,7 +82,6 @@ All of these call `streamTokenFromRequest(request)` (or `resolveStreamToken(toke
 - `GET /portal/proxy` (`portalProxy.ts`) — a second, independent proxy surface found during the security audit, same base64 leak, same fix
 - `GET /live.m3u8` (`live.ts`) — token replaces the old `cmd=` query param entirely
 - `GET /player/{token}` (`live.ts`) — token replaces the old `resourceId` (plaintext `cmd<_>seq` in the URL path!) + separate HMAC `sig` query param. The token *is* the sole credential now; no separate signature.
-- `GET /live-hls/{sessionId}/playlist.m3u8` and `.../{segment}.ts` (`live.ts`, opt-in `LIVE_TRANSCODE` feature)
 - `GET /api/vod/play` (`vod.ts`) — token resource is the provider's own movie/item **id** (not a URL); the real URL is resolved fresh via `getMovieLink` inside the handler
 - `GET /api/media/info`, `GET /api/media/subtitle` (`subtitles.ts`) — embedded-subtitle probe/extract for progressive video files; token here is identity proof only (same reasoning as the old `master.m3u8`), the actual `url=` stays caller-supplied because ffprobe/ffmpeg need real bytes to inspect, not a title
 - `GET /api/v2/download` (`stalkerV2.ts`) — resource is a JSON-encoded `{id, series, isSeries, cmd, path, title}` payload (`mintDownloadToken`), resolved server-side instead of trusting client `id=`/`cmd=`/`path=` query params directly. Previously **not gated at all** — a real open-proxy/SSRF gap (arbitrary `cmd=`/`path=` fetched and streamed back, zero auth) found and closed during a later audit pass. `GET /api/v2/download-link` mints the token — it's a normal JWT-gated `/api/v2/*` route (the download itself is a `window.open` plain navigation, which can't carry a Bearer header, hence the two-step mint-then-navigate flow)
@@ -136,7 +135,7 @@ keyed by `${type}:${ip}:${resource}`, refreshing `lastSeen`. A session is swept 
 - `src/services/StreamTracker.ts` — live session tracking
 - `src/routes/proxy.ts` — `/api/proxy`, `/api/proxy/stream`, the m3u8 rewriter
 - `src/routes/portalProxy.ts` — `/portal/proxy`
-- `src/routes/live.ts` — `/live.m3u8`, `/player/{token}`, `/live-hls/*`
+- `src/routes/live.ts` — `/live.m3u8`, `/player/{token}`
 - `src/services/LiveStreamService.ts` — Xtream-provider live HLS proxying
 - `src/routes/vod.ts` — `/api/vod/play`
 - `src/routes/subtitles.ts` — `/api/media/info`, `/api/media/subtitle` (embedded-subtitle extraction for progressive files)

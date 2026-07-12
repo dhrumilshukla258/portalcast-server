@@ -89,7 +89,6 @@ Set provider type to **Xtream** in the profile form, then enter host, username, 
 | `ADMIN_PASSWORD` | — | **Required for admin login.** Admin password — server returns 503 if unset |
 | `STREAM_IDLE_TIMEOUT_MS` | `60000` | How long (ms) a stream can go quiet with no request before it's dropped from the "active streams" admin view. Raise this if players buffer ahead and legitimately go quiet between segment fetches |
 | `PUBLIC_BASE_URL` | — | Hard override for all generated URLs (e.g. `https://iptv.example.com`). If unset, URLs are derived per-request from `X-Forwarded-Proto`/`X-Forwarded-Host` (reverse proxy) or the request host — leave unset when the server is reached both via LAN ip:port and a proxied domain |
-| `LIVE_TRANSCODE` | `false` | Set `true` to transcode HEVC live streams to H.264 on the server (ffmpeg) for clients without hardware HEVC decoding. Off by default — streams are proxied untouched and the client decodes |
 | `SERIES_FLAG` | `is_series` | Only relevant for **mixed-content portals** — ones that return series and movies from the same VOD endpoint, distinguished by a boolean-ish field. Set this to whatever that field is named on your portal if it isn't `is_series`. Portals with a genuinely separate series endpoint are auto-detected and ignore this entirely — see `docs/skill-stalker-provider.md` / `docs/skill-xtream-provider.md` |
 | `VOD_CATEGORY_VERSIONING` | `false` | Set `true` to enable category version suffixes (forces IPTV players to re-fetch updated categories) |
 | `STRM_MOVIES_PATH` | — | Output directory for movie `.strm` files |
@@ -164,9 +163,9 @@ Works out of the box behind Caddy, nginx, or Traefik. Every generated URL — th
 
 ---
 
-For **live** streams, server-side HEVC→H.264 transcoding is available but off by default (`LIVE_TRANSCODE=true` to enable) — by default the server stays a pure proxy and clients decode with their own hardware.
+For **live** streams the server stays a pure proxy — no server-side transcoding. Clients decode HEVC (or whatever codec the source uses) with their own hardware.
 
-Requires FFmpeg installed in the container (included in the default Docker image).
+FFmpeg is still required in the container (included in the default Docker image) for embedded-subtitle extraction from progressive video files — see `docs/skill-subtitles.md`.
 
 ---
 

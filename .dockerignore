@@ -4,8 +4,9 @@ dist
 .DS_Store
 *.log
 *.env
-stalker-m3u-server.env
+portalcast-server.env
 compose.override.yml
 database.sqlite
 database.db
 temp
+portalcast-server-data

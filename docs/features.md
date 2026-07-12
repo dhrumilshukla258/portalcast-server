@@ -50,7 +50,6 @@ The `STALKER_*` env vars below only pre-fill the *default* values shown when cre
 | `ADMIN_EMAIL` | — | **Required for admin login.** Email address mapped to the admin account |
 | `ADMIN_PASSWORD` | — | **Required for admin login.** Admin password — returns 503 if unset |
 | `PUBLIC_BASE_URL` | — | Hard override for all generated URLs (e.g. `https://iptv.example.com`). If unset, URLs are derived per-request from `X-Forwarded-*` headers or the request host |
-| `LIVE_TRANSCODE` | `false` | Enable server-side HEVC→H.264 transcode for live streams (ffmpeg). Off by default — clients decode with their own hardware |
 | `STREAM_IDLE_TIMEOUT_MS` | `60000` | How long a stream session can go quiet (no request) before the admin "active streams" view drops it — see [[skill-stream-tokens]] |
 | `GOOGLE_CLIENT_ID` | — | Google OAuth client ID — enables Google sign-in for users and TV pairing |
 | `TLS_CERT_PATH` | — | TLS certificate path (enables HTTPS on the server) |
@@ -372,10 +371,6 @@ The web UI requests live streams as `/live.m3u8?t={token}&id=...&proxy=1` — `t
 | Smart TV (`Tizen`/`SMART-TV`/`WebOS` user-agent) | **Direct 302 redirect** to the resolved CDN URL — TV webviews are not CORS-bound and decode natively, so no server bandwidth is used |
 | `proxy=0` | Forces a direct redirect regardless of config |
 | No `proxy` param (IPTV players) | Follows the active profile's `proxy` setting |
-
-### Optional live HEVC transcode
-
-When `LIVE_TRANSCODE=true`, the server probes the stream codec (ffprobe, cached 1h) and transcodes HEVC channels to H.264 HLS (`libx264 ultrafast`) for clients without hardware HEVC decoding. Sessions live under `/live-hls/{sessionId}/` and are killed after 60s idle. Disabled by default — the server stays a pure proxy and clients decode.
 
 ### Xtream live streams (`LiveStreamService`)
 
