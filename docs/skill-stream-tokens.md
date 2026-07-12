@@ -39,13 +39,13 @@ The frontend picks its player type (`application/x-mpegurl` vs `video/mp4`) by c
 
 ## Identity resolution (`userLabel`)
 
-- **Web UI**: JWT via `authCheck(request)` → `payload.email || "user:" + payload.userId`. See `streamUserLabel()` in `src/routes/stalkerV2.ts`.
+- **Web UI**: JWT via `authCheck(request)` → `payload.email || "user:" + payload.userId`. See `streamUserLabel()` in `src/routes/stalkerV2/`.
 - **Xtream players** (TiviMate etc.): already-verified username from `resolveXtreamUser(username, password)` → label is `xtream:${username}`.
 - **Legacy plain-M3U export** (`/playlist.m3u`, `/vod/playlist.m3u` in `src/routes/playlist.ts`): same `xtream:${username}` label, since these routes already validate credentials via `resolveXtreamUser` before generating the playlist.
 
 ### Fail-closed rule
 
-Any handler that resolves a real upstream URL (movie-link, channel-link) **must** refuse to return it if `userLabel` can't be resolved — never silently fall through and return the raw `movieLink`/`channelLink` object unchanged. See `/api/v2/movie-link` and `/api/v2/channel-link` in `src/routes/stalkerV2.ts`:
+Any handler that resolves a real upstream URL (movie-link, channel-link) **must** refuse to return it if `userLabel` can't be resolved — never silently fall through and return the raw `movieLink`/`channelLink` object unchanged. See `/api/v2/movie-link` and `/api/v2/channel-link` in `src/routes/stalkerV2/`:
 
 ```ts
 if (!userLabel) {
@@ -91,7 +91,7 @@ No exceptions remain — every stream-adjacent route requires a per-request toke
 
 ## Non-stream unauthenticated route: `/api/images/{slug*}`
 
-Poster/logo relay to the active portal (`src/routes/stalkerV2.ts`) — the one route left unauthenticated, since `<img src>` can't attach a Bearer header or a token either. Originally it forwarded the `slug` path param straight into `http(s)://{portalHost}:{portalPort}/{slug}` with **no restriction**, which made it a general unauthenticated GET relay to the portal's entire HTTP surface (any path, any query string) — not actually pinned to images at all. Fixed by rejecting `..`/`?`/`#` in the path and requiring a real image extension (`png|jpe?g|webp|gif|svg|bmp|ico`). Deliberately *not* token-gated like everything else — posters are low-sensitivity (no credentials/streams exposed) and `<img>` tags can't carry a token without JS-mediated fetch+blob-URL plumbing, which was judged not worth it for this asset class (same tradeoff Netflix/Jellyfin make for poster art).
+Poster/logo relay to the active portal (`src/routes/stalkerV2/`) — the one route left unauthenticated, since `<img src>` can't attach a Bearer header or a token either. Originally it forwarded the `slug` path param straight into `http(s)://{portalHost}:{portalPort}/{slug}` with **no restriction**, which made it a general unauthenticated GET relay to the portal's entire HTTP surface (any path, any query string) — not actually pinned to images at all. Fixed by rejecting `..`/`?`/`#` in the path and requiring a real image extension (`png|jpe?g|webp|gif|svg|bmp|ico`). Deliberately *not* token-gated like everything else — posters are low-sensitivity (no credentials/streams exposed) and `<img>` tags can't carry a token without JS-mediated fetch+blob-URL plumbing, which was judged not worth it for this asset class (same tradeoff Netflix/Jellyfin make for poster art).
 
 ---
 
@@ -140,6 +140,6 @@ keyed by `${type}:${ip}:${resource}`, refreshing `lastSeen`. A session is swept 
 - `src/services/LiveStreamService.ts` — Xtream-provider live HLS proxying
 - `src/routes/vod.ts` — `/api/vod/play`
 - `src/routes/subtitles.ts` — `/api/media/info`, `/api/media/subtitle` (embedded-subtitle extraction for progressive files)
-- `src/routes/stalkerV2.ts` — `mapChannel`, `/api/v2/movie-link`, `/api/v2/channel-link`, `mintDownloadToken`, `/api/v2/download`, `/api/v2/download-link`, `/api/images/{slug*}` (unauthenticated but extension/path-restricted)
-- `src/routes/xtream.ts` — Xtream player stream endpoints
-- `src/utils/getM3uUrls.ts` — legacy plain-M3U export tokenization
+- `src/routes/stalkerV2/` — `mapChannel`, `/api/v2/movie-link`, `/api/v2/channel-link`, `mintDownloadToken`, `/api/v2/download`, `/api/v2/download-link`, `/api/images/{slug*}` (unauthenticated but extension/path-restricted)
+- `src/routes/xtream/` — Xtream player stream endpoints
+- `src/providers/getM3uUrls.ts` — legacy plain-M3U export tokenization

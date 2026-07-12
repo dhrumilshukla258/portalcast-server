@@ -1,6 +1,6 @@
 # Auth System — Skill Reference
 
-This doc captures the full authentication system implemented in `feature/dual-portal-xtream-support` (commit `54846ea`). Reference this before touching anything in `src/routes/auth.ts`, `src/utils/jwt.ts`, `src/utils/password.ts`, `src/utils/email.ts`, or `src/models/User.ts` / `src/models/DeviceCode.ts`.
+This doc captures the full authentication system implemented in `feature/dual-portal-xtream-support` (commit `54846ea`). Reference this before touching anything in `src/routes/auth.ts`, `src/auth/jwt.ts`, `src/auth/password.ts`, `src/auth/email.ts`, or `src/models/User.ts` / `src/models/DeviceCode.ts`.
 
 ---
 
@@ -56,7 +56,7 @@ All three successful-login paths above (Google, admin-bootstrap, email/password)
 - **Access token:** 1 hour TTL, contains `{ userId, email, role }`
 - **Refresh token:** 30 days (web) or 6 months (TV), contains `{ userId, type: "refresh", clientType }`
 - **Stream token:** 30-day TTL, contains `{ sub: userId, scope: "stream" }` — returned as `user_info.password` in Xtream `player_api.php` responses so IPTV players never carry the real password in stream URLs. See [[skill-xtream-provider]] for details.
-- All protected routes call `authCheck(request)` from `src/utils/jwt.ts` which reads `Authorization: Bearer <token>`
+- All protected routes call `authCheck(request)` from `src/auth/jwt.ts` which reads `Authorization: Bearer <token>`
 
 ---
 
@@ -101,8 +101,8 @@ Admin self-protection guards prevent: disabling own account, downgrading own rol
 ## Key Files
 
 - `src/routes/auth.ts` — all auth endpoints
-- `src/utils/jwt.ts` — `createJWT`, `verifyJWT`, `authCheck`
-- `src/utils/password.ts` — `hashPassword`, `verifyPassword` (PBKDF2)
-- `src/utils/email.ts` — `sendAdminApprovalRequest`, `sendUserApprovedEmail` (nodemailer)
+- `src/auth/jwt.ts` — `createJWT`, `verifyJWT`, `authCheck`
+- `src/auth/password.ts` — `hashPassword`, `verifyPassword` (PBKDF2)
+- `src/auth/email.ts` — `sendAdminApprovalRequest`, `sendUserApprovedEmail` (nodemailer)
 - `src/models/User.ts` — User Sequelize model
 - `src/models/DeviceCode.ts` — DeviceCode Sequelize model

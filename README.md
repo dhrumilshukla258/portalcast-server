@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="public/stalker-logo.svg" alt="Stalker Server Logo" width="200" />
+  <img src="public/portalcast-logo.svg" alt="Portalcast Logo" width="200" />
 </p>
 
-<h1 align="center">Stalker M3U Server</h1>
+<h1 align="center">Portalcast</h1>
 
 <p align="center">
   A Node.js middleware that bridges Stalker portals and Xtream Codes sources to any IPTV player — with a full content management layer and Jellyfin integration.
@@ -46,7 +46,7 @@ Connects to a **Stalker portal** or **Xtream Codes API** and re-serves the conte
 ## Quick Start
 
 ```bash
-cp stalker-m3u-server.yml docker-compose.yml
+cp portalcast-server.yml docker-compose.yml
 # edit credentials, then:
 docker compose up -d
 ```

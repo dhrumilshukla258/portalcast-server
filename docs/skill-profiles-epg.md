@@ -55,7 +55,7 @@ EPG data for Stalker portals is fetched per-channel, compressed with gzip, and s
 ### Storage
 EPG XML is gzip-compressed before writing to SQLite (`EpgCache.data`). Transparent decompression on read. Legacy uncompressed entries are handled via fallback.
 
-`writeEpgCache()` in `src/utils/storage.ts` always destroys the existing row before inserting — including the `profileId: null` case. This prevents unbounded accumulation on repeated EPG refreshes when no profile is active.
+`writeEpgCache()` in `src/infra/storage.ts` always destroys the existing row before inserting — including the `profileId: null` case. This prevents unbounded accumulation on repeated EPG refreshes when no profile is active.
 
 ### Daily cleanup
 A job in `server.ts` (runs on startup and every 24h) deletes `epg_cache` rows with `updatedAt` older than 7 days:
@@ -113,6 +113,6 @@ Connect at `ws://server:3000/` — the frontend uses this to auto-reload when th
 - `src/routes/profiles.ts` — Profile CRUD API
 - `src/models/ConfigProfile.ts` — Profile Sequelize model
 - `src/models/EpgCache.ts` — EPG cache model
-- `src/utils/epg.ts` — EPG fetch and cache logic
+- `src/content/epg.ts` — EPG fetch and cache logic
 - `src/services/SocketService.ts` — WebSocket event broadcasting
 - `src/serverManager.ts` — Provider lifecycle management

@@ -26,13 +26,13 @@ config.json
 .Spotlight-V100
 .Trashes
 dist
-stalker-m3u-server.tar
+portalcast-server.tar
 .mem
 token.json
 
 # Local deployment data (contains credentials and user data)
-stalker-m3u-server.env
-stalker-m3u-server.yml
+portalcast-server.env
+portalcast-server.yml
 compose.override.yml
 database.sqlite
 database.db

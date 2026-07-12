@@ -1,6 +1,6 @@
 # M3U Playlist Generation — Skill Reference
 
-Covers how live M3U, VOD M3U, and EPG XML are built, cached, and served. Key file: `src/utils/getM3uUrls.ts`. Commits: `eddd29e`, `0d5cfbe`.
+Covers how live M3U, VOD M3U, and EPG XML are built, cached, and served. Key file: `src/providers/getM3uUrls.ts`. Commits: `eddd29e`, `0d5cfbe`.
 
 Related: [[skill-xtream-provider]], [[skill-stalker-provider]], [[skill-content-manager]], [[skill-stream-tokens]]
 
@@ -110,8 +110,8 @@ Live segment URLs (`/player/{token}.ts`) carry an opaque, server-side, randomly-
 
 ## Key Files
 
-- `src/utils/getM3uUrls.ts` — `getM3uV2`, `getVodM3uV2`, `getEPGV2`, `buildVodM3u`
+- `src/providers/getM3uUrls.ts` — `getM3uV2`, `getVodM3uV2`, `getEPGV2`, `buildVodM3u`
 - `src/types/types.ts` — `M3U`, `M3ULine` classes
-- `src/utils/overrides.ts` — `applyGenreOverrides`, `applyChannelOverrides`, `applyPortalItemOverrides`
+- `src/content/overrides.ts` — `applyGenreOverrides`, `applyChannelOverrides`, `applyPortalItemOverrides`
 - `src/routes/proxy.ts` — `handleProxyStream`
 - `src/services/StreamTokens.ts` — token minting used throughout this file, see [[skill-stream-tokens]]

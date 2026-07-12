@@ -68,7 +68,7 @@ The `STALKER_*` env vars below only pre-fill the *default* values shown when cre
 | `STRM_XTREAM_USERNAME` | `ADMIN_EMAIL` | Username embedded in `.strm` stream URLs. Defaults to `ADMIN_EMAIL` so STRM files share the same credential as web UI and Xtream API. |
 | `STRM_XTREAM_PASSWORD` | `ADMIN_PASSWORD` | Password embedded in `.strm` stream URLs. Defaults to `ADMIN_PASSWORD`. |
 | `TMDB_API_READ_TOKEN` | — | TMDB read token for metadata enrichment |
-| `OPENSUBTITLES_API_KEY` | — | Enables `/api/v2/subtitles/search` and `/download` (online subtitle search in the player). `searchSubtitles()` (`src/utils/opensubtitles.ts`) checks this first and returns `[]` immediately if unset — logs a warning rather than failing loudly, so a missing key looks like "no subtitles found," not an error |
+| `OPENSUBTITLES_API_KEY` | — | Enables `/api/v2/subtitles/search` and `/download` (online subtitle search in the player). `searchSubtitles()` (`src/content/opensubtitles.ts`) checks this first and returns `[]` immediately if unset — logs a warning rather than failing loudly, so a missing key looks like "no subtitles found," not an error |
 
 ### Networking
 
@@ -407,7 +407,7 @@ Two modes controlled per-request via `proxy=0` query param (default is proxy-on 
 
 ## Reverse Proxy & Public URLs
 
-The server can be reached simultaneously via LAN `ip:port` and an HTTPS domain behind a reverse proxy (Caddy, nginx, Traefik). Every generated absolute URL is resolved **per request** by `src/utils/publicUrl.ts` with this priority:
+The server can be reached simultaneously via LAN `ip:port` and an HTTPS domain behind a reverse proxy (Caddy, nginx, Traefik). Every generated absolute URL is resolved **per request** by `src/infra/publicUrl.ts` with this priority:
 
 1. `PUBLIC_BASE_URL` env var — hard override, pins one canonical address
 2. `X-Forwarded-Proto` / `X-Forwarded-Host` headers set by the reverse proxy

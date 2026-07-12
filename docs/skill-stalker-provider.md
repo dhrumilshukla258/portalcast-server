@@ -6,7 +6,7 @@ Related: [[skill-xtream-provider]], [[skill-m3u-playlist]], [[skill-stream-token
 
 ---
 
-## StalkerAPI (`src/utils/stalker.ts`)
+## StalkerAPI (`src/providers/stalker.ts`)
 
 Implements `IProvider`. Connects to a Stalker Middleware portal using STB emulation (MAC address + token auth). All portal calls go through `load.php` (or `portal.php` depending on `contextPath`).
 
@@ -41,7 +41,7 @@ Watchdog sends `cur_play_type=1` and `event_active_id={activeChannelId}`. Call `
 
 ### Circuit breaker
 
-`StalkerAPI.makeRequest()` uses a `CircuitBreaker` instance (`src/utils/circuitBreaker.ts`). Opens after `CB_FAILURE_THRESHOLD` failures (default 5) within `CB_FAILURE_WINDOW_MS` (default 60s); cooldown is `CB_COOLDOWN_MS` (default 30s). Auth errors (401/403) do **not** count as failures — only network/timeout errors do.
+`StalkerAPI.makeRequest()` uses a `CircuitBreaker` instance (`src/streaming/circuitBreaker.ts`). Opens after `CB_FAILURE_THRESHOLD` failures (default 5) within `CB_FAILURE_WINDOW_MS` (default 60s); cooldown is `CB_COOLDOWN_MS` (default 30s). Auth errors (401/403) do **not** count as failures — only network/timeout errors do.
 
 ### Caching strategy
 
@@ -66,7 +66,7 @@ PHP URL:  /server/load.php  (or /portal.php if no contextPath)
 
 ---
 
-## StalkerV2 Route (`src/routes/stalkerV2.ts`)
+## StalkerV2 Route (`src/routes/stalkerV2/`)
 
 Internal browse API consumed by the web UI and M3U generation. Not Stalker-protocol — uses `/api/v2/*` paths.
 
@@ -92,7 +92,7 @@ Key features added in this branch:
 
 ---
 
-## cmdPlayerV2 (`src/utils/cmdPlayer.ts`)
+## cmdPlayerV2 (`src/streaming/cmdPlayer.ts`)
 
 Resolves a Stalker `cmd` string (e.g. `ffmpeg http://...`) to a real stream URL by calling the portal's `get_link` action. Also handles catchup by passing `start_time` and `end_time` params.
 
@@ -126,9 +126,9 @@ No server restart needed.
 
 ## Key Files
 
-- `src/utils/stalker.ts` — StalkerAPI class (includes circuit breaker)
-- `src/routes/stalkerV2.ts` — Browse API
-- `src/utils/cmdPlayer.ts` — Stream URL resolution
+- `src/providers/stalker.ts` — StalkerAPI class (includes circuit breaker)
+- `src/routes/stalkerV2/` — Browse API
+- `src/streaming/cmdPlayer.ts` — Stream URL resolution
 - `src/serverManager.ts` — Provider lifecycle (init, switch, teardown)
 - `src/services/LiveStreamService.ts` — HLS proxy for live streams
-- `src/utils/circuitBreaker.ts` — Reusable `CircuitBreaker` class (configurable via `CB_*` env vars)
+- `src/streaming/circuitBreaker.ts` — Reusable `CircuitBreaker` class (configurable via `CB_*` env vars)

@@ -23,7 +23,7 @@ This code used to live inside the now-deleted `hls.ts` (VOD transcode proxy). Wh
 
 ---
 
-## 2. Online subtitle search (OpenSubtitles) — `src/utils/opensubtitles.ts`
+## 2. Online subtitle search (OpenSubtitles) — `src/content/opensubtitles.ts`
 
 | Endpoint | Auth | Description |
 |----------|------|-------------|
@@ -40,7 +40,7 @@ These are regular `fetch()` calls from an already-authenticated web UI session, 
 ### Linking flow
 
 1. `PUT /api/user/opensubtitles { username, password }` (`src/routes/user.ts`) — attempts `POST /login` against OpenSubtitles immediately to verify the credentials work *before* storing anything (an unusable linked account would be worse than none — downloads would silently keep falling back to the shared pool with no indication why).
-2. On success, the password is encrypted with `encryptSecret()` (`src/utils/crypto.ts`, AES-256-GCM, key derived from `JWT_SECRET` via SHA-256 — no second required env var) and stored in `User.openSubtitlesPasswordEnc`. **Must be reversible, not hashed** — OpenSubtitles has no refresh-token flow, only re-login with the original password when the 24h JWT expires.
+2. On success, the password is encrypted with `encryptSecret()` (`src/auth/crypto.ts`, AES-256-GCM, key derived from `JWT_SECRET` via SHA-256 — no second required env var) and stored in `User.openSubtitlesPasswordEnc`. **Must be reversible, not hashed** — OpenSubtitles has no refresh-token flow, only re-login with the original password when the 24h JWT expires.
 3. `GET /api/user/opensubtitles` returns `{ linked, username }` only — the encrypted password is never returned to the client.
 4. `DELETE /api/user/opensubtitles` clears both fields.
 
@@ -59,9 +59,9 @@ These are regular `fetch()` calls from an already-authenticated web UI session, 
 ## Key Files
 
 - `src/routes/subtitles.ts` — embedded-subtitle probe/extract (token-gated)
-- `src/utils/opensubtitles.ts` — OpenSubtitles search, login, per-user session cache, download resolution
-- `src/utils/crypto.ts` — reversible `encryptSecret`/`decryptSecret` (AES-256-GCM, key derived from `JWT_SECRET`)
+- `src/content/opensubtitles.ts` — OpenSubtitles search, login, per-user session cache, download resolution
+- `src/auth/crypto.ts` — reversible `encryptSecret`/`decryptSecret` (AES-256-GCM, key derived from `JWT_SECRET`)
 - `src/models/User.ts` — `openSubtitlesUsername`, `openSubtitlesPasswordEnc`
 - `src/routes/user.ts` — `/api/user/opensubtitles` link/unlink/status
-- `src/routes/stalkerV2.ts` — `/api/v2/subtitles/search`, `/api/v2/subtitles/download`
+- `src/routes/stalkerV2/` — `/api/v2/subtitles/search`, `/api/v2/subtitles/download`
 - `stalker-ui/src/components/molecules/OpenSubtitlesModal.tsx` — link/unlink UI

@@ -6,7 +6,7 @@ Related: [[skill-stalker-provider]], [[skill-m3u-playlist]], [[skill-auth-system
 
 ---
 
-## XtreamClient (`src/utils/xtream-client.ts`)
+## XtreamClient (`src/providers/xtream-client.ts`)
 
 Implements `IProvider`. Connects to any Xtream Codes-compatible portal via `player_api.php`.
 
@@ -40,11 +40,11 @@ Xtream portals Base64-encode EPG titles. `decodeBase64Safe` and `decodeBase64Tit
 
 ---
 
-## XtreamCache (`src/models/XtreamCache.ts` + `src/routes/xtream.ts`)
+## XtreamCache (`src/models/XtreamCache.ts` + `src/routes/xtream/`)
 
 SQLite-backed persistent cache. TTL = **24 hours** (`TTL_MS`).
 
-### Cache object (exported from `src/routes/xtream.ts`)
+### Cache object (exported from `src/routes/xtream/`)
 
 ```ts
 xtreamCache.get<T>(key)           // Returns value or undefined
@@ -72,7 +72,7 @@ Wipe all entries via `DELETE /api/v2/clear-xtream-cache` — forces re-detection
 
 Shared by both the Xtream player API (`get_vod_streams`/`get_series`) and the web UI (`/api/v2/movies`/`/api/v2/series`) so both surfaces see identical staleness/refresh behavior. On a cache miss or stale entry, fetches from the portal, merges with the cached rows, and writes back.
 
-**In-flight deduplication**: both functions are wrapped so only one refresh per `categoryId` is ever running at a time (`vodRefreshInFlight`/`seriesRefreshInFlight` maps in `src/routes/xtream.ts`, mirroring `StalkerAPI.makeRequest`'s own `inFlight` pattern). Without this, two concurrent calls for the same category — e.g. a double-fired category click on the frontend — each independently read the same stale snapshot, fetch, merge, and write back; whichever write lands last silently wins, discarding whatever the other one computed. Added after a user report of wrong content appearing under a category (network trace showed the same category request firing twice) — this closes the race, though the specific report turned out inconclusive as to root cause (portal-side data issue was the likelier explanation in that case).
+**In-flight deduplication**: both functions are wrapped so only one refresh per `categoryId` is ever running at a time (`vodRefreshInFlight`/`seriesRefreshInFlight` maps in `src/routes/xtream/`, mirroring `StalkerAPI.makeRequest`'s own `inFlight` pattern). Without this, two concurrent calls for the same category — e.g. a double-fired category click on the frontend — each independently read the same stale snapshot, fetch, merge, and write back; whichever write lands last silently wins, discarding whatever the other one computed. Added after a user report of wrong content appearing under a category (network trace showed the same category request firing twice) — this closes the race, though the specific report turned out inconclusive as to root cause (portal-side data issue was the likelier explanation in that case).
 
 ---
 
@@ -113,7 +113,7 @@ Version bumps are triggered by:
 
 ---
 
-## Xtream API Route (`src/routes/xtream.ts`)
+## Xtream API Route (`src/routes/xtream/`)
 
 Exposes Xtream Codes-compatible endpoints so any player expecting Xtream format works:
 
@@ -151,7 +151,7 @@ Xtream stream URLs carry `{username}/{password}` in the path. Sending the real p
 - Real password (existing DB hash check)
 - Valid stream token (JWT starting with `eyJ`, verified `scope === "stream"`, `sub` → userId lookup)
 
-Env-var-only admin (no numeric DB id) still uses the real password as fallback. Implementation: `generateStreamToken(userId)` in `src/routes/xtream.ts`.
+Env-var-only admin (no numeric DB id) still uses the real password as fallback. Implementation: `generateStreamToken(userId)` in `src/routes/xtream/`.
 
 ---
 
@@ -186,8 +186,9 @@ Expired rows are purged automatically — no manual intervention needed.
 
 ## Key Files
 
-- `src/utils/xtream-client.ts` — XtreamClient implementation (includes circuit breaker)
-- `src/routes/xtream.ts` — XtreamCache object, versioning, API routes, warm functions, stream token generation, catchupScan
+- `src/providers/xtream-client.ts` — XtreamClient implementation (includes circuit breaker)
+- `src/routes/xtream/` — API routes (`protocol.ts`, `streams.ts`)
+- `src/services/xtreamCache.ts` — XtreamCache object, versioning, warm functions, catchupScan
+- `src/services/xtreamAuth.ts` — stream token generation, resolveXtreamUser
 - `src/models/XtreamCache.ts` — Sequelize model
-- `src/utils/xtream.ts` — Shared Xtream helpers
-- `src/utils/circuitBreaker.ts` — Reusable `CircuitBreaker` class (configurable via `CB_*` env vars)
+- `src/streaming/circuitBreaker.ts` — Reusable `CircuitBreaker` class (configurable via `CB_*` env vars)

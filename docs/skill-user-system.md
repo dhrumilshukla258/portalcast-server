@@ -23,7 +23,7 @@ Related: [[skill-auth-system]] for login/tokens, [[skill-admin-dashboard]] for h
 | `preferences` | JSON | `{ preferredContentType, favorites[], recentChannels[] }` |
 | `lastLogin` | DATE | Set on every successful login (Google, admin-bootstrap, email/password — see `src/routes/auth.ts`). Powers the Admin Dashboard's "logged in last 24h/7d" stats and recent-logins list — see [[skill-admin-dashboard]] |
 | `openSubtitlesUsername` | STRING | OpenSubtitles account username, if the user has linked one — see [[skill-subtitles]] |
-| `openSubtitlesPasswordEnc` | TEXT | AES-256-GCM encrypted (reversible, not hashed — OpenSubtitles has no refresh-token flow, only re-login) via `src/utils/crypto.ts` |
+| `openSubtitlesPasswordEnc` | TEXT | AES-256-GCM encrypted (reversible, not hashed — OpenSubtitles has no refresh-token flow, only re-login) via `src/auth/crypto.ts` |
 
 `passwordHash` and `salt` are stripped from all API responses — never returned to clients. `openSubtitlesPasswordEnc` is likewise never returned; only `linked: boolean` and the username are exposed via `GET /api/user/opensubtitles`.
 

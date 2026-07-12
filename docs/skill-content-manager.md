@@ -65,7 +65,7 @@ Deleting a virtual category: all `ContentOverride` records pointing to it have `
 
 ## Override Application (how it works in code)
 
-`src/utils/overrides.ts` exports:
+`src/content/overrides.ts` exports:
 
 | Function | Used by |
 |----------|---------|
@@ -134,6 +134,6 @@ Variant patterns detected: 4K/UHD/FHD/HD, Dual Audio/Dubbed/Multi, Hindi/Tamil/T
 
 ## Key Files
 
-- `src/utils/overrides.ts` — all override application functions
+- `src/content/overrides.ts` — all override application functions
 - `src/models/GenreOverride.ts`, `src/models/ContentOverride.ts`
 - `src/routes/config.ts` — content manager admin API routes
