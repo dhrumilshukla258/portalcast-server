@@ -160,7 +160,7 @@ export async function getEPGV2() {
 
   let xmltv = '<?xml version="1.0" encoding="UTF-8"?>\n';
   xmltv += '<!DOCTYPE tv SYSTEM "xmltv.dtd">\n';
-  xmltv += '<tv generator-info-name="Stalker M3U Server">\n';
+  xmltv += '<tv generator-info-name="Portalcast">\n';
 
   channels.forEach((channel) => {
     xmltv += `  <channel id="${channel.id}">\n`;

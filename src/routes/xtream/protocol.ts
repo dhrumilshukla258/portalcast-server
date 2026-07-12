@@ -84,7 +84,7 @@ export const protocolRoutes: ServerRoute[] = [
         return `${d.getUTCFullYear()}${p(d.getUTCMonth()+1)}${p(d.getUTCDate())}${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())} +0000`;
       };
 
-      let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="Stalker M3U Server">\n';
+      let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="Portalcast">\n';
 
       for (const ch of channels) {
         xml += `  <channel id="${ch.id}"><display-name>${escXml(ch.name)}</display-name></channel>\n`;

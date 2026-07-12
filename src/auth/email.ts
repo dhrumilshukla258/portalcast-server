@@ -15,7 +15,7 @@ export async function sendAdminApprovalRequest(name: string, email: string): Pro
   const port = Number(process.env.SMTP_PORT || 587);
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
-  const from = process.env.SMTP_FROM || `"Stalker Portal" <${user}>`;
+  const from = process.env.SMTP_FROM || `"Portalcast" <${user}>`;
 
   if (!host || !user || !pass) {
     logger.warn("SMTP Warning: Mail server host/user/pass is not configured. Approval email skipped.");
@@ -63,7 +63,7 @@ export async function sendUserApprovedEmail(name: string, email: string): Promis
   const port = Number(process.env.SMTP_PORT || 587);
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
-  const from = process.env.SMTP_FROM || `"Stalker Portal" <${user}>`;
+  const from = process.env.SMTP_FROM || `"Portalcast" <${user}>`;
 
   if (!host || !user || !pass) {
     logger.warn("SMTP Warning: Mail server host/user/pass is not configured. User approval email skipped.");
@@ -85,12 +85,12 @@ export async function sendUserApprovedEmail(name: string, email: string): Promis
   const mailOptions = {
     from,
     to: email,
-    subject: `Stalker VOD - Your Account is Approved!`,
-    text: `Hello ${name},\n\nGreat news! Your account request for the Stalker VOD Portal has been approved by the administrator.\n\nYou can now log in using your email or Google Sign-In to access the platform.\n\nEnjoy streaming!\n- Stalker Team`,
+    subject: `Portalcast - Your Account is Approved!`,
+    text: `Hello ${name},\n\nGreat news! Your account request for Portalcast has been approved by the administrator.\n\nYou can now log in using your email or Google Sign-In to access the platform.\n\nEnjoy streaming!\n- Portalcast Team`,
     html: `<div style="font-family: sans-serif; padding: 20px; color: #333; max-width: 500px; border: 1px solid #e2e8f0; border-radius: 12px;">
       <h2 style="color: #10b981; margin-top: 0;">Account Approved!</h2>
       <p>Hello ${name},</p>
-      <p>Great news! Your account request for the <strong>Stalker VOD Portal</strong> has been officially approved by the administrator.</p>
+      <p>Great news! Your account request for <strong>Portalcast</strong> has been officially approved by the administrator.</p>
       <div style="background-color: #f8fafc; padding: 16px; border-radius: 8px; margin: 16px 0;">
         <p style="margin: 0; color: #334155;">
           You can now log in using your registered email credentials or via Google Sign-In to access the platform.
@@ -100,7 +100,7 @@ export async function sendUserApprovedEmail(name: string, email: string): Promis
         Get ready to explore the new visual theme and advanced playback engine. Your ultimate streaming experience starts here!
       </p>
       <p style="margin-top: 24px; font-size: 14px; font-weight: bold; color: #333;">
-        Enjoy streaming,<br/>Stalker Team
+        Enjoy streaming,<br/>Portalcast Team
       </p>
     </div>`,
   };
@@ -118,7 +118,7 @@ export async function sendPasswordResetEmail(name: string, email: string, resetL
   const port = Number(process.env.SMTP_PORT || 587);
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
-  const from = process.env.SMTP_FROM || `"Stalker Portal" <${user}>`;
+  const from = process.env.SMTP_FROM || `"Portalcast" <${user}>`;
 
   if (!host || !user || !pass) {
     console.warn("SMTP Warning: Mail server host/user/pass is not configured. Password reset email skipped.");
@@ -138,12 +138,12 @@ export async function sendPasswordResetEmail(name: string, email: string, resetL
   const mailOptions = {
     from,
     to: email,
-    subject: "Stalker VOD - Reset Your Password",
-    text: `Hello ${name},\n\nYou requested a password reset for your Stalker VOD Portal account.\n\nPlease use the following link to reset your password:\n\n${resetLink}\n\nThis link will expire in 1 hour.\n\nIf you did not request this, you can safely ignore this email.\n\nBest regards,\nStalker Team`,
+    subject: "Portalcast - Reset Your Password",
+    text: `Hello ${name},\n\nYou requested a password reset for your Portalcast account.\n\nPlease use the following link to reset your password:\n\n${resetLink}\n\nThis link will expire in 1 hour.\n\nIf you did not request this, you can safely ignore this email.\n\nBest regards,\nPortalcast Team`,
     html: `<div style="font-family: sans-serif; padding: 20px; color: #333; max-width: 500px; border: 1px solid #e2e8f0; border-radius: 12px;">
       <h2 style="color: #4f46e5; margin-top: 0;">Reset Your Password</h2>
       <p>Hello ${name},</p>
-      <p>We received a request to reset the password for your account on the <strong>Stalker VOD Portal</strong>.</p>
+      <p>We received a request to reset the password for your account on <strong>Portalcast</strong>.</p>
       <p>Click the button below to choose a new password. This link is valid for 1 hour:</p>
       <div style="text-align: center; margin: 24px 0;">
         <a href="${resetLink}" style="background-color: #4f46e5; color: #fff; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Reset Password</a>
