@@ -1,30 +1,32 @@
 import "dotenv/config";
 import { initialConfig, serverConfig } from "@/config/server";
-import { playlistRoutes } from "./routes/playlist";
-import { liveRoutes } from "./routes/live";
-import { configRoutes } from "./routes/config";
-import { profileRoutes } from "./routes/profiles";
+import { playlistRoutes } from "./routes/streaming/playlist";
+import { liveRoutes } from "./routes/streaming/live";
+import { configRoutes } from "./routes/providerConfig";
+import { profileRoutes } from "./routes/account/profiles";
 import Hapi from "@hapi/hapi";
 import Inert from "@hapi/inert";
 import { serverManager } from "./serverManager";
 import { stalkerV2 } from "./routes/stalkerV2";
 import path from "path";
-import { proxy } from "./routes/proxy";
+import { proxy } from "./routes/streaming/proxy";
 import { stalkerApi } from "./providers/stalker";
-import { portalProxy } from "./routes/portalProxy";
+import { portalProxy } from "./routes/streaming/portalProxy";
 import { xtreamRoutes } from "./routes/xtream";
-import { vodRoutes } from "./routes/vod";
-import { subtitleRoutes } from "./routes/subtitles";
+import { vodRoutes } from "./routes/streaming/vod";
+import { subtitleRoutes } from "./routes/streaming/subtitles";
 import { adminRoutes } from "./routes/contentmanager";
-import { authRoutes } from "./routes/auth";
-import { userRoutes } from "./routes/user";
-import { userManagementRoutes } from "./routes/userManagement";
+import { authRoutes } from "./routes/account/auth";
+import { userRoutes } from "./routes/account/user";
+import { userManagementRoutes } from "./routes/account/userManagement";
+import { discoverRoutes } from "./routes/discover";
 import { socketService } from "./services/SocketService";
 
 import { initDB } from "./db";
 import { migrateToProfiles, loadActiveProfileFromDB } from "./config/server";
 import { loadPlaylistCache } from "./providers/getM3uUrls";
 import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres, bumpVodVersion } from "./services/xtreamCache";
+import { enrichContentMeta } from "./content/metaEnrichment";
 import { fetchAndCacheEpg, getEpgCache } from "./content/epg";
 import { EpgCache } from "./models/EpgCache";
 import { Op } from "sequelize";
@@ -92,6 +94,7 @@ const init = async () => {
   server.route(authRoutes);
   server.route(userRoutes);
   server.route(userManagementRoutes);
+  server.route(discoverRoutes);
 
   // Rate limiter for unauthenticated public endpoints (stream/media routes)
   const RL_MAX = parseInt(process.env.RATE_LIMIT_MAX || "120", 10); // requests per window
@@ -108,21 +111,20 @@ const init = async () => {
 
   server.ext("onRequest", (request, h) => {
     const p = request.path;
-    const isPublicStream =
-      p.startsWith("/live/") ||
-      p.startsWith("/movie/") ||
-      p.startsWith("/series/") ||
-      p.startsWith("/live.m3u8") ||
-      p.startsWith("/player/") ||
-      p.startsWith("/api/media/") ||
-      p.startsWith("/api/vod/play");
+    // Bucketed by stream family, not one shared bucket for every public stream
+    // route — a runaway client-side retry loop against live TV (e.g. hls.js
+    // hammering /live.m3u8 with no backoff on error) must only exhaust its own
+    // bucket, never lock the same IP out of movie/series/VOD playback too.
+    const isLiveStream = p.startsWith("/live/") || p.startsWith("/live.m3u8") || p.startsWith("/player/");
+    const isVodStream = p.startsWith("/movie/") || p.startsWith("/series/") || p.startsWith("/api/media/") || p.startsWith("/api/vod/play");
 
-    if (isPublicStream) {
+    if (isLiveStream || isVodStream) {
       const ip = request.info.remoteAddress;
+      const key = `${isLiveStream ? "live" : "vod"}:${ip}`;
       const now = Date.now();
-      const entry = rlMap.get(ip);
+      const entry = rlMap.get(key);
       if (!entry || now - entry.windowStart > RL_WINDOW) {
-        rlMap.set(ip, { count: 1, windowStart: now });
+        rlMap.set(key, { count: 1, windowStart: now });
       } else {
         entry.count++;
         if (entry.count > RL_MAX) {
@@ -279,6 +281,15 @@ const init = async () => {
     ]);
     await cleanupGenres().catch((e) => logger.error(`[cleanupGenres] ${e}`));
     await warmSeriesInfoCache().catch((e) => logger.error(`[warmSeriesInfoCache] ${e}`));
+    // enrichMovies/enrichSeries (inside enrichContentMeta) skip any row that
+    // already has enrichedAt set, so running this after every warm cycle only
+    // ever processes titles the portal just added since the last run — closes
+    // the gap where new content sat unenriched (no ContentMeta row at all,
+    // e.g. blank "Because You Watched") until someone manually hit
+    // /api/admin/content-meta/enrich. Fire-and-forget: a 100k+ catalog backfill
+    // takes hours at THROTTLE_MS pace, but that's only ever true on the very
+    // first run — routine reruns only touch the handful of new titles.
+    enrichContentMeta().catch((e) => logger.error(`[enrichContentMeta startup] ${e}`));
   })();
 
   // Fetch EPG on startup if cache is missing or stale
@@ -297,6 +308,7 @@ const init = async () => {
       ]);
       await cleanupGenres().catch((e) => logger.error(`[cleanupGenres interval] ${e}`));
       await warmSeriesInfoCache().catch((e) => logger.error(`[warmSeriesInfoCache interval] ${e}`));
+      enrichContentMeta().catch((e) => logger.error(`[enrichContentMeta interval] ${e}`));
     })();
   }, 24 * 60 * 60 * 1000);
 

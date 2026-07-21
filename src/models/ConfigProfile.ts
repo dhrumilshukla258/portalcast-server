@@ -1,5 +1,5 @@
 import { Table, Column, Model, DataType, PrimaryKey, AutoIncrement, Unique, Default } from "sequelize-typescript";
-import { Config } from "@/types/types";
+import { Config } from "@/types/domain";
 
 @Table({
     tableName: "config_profiles",

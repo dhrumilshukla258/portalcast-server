@@ -136,4 +136,4 @@ Variant patterns detected: 4K/UHD/FHD/HD, Dual Audio/Dubbed/Multi, Hindi/Tamil/T
 
 - `src/content/overrides.ts` — all override application functions
 - `src/models/GenreOverride.ts`, `src/models/ContentOverride.ts`
-- `src/routes/config.ts` — content manager admin API routes
+- `src/routes/providerConfig.ts` — content manager admin API routes

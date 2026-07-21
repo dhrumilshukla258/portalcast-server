@@ -24,6 +24,7 @@ import {
   applyGenreOverrides,
   applyChannelOverrides,
   applyPortalItemOverrides,
+  getHiddenGenreIds,
 } from "@/content/overrides";
 import { mintDownloadToken, DownloadPayload } from "@/services/downloadTokens";
 import crypto from "crypto";
@@ -32,6 +33,7 @@ import { getPublicOrigin } from "@/infra/publicUrl";
 import { getM3uV2, getVodM3uV2 } from "@/providers/getM3uUrls";
 import { channelLogoPath, proxiedLogoPath } from "@/providers/portalAssets";
 import { fetchMovieMeta, fetchTVMeta } from "@/content/tmdb";
+import { pruneContentMeta } from "@/content/metaEnrichment";
 import { searchSubtitles, resolveSubtitleDownloadUrl } from "@/content/opensubtitles";
 import {
   streamUserLabel,
@@ -43,6 +45,7 @@ import {
   getActiveProfileId,
   generateCacheKey,
   mapChannel,
+  filterBySearch,
 } from "./shared";
 export const movieRoutes: ServerRoute[] = [
   {
@@ -128,7 +131,7 @@ export const movieRoutes: ServerRoute[] = [
       try {
         const profileId = (await getActiveProfileId()) || 0;
         const query = request.query as any;
-        const {
+        let {
           category = 0,
           movieId = 0,
           seasonId = 0,
@@ -139,6 +142,26 @@ export const movieRoutes: ServerRoute[] = [
 
         if (category == 0 && movieId == 0) {
           return h.redirect("/api/v2/movie-groups");
+        }
+
+        // Discover's item-open flow (App.tsx openDiscoverItem) doesn't know which
+        // real category a title lives in, so it always requests category="*" alongside
+        // a specific movieId. The movieId===0 fast path below explicitly doesn't cover
+        // this case, so without this resolution it falls all the way through to a live
+        // portal call with category="*" — the exact full pagination scan the comment
+        // there warns never completes under load. Resolve the real category from the
+        // already-warmed per-category cache first so a Discover click hits the same
+        // fast, cached path any other movie lookup does.
+        if (Number(movieId) !== 0 && String(category) === "*") {
+          const groups = await readGenres("movie", profileId);
+          for (const g of groups) {
+            if (!g.id || g.id === "*") continue;
+            const cached = await xtreamCache.get<any[]>(`vod_streams_${g.id}`);
+            if (cached?.some((m: any) => String(m.stream_id) === String(movieId))) {
+              category = g.id;
+              break;
+            }
+          }
         }
 
         const itemsPerApiPage = 14;
@@ -188,18 +211,32 @@ export const movieRoutes: ServerRoute[] = [
         // Prefer already-warmed DB data over a live portal call for category browsing —
         // same getOrRefreshVodStreams() the Xtream player API uses, so both surfaces get
         // identical staleness/refresh behavior instead of the web UI trusting stale rows forever.
-        if (Number(movieId) === 0 && !search) {
-          const cachedMovies = await getOrRefreshVodStreams(String(category));
-          if (cachedMovies && cachedMovies.length > 0) {
-            // Items cached before screenshot_uri/description/etc. were added to mapVodItem
-            // only have the older Xtream-shaped fields — stream_icon is already a complete,
-            // working image URL (same one Xtream players render), so fall back to it instead
-            // of requiring every old cache entry to be rebuilt from the portal.
-            const allNormalized = cachedMovies.map((m: any) => ({
-              ...m,
-              id: String(m.stream_id),
-              screenshot_uri: m.screenshot_uri || m.stream_icon || "",
-            }));
+        //
+        // category === "*" ("All Movies") is special: the warm cycle deliberately skips "*"
+        // as a category, so treating it like any other category ID here means a real cache
+        // miss — triggering a full from-scratch portal pagination scan. Every item it would
+        // return is already sitting in the per-category DB cache from the regular warm cycle,
+        // so build it by unioning those instead of ever touching the portal (same pattern the
+        // Xtream player API already uses for its no-category "all" request in protocol.ts).
+        if (Number(movieId) === 0 && String(category) === "*") {
+          const groups = await readGenres("movie", profileId);
+          const hiddenIds = await getHiddenGenreIds("movie");
+          const visibleIds = groups
+            .filter((g: any) => g.id && g.id !== "*" && !hiddenIds.has(String(g.id)))
+            .map((g: any) => `vod_streams_${g.id}`);
+          const cachedByKey = await xtreamCache.getMany<any[]>(visibleIds);
+          const cachedMovies: any[] = [];
+          for (const key of visibleIds) {
+            const cached = cachedByKey.get(key);
+            if (cached) cachedMovies.push(...cached);
+          }
+          if (cachedMovies.length > 0) {
+            const allNormalized = filterBySearch(cachedMovies, search)
+              .map((m: any) => ({
+                ...m,
+                id: String(m.stream_id),
+                screenshot_uri: m.screenshot_uri || m.stream_icon || "",
+              }));
             const allOverridden = await applyPortalItemOverrides(allNormalized, "movie", String(category), getVodCache);
             const offset = (startApiPage - 1) * itemsPerApiPage;
             const pageData = allOverridden.slice(offset, offset + itemsPerApiPage);
@@ -214,13 +251,77 @@ export const movieRoutes: ServerRoute[] = [
               errors: false,
               isPortal: initialConfig.providerType === "stalker",
             };
-            await ContentCache.upsert({
-              profileId,
-              cacheKey,
-              response: responsePayload,
-              expiresAt: new Date(Date.now() + CACHE_DURATION_MS),
-            });
+            if (!search) {
+              await ContentCache.upsert({
+                profileId,
+                cacheKey,
+                response: responsePayload,
+                expiresAt: new Date(Date.now() + CACHE_DURATION_MS),
+              });
+            }
             return responsePayload;
+          }
+        }
+
+        if (Number(movieId) === 0) {
+          // getOrRefreshVodStreams() does a live full portal fetch on a cache
+          // miss — fine for normal browsing, but search must never touch the
+          // portal, so it reads whatever is already warmed and nothing more.
+          const cachedMovies = search
+            ? await xtreamCache.get<any[]>(`vod_streams_${category}`)
+            : await getOrRefreshVodStreams(String(category));
+          if (cachedMovies && cachedMovies.length > 0) {
+            // Items cached before screenshot_uri/description/etc. were added to mapVodItem
+            // only have the older Xtream-shaped fields — stream_icon is already a complete,
+            // working image URL (same one Xtream players render), so fall back to it instead
+            // of requiring every old cache entry to be rebuilt from the portal.
+            const allNormalized = filterBySearch(cachedMovies, search)
+              .map((m: any) => ({
+                ...m,
+                id: String(m.stream_id),
+                screenshot_uri: m.screenshot_uri || m.stream_icon || "",
+              }));
+            const allOverridden = await applyPortalItemOverrides(allNormalized, "movie", String(category), getVodCache);
+            const offset = (startApiPage - 1) * itemsPerApiPage;
+            const pageData = allOverridden.slice(offset, offset + itemsPerApiPage);
+            const responsePayload = {
+              success: true,
+              page: Number(page),
+              pageAtaTime: 1,
+              total_items: allOverridden.length,
+              actual_length: itemsPerApiPage,
+              total_loaded: pageData.length,
+              data: await enrichArtworkFromTmdb(pageData, "movie"),
+              errors: false,
+              isPortal: initialConfig.providerType === "stalker",
+            };
+            if (!search) {
+              await ContentCache.upsert({
+                profileId,
+                cacheKey,
+                response: responsePayload,
+                expiresAt: new Date(Date.now() + CACHE_DURATION_MS),
+              });
+            }
+            return responsePayload;
+          }
+
+          // Browsing/search never talks to the portal directly — only actual
+          // stream playback is allowed to reach it. If nothing is cached yet
+          // for this category, return an empty page instead of falling
+          // through to a live portal call below.
+          if (search) {
+            return {
+              success: true,
+              page: Number(page),
+              pageAtaTime: 1,
+              total_items: 0,
+              actual_length: itemsPerApiPage,
+              total_loaded: 0,
+              data: [],
+              errors: false,
+              isPortal: initialConfig.providerType === "stalker",
+            };
           }
         }
 
@@ -255,6 +356,19 @@ export const movieRoutes: ServerRoute[] = [
         // At top level exclude series so only movies show
         if (Number(movieId) === 0) {
           firstPageData = firstPageData.filter((item: any) => item[seriesFlag] != 1);
+        }
+
+        // A direct movieId lookup (not a season/episode drill-down) that came
+        // back empty means the portal no longer has this stream at all — the
+        // catalog entry it was resolved from (e.g. Discover's ContentMeta row)
+        // is stale. Prune it so it stops showing up in Discover/search instead
+        // of surfacing this same "could not load" failure every time someone
+        // clicks it. Fire-and-forget — must not delay/break the response the
+        // client is waiting on for this already-failed lookup.
+        if (Number(movieId) !== 0 && !seasonId && !episodeId && firstPageData.length === 0) {
+          pruneContentMeta(`movie_${movieId}`, String(category)).catch((e) =>
+            logger.error({ err: e }, `[MetaEnrich] prune failed for movie_${movieId}`)
+          );
         }
 
         // For episode-level requests refresh cmd via create_link (stale CDN URLs)
@@ -327,6 +441,43 @@ export const movieRoutes: ServerRoute[] = [
         const { title, category } = request.query as { title?: string; category?: string };
         const isSeries =
           series && series !== "0" && series !== "false" && series !== "";
+
+        // Some clients (e.g. ImPlayer) never send `title` on this request — without a
+        // fallback, StreamTracker sessions for them end up with a null label and the
+        // admin panel falls back to displaying the raw resource path, which for this
+        // portal happens to be a quality/language variant name like "Hindi / Ultra High
+        // Quality" (a directory segment in the upstream URL, not a real title).
+        let effectiveTitle = title;
+        let effectiveCategory = category;
+        if ((!effectiveTitle || !effectiveCategory) && id) {
+          if (!isSeries) {
+            // Unambiguous: `id` is the same stream_id mapVodItem cached under
+            // `vod_info_${id}` during the normal catalog warm.
+            const vodInfo = await xtreamCache.get<any>(`vod_info_${id}`);
+            effectiveTitle = effectiveTitle || vodInfo?.info?.name || vodInfo?.movie_data?.name || undefined;
+            effectiveCategory = effectiveCategory || vodInfo?.info?.genre || undefined;
+          } else {
+            // Stalker sometimes has every episode in a season share the SAME `id`
+            // (the season pack's own catalog id), with `series` as the only thing
+            // distinguishing which episode — so `id` alone isn't trustworthy here.
+            // `ep_info_${id}` (populated during the normal series-info warm) records
+            // which episode number that id was last seen representing; only trust it
+            // if it matches the `series` value THIS request actually sent. If they
+            // disagree, `id` is shared across episodes and we can't tell which one
+            // this is — skip the fallback rather than risk labeling the wrong episode.
+            const epInfo = await xtreamCache.get<any>(`ep_info_${id}`);
+            if (epInfo && String(epInfo.seriesNum) === String(series)) {
+              const seriesInfo = await xtreamCache.get<any>(`series_info_${epInfo.movieId}`);
+              const seasonEpisodes = seriesInfo?.episodes?.[String(epInfo.seasonId)] || [];
+              const epEntry = seasonEpisodes.find((e: any) => String(e.id) === String(id));
+              if (!effectiveTitle && seriesInfo?.info?.name && epEntry?.title) {
+                effectiveTitle = `${seriesInfo.info.name} - ${epEntry.title}`;
+              }
+              effectiveCategory = effectiveCategory || seriesInfo?.info?.genre || undefined;
+            }
+          }
+        }
+
         let movieLink: any;
         if (isSeries) {
           movieLink = await serverManager.getProvider().getSeriesLink({
@@ -356,7 +507,7 @@ export const movieRoutes: ServerRoute[] = [
               return h.response({ error: "Unauthorized" }).code(401);
             }
             const downloadToken = mintDownloadToken(
-              { path: rawUrl, isSeries: Boolean(isSeries), title: title as string | undefined },
+              { path: rawUrl, isSeries: Boolean(isSeries), title: effectiveTitle as string | undefined },
               userLabel
             );
             const proxiedDownloadUrl = `/api/v2/download?t=${downloadToken}`;
@@ -385,8 +536,8 @@ export const movieRoutes: ServerRoute[] = [
           }
           const tokenizedUrl = proxyUrlFor(rawUrl, userLabel, {
             kind: isSeries ? "series" : "movie",
-            label: title,
-            category,
+            label: effectiveTitle,
+            category: effectiveCategory,
           });
           if (movieLink.js) movieLink.js.cmd = tokenizedUrl;
           else movieLink.cmd = tokenizedUrl;

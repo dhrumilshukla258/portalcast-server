@@ -234,26 +234,24 @@ export const protocolRoutes: ServerRoute[] = [
           if (search) {
             const genres = await readGenres("movie");
             const hiddenIds = await getHiddenGenreIds("movie");
+            const visibleIds = genres
+              .filter((g) => g.id && g.id !== "*" && !hiddenIds.has(String(g.id)))
+              .map((g) => `vod_streams_${g.id}`);
+            const cachedByKey = await xtreamCache.getMany<any[]>(visibleIds);
             const all: any[] = [];
-            for (const genre of genres) {
-              if (!genre.id || genre.id === "*") continue;
-              if (hiddenIds.has(String(genre.id))) continue;
-              const cached = await xtreamCache.get<any[]>(`vod_streams_${genre.id}`);
-              if (cached) all.push(...cached);
-            }
+            for (const key of visibleIds) { const cached = cachedByKey.get(key); if (cached) all.push(...cached); }
             const term = search.toLowerCase();
             rawResult = all.filter((m: any) => m.name?.toLowerCase().includes(term));
             logger.info(`[player_api] get_vod_streams search="${search}": ${rawResult.length}`);
           } else if (!category_id) {
             const genres = await readGenres("movie");
             const hiddenIds = await getHiddenGenreIds("movie");
+            const visibleIds = genres
+              .filter((g) => g.id && g.id !== "*" && !hiddenIds.has(String(g.id)))
+              .map((g) => `vod_streams_${g.id}`);
+            const cachedByKey = await xtreamCache.getMany<any[]>(visibleIds);
             const all: any[] = [];
-            for (const genre of genres) {
-              if (!genre.id || genre.id === "*") continue;
-              if (hiddenIds.has(String(genre.id))) continue;
-              const cached = await xtreamCache.get<any[]>(`vod_streams_${genre.id}`);
-              if (cached) all.push(...cached);
-            }
+            for (const key of visibleIds) { const cached = cachedByKey.get(key); if (cached) all.push(...cached); }
             rawResult = all;
             logger.info(`[player_api] get_vod_streams (all): ${all.length} movies`);
           } else if (category_id.startsWith("vcat_")) {
@@ -344,26 +342,24 @@ export const protocolRoutes: ServerRoute[] = [
           if (search) {
             const genres = await readGenres("series");
             const hiddenIds = await getHiddenGenreIds("series");
+            const visibleIds = genres
+              .filter((g) => g.id && g.id !== "*" && !hiddenIds.has(String(g.id)))
+              .map((g) => `series_list_${g.id}`);
+            const cachedByKey = await xtreamCache.getMany<any[]>(visibleIds);
             const all: any[] = [];
-            for (const genre of genres) {
-              if (!genre.id || genre.id === "*") continue;
-              if (hiddenIds.has(String(genre.id))) continue;
-              const cached = await xtreamCache.get<any[]>(`series_list_${genre.id}`);
-              if (cached) all.push(...cached);
-            }
+            for (const key of visibleIds) { const cached = cachedByKey.get(key); if (cached) all.push(...cached); }
             const term = search.toLowerCase();
             rawResult = all.filter((s: any) => s.name?.toLowerCase().includes(term));
             logger.info(`[player_api] get_series search="${search}": ${rawResult.length}`);
           } else if (!category_id) {
             const genres = await readGenres("series");
             const hiddenIds = await getHiddenGenreIds("series");
+            const visibleIds = genres
+              .filter((g) => g.id && g.id !== "*" && !hiddenIds.has(String(g.id)))
+              .map((g) => `series_list_${g.id}`);
+            const cachedByKey = await xtreamCache.getMany<any[]>(visibleIds);
             const all: any[] = [];
-            for (const genre of genres) {
-              if (!genre.id || genre.id === "*") continue;
-              if (hiddenIds.has(String(genre.id))) continue;
-              const cached = await xtreamCache.get<any[]>(`series_list_${genre.id}`);
-              if (cached) all.push(...cached);
-            }
+            for (const key of visibleIds) { const cached = cachedByKey.get(key); if (cached) all.push(...cached); }
             rawResult = all;
             logger.info(`[player_api] get_series (all): ${all.length} series`);
           } else if (category_id.startsWith("vcat_")) {

@@ -27,6 +27,7 @@ Connects to a **Stalker portal** or **Xtream Codes API** and re-serves the conte
 - **Mixed-portal series detection** — portals that list series as VOD items with an `is_series`-style flag (configurable via `SERIES_FLAG`), and portals with a genuinely separate series endpoint, are both auto-detected and handled correctly (`portal_series_source` cache row records which kind each portal is)
 - **Xtream Codes API** — full protocol emulation (live, VOD, series, EPG, XMLTV)
 - **M3U + EPG** — standard playlist and XMLTV endpoints
+- **Discover** — Netflix-style genre/country/language/theme browse plus "Because You Watched" recommendations, built on a TMDB-enriched catalog cache that de-duplicates language/dub variants of the same title into one card — see `docs/skill-discover.md`
 - **Opaque stream tokens** — every stream URL (`?t=...`) is a random server-side token, never the real upstream address. Nothing a user can copy or inspect ever reveals the portal URL, upstream credentials, or lets an unauthenticated request stream through the server
 - **Admin Dashboard** — user stats, live "who's watching what right now" (type, title, category, user, IP, duration), STRM generation trigger — see `/admin` in the web UI
 - **Content Manager** — browser UI to rename, hide, move, and reorder content without touching the portal — available both standalone (`/contentmanager`) and as a tab inside the Admin Dashboard
@@ -85,7 +86,8 @@ Set provider type to **Xtream** in the profile form, then enter host, username, 
 |----------|---------|-------------|
 | `PORT` | `3000` | Listen port |
 | `JWT_SECRET` | — | **Required.** JWT signing key — server refuses to start if unset |
-| `ADMIN_EMAIL` | — | **Required for admin login.** Email address of the admin account |
+| `ADMIN_EMAIL` | — | **Required for admin login.** Email address of the admin account. If unset (and `ADMIN_EMAILS` is also unset), the server runs in bootstrap mode — logged at startup, refused entirely in production |
+| `ADMIN_EMAILS` | — | Comma-separated list of additional admin emails (alternative/addition to `ADMIN_EMAIL`) |
 | `ADMIN_PASSWORD` | — | **Required for admin login.** Admin password — server returns 503 if unset |
 | `STREAM_IDLE_TIMEOUT_MS` | `60000` | How long (ms) a stream can go quiet with no request before it's dropped from the "active streams" admin view. Raise this if players buffer ahead and legitimately go quiet between segment fetches |
 | `PUBLIC_BASE_URL` | — | Hard override for all generated URLs (e.g. `https://iptv.example.com`). If unset, URLs are derived per-request from `X-Forwarded-Proto`/`X-Forwarded-Host` (reverse proxy) or the request host — leave unset when the server is reached both via LAN ip:port and a proxied domain |
@@ -111,7 +113,7 @@ Full variable reference and all features → **[docs/features.md](docs/features.
 
 One user store (the `Users` table), reachable through several doors:
 
-**Admin** — log in with `ADMIN_EMAIL` + `ADMIN_PASSWORD` through the normal login, or via the password-only admin login `POST /api/auth/admin` (used by the Content Manager). If `ADMIN_EMAIL` is not set, the server runs in **bootstrap mode**: any email + `ADMIN_PASSWORD` logs in as admin, and a startup warning is printed — set `ADMIN_EMAIL` to lock this down.
+**Admin** — log in with `ADMIN_EMAIL` (or any address in `ADMIN_EMAILS`) + `ADMIN_PASSWORD` through the normal login, or via the password-only admin login `POST /api/auth/admin` (used by the Content Manager). If neither `ADMIN_EMAIL` nor `ADMIN_EMAILS` is set, the server runs in **bootstrap mode**: any email + `ADMIN_PASSWORD` logs in as admin, and a startup warning is printed (the server refuses to start this way in production) — set `ADMIN_EMAIL` to lock this down.
 
 **Users** — Email/password or Google OAuth via `/api/auth/*`. New users are pending until an admin approves them. TV apps pair via a device code flow: the TV displays a short code, the user enters it in the web UI, and the TV receives a JWT automatically.
 

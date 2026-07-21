@@ -5,6 +5,23 @@ import NodeCache from "node-cache";
 import { AxiosResponse } from "axios";
 import { logger } from "@/infra/logger";
 import { mintOrReuseStreamToken } from "@/services/StreamTokens";
+import { requestMetrics } from "@/services/RequestMetrics";
+import { segmentKey, primeSegment, readSegment, type CachedSegment } from "@/services/segmentCache";
+
+// Live playlist/segment fetches go straight to the portal's media URLs via httpClient,
+// bypassing the provider's makeRequest() (which only handles the portal's JSON API and
+// is already instrumented separately) — track these here so "requests to the portal"
+// covers the actual media traffic too, not just channel-link resolution calls.
+async function trackedGet(url: string, config: Record<string, any>) {
+  try {
+    const res = await httpClient.get(url, config);
+    requestMetrics.record("live", "success", res.status);
+    return res;
+  } catch (err: any) {
+    requestMetrics.record("live", "error", err?.response?.status);
+    throw err;
+  }
+}
 
 interface CacheRecord {
   baseUrl: string;
@@ -58,7 +75,7 @@ export class LiveStreamService {
       ? { "User-Agent": "VLC/3.0.16 LibVLC/3.0.16" }
       : {};
 
-    const res = await httpClient.get(masterUrl, { headers });
+    const res = await trackedGet(masterUrl, { headers });
 
     if (res.status >= 400) {
       throw new Error(`Upstream Error ${res.status}`);
@@ -113,7 +130,7 @@ export class LiveStreamService {
         const headers = initialConfig.providerType === "xtream"
           ? { "User-Agent": "VLC/3.0.16 LibVLC/3.0.16" }
           : {};
-        const res = await httpClient.get(url, { headers });
+        const res = await trackedGet(url, { headers });
 
         if (!isSubpath && [301, 302, 403].includes(res.status)) {
           const newMasterUrl = await serverManager
@@ -122,7 +139,7 @@ export class LiveStreamService {
             .then((res) => res.js.cmd);
 
           if (newMasterUrl) {
-            const refreshedRes = await httpClient.get(newMasterUrl, { headers });
+            const refreshedRes = await trackedGet(newMasterUrl, { headers });
 
             const finalUrl =
               refreshedRes.request?.res?.responseUrl || newMasterUrl;
@@ -172,7 +189,7 @@ export class LiveStreamService {
           const headers = initialConfig.providerType === "xtream"
             ? { "User-Agent": "VLC/3.0.16 LibVLC/3.0.16" }
             : {};
-          const refreshedRes = await httpClient.get(newMasterUrl, { headers });
+          const refreshedRes = await trackedGet(newMasterUrl, { headers });
 
           const finalUrl =
             refreshedRes.request?.res?.responseUrl || newMasterUrl;
@@ -350,7 +367,27 @@ export class LiveStreamService {
     const baseUrl = record.variantBaseUrl || record.baseUrl;
     const segmentUrl = new URL(segmentPath, baseUrl).href;
 
-    return await httpClient.get(segmentUrl, {
+    // Shared cache — same reasoning as the Stalker path in src/routes/live.ts:
+    // `cmd` is identical for every viewer of this channel (populateCache keys
+    // purely on `cmd`, never anything per-user), so a segment fetched for one
+    // viewer is reusable by the next instead of everyone independently
+    // re-fetching identical bytes from the portal. Range requests skip this —
+    // the cache only ever holds a full segment buffer, not partial ranges.
+    if (!headers?.range) {
+      const key = segmentKey(cmd, seqId);
+      primeSegment(key, () => this.fetchSegmentBuffer(segmentUrl, headers));
+      const seg = await readSegment(key);
+      if (seg) {
+        return {
+          data: seg.data,
+          status: 200,
+          headers: { "content-type": seg.contentType, "content-length": String(seg.data.length) },
+        };
+      }
+      // Buffered fetch failed — fall through to the streaming fetch below.
+    }
+
+    return await trackedGet(segmentUrl, {
       responseType: "stream",
       headers: {
         ...headers,
@@ -358,6 +395,18 @@ export class LiveStreamService {
       },
       skipRetry: true,
     } as any);
+  }
+
+  private async fetchSegmentBuffer(url: string, headers: any): Promise<CachedSegment | undefined> {
+    const res = await trackedGet(url, {
+      responseType: "arraybuffer",
+      headers: { ...headers, host: undefined },
+      skipRetry: true,
+    } as any);
+    return {
+      data: Buffer.from(res.data as any),
+      contentType: String(res.headers["content-type"] || "video/mp2t"),
+    };
   }
 }
 

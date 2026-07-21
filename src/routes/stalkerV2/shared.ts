@@ -19,6 +19,15 @@ export const streamUserLabel = (request: any): string | undefined => {
 
 export const CACHE_DURATION_MS = 4 * 60 * 60 * 1000; // 4 hours
 
+// Case-insensitive substring filter over an item list's display name, used
+// to search already-warmed DB cache entries instead of issuing a live portal
+// search. Lowercases the search term once up front rather than per item.
+export const filterBySearch = <T extends { name?: string }>(items: T[], search: string): T[] => {
+  if (!search) return items;
+  const needle = search.toLowerCase();
+  return items.filter((item) => String(item?.name ?? "").toLowerCase().includes(needle));
+};
+
 export const resolveStalkerUrl = (stalker: any, urlPath: string): string => {
   if (!urlPath) return "";
 
@@ -135,8 +144,14 @@ export async function* streamHlsSegments(
 // This keeps every page load fast regardless of TMDB's response time; the trade-off is a
 // brand-new (never-viewed) item may show without its TMDB image until a later reload.
 export async function enrichArtworkFromTmdb(items: any[], kind: "movie" | "series"): Promise<any[]> {
+  const cacheKeys = items.map((item: any) => {
+    const itemId = item.id ?? item.stream_id ?? item.series_id;
+    return itemId ? `tmdb_web_${kind}_${itemId}` : undefined;
+  });
+  const metaByKey = await xtreamCache.getMany<any>(cacheKeys.filter((k): k is string => !!k));
+
   return Promise.all(
-    items.map(async (item: any) => {
+    items.map(async (item: any, idx: number) => {
       const itemId = item.id ?? item.stream_id ?? item.series_id;
       if (!itemId) return item;
 
@@ -148,8 +163,8 @@ export async function enrichArtworkFromTmdb(items: any[], kind: "movie" | "serie
         ? item.backdrop_path
         : undefined;
 
-      const cacheKey = `tmdb_web_${kind}_${itemId}`;
-      const meta = await xtreamCache.get<any>(cacheKey);
+      const cacheKey = cacheKeys[idx]!;
+      const meta = metaByKey.get(cacheKey);
 
       if (meta === undefined || meta === null) {
         if (!(item.screenshot_uri && existingBackdrop && item.actors && item.director)) {
@@ -168,6 +183,11 @@ export async function enrichArtworkFromTmdb(items: any[], kind: "movie" | "serie
           ...item,
           screenshot_uri: meta.poster || item.screenshot_uri,
           backdrop_path: meta.backdrop || existingBackdrop,
+          // No `existingBackdrop` fallback here — that's a portal-supplied
+          // image of unknown resolution, so it can't be trusted as "high-res"
+          // the way a TMDB-confirmed backdropHd pick can. Only ever the
+          // TMDB pick, or nothing (AmbientBackdrop skips items without it).
+          backdrop_hd_path: meta.backdropHd || undefined,
           description: item.description || meta.overview || item.description,
           actors: item.actors || meta.cast || item.actors,
           director: item.director || meta.director || item.director,

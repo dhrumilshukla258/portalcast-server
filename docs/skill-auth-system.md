@@ -1,6 +1,6 @@
 # Auth System — Skill Reference
 
-This doc captures the full authentication system implemented in `feature/dual-portal-xtream-support` (commit `54846ea`). Reference this before touching anything in `src/routes/auth.ts`, `src/auth/jwt.ts`, `src/auth/password.ts`, `src/auth/email.ts`, or `src/models/User.ts` / `src/models/DeviceCode.ts`.
+This doc captures the full authentication system implemented in `feature/dual-portal-xtream-support` (commit `54846ea`). Reference this before touching anything in `src/routes/account/auth.ts`, `src/auth/jwt.ts`, `src/auth/password.ts`, `src/auth/email.ts`, or `src/models/User.ts` / `src/models/DeviceCode.ts`.
 
 ---
 
@@ -100,7 +100,7 @@ Admin self-protection guards prevent: disabling own account, downgrading own rol
 
 ## Key Files
 
-- `src/routes/auth.ts` — all auth endpoints
+- `src/routes/account/auth.ts` — all auth endpoints
 - `src/auth/jwt.ts` — `createJWT`, `verifyJWT`, `authCheck`
 - `src/auth/password.ts` — `hashPassword`, `verifyPassword` (PBKDF2)
 - `src/auth/email.ts` — `sendAdminApprovalRequest`, `sendUserApprovedEmail` (nodemailer)

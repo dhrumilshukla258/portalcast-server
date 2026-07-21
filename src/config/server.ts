@@ -1,5 +1,5 @@
 import fs from "fs";
-import { AppConfig, Config } from "@/types/types";
+import { AppConfig, Config } from "@/types/domain";
 import { ConfigProfile } from "@/models/ConfigProfile";
 import { Token } from "@/models/Token";
 import { logger } from "@/infra/logger";

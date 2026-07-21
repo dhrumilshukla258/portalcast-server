@@ -8,13 +8,26 @@ import {
   Program,
   Programs,
   Video,
-} from "@/types/types";
-import { IProvider } from "@/interfaces/Provider";
+} from "@/types/domain";
+import { IProvider } from "@/providers/Provider";
 import axios from "axios";
 import { initialConfig } from "@/config/server";
 import NodeCache from "node-cache";
 import { logger } from "@/infra/logger";
 import { CircuitBreaker } from "@/streaming/circuitBreaker";
+import { requestMetrics, PortalRequestCategory } from "@/services/RequestMetrics";
+
+// Xtream's action names are explicit about what they're for, unlike the Stalker
+// portal's shared type:"vod" — so this classification is exact, not best-effort.
+function classifyXtreamRequest(params: Record<string, any>): PortalRequestCategory {
+  const action = String(params.action || "");
+  if (action.includes("live")) return "live";
+  if (action.includes("series")) return "series";
+  if (action.includes("vod") || action.includes("movie")) return "movie";
+  if (action.includes("epg")) return "epg";
+  if (!action) return "auth"; // getToken()/getExpiry() call makeRequest({}) with no action
+  return "other";
+}
 
 function parseDurationToMinutes(durationStr: string | undefined): number {
   if (!durationStr) return 0;
@@ -94,6 +107,32 @@ export class XtreamClient implements IProvider {
   private inFlight = new Map<string, Promise<any>>();
   private breaker = new CircuitBreaker("XtreamClient");
 
+  // getMovies/getSeries fetch the ENTIRE catalog from the upstream portal (no
+  // native server-side pagination in the Xtream protocol) and paginate with an
+  // in-memory .slice() — the raw upstream response is already cached by
+  // makeRequest(), but every call still redundantly re-runs .map()/.filter()/.sort()
+  // over the full list just to return a different 14-item slice. Callers like
+  // fetchAllPages() page through category:'*' sequentially (once per page), so a
+  // large catalog means that map/filter/sort work repeats total/14 times. Cache
+  // the processed (mapped+filtered+sorted, pre-slice) array for a few seconds so
+  // a single pagination burst only pays that cost once.
+  private processedListCache = new Map<string, { items: any[]; expiresAt: number }>();
+  private readonly PROCESSED_LIST_TTL_MS = 10_000;
+
+  private getProcessedList(cacheKey: string): any[] | undefined {
+    const entry = this.processedListCache.get(cacheKey);
+    if (!entry) return undefined;
+    if (entry.expiresAt < Date.now()) {
+      this.processedListCache.delete(cacheKey);
+      return undefined;
+    }
+    return entry.items;
+  }
+
+  private setProcessedList(cacheKey: string, items: any[]): void {
+    this.processedListCache.set(cacheKey, { items, expiresAt: Date.now() + this.PROCESSED_LIST_TTL_MS });
+  }
+
   constructor() {
     const protocol = initialConfig.https ? "https" : "http";
     this.baseUrl = `${protocol}://${initialConfig.hostname}:${initialConfig.port}`;
@@ -146,11 +185,13 @@ export class XtreamClient implements IProvider {
       .then((response) => {
         this.breaker.recordSuccess();
         this.cache.set(cacheKey, response.data);
+        requestMetrics.record(classifyXtreamRequest(params), "success");
         return response.data;
       })
       .catch((error) => {
         this.breaker.recordFailure();
         logger.error(`XtreamClient request failed: ${error?.message ?? error}`);
+        requestMetrics.record(classifyXtreamRequest(params), "error", axios.isAxiosError(error) ? error.response?.status : undefined);
         throw error;
       })
       .finally(() => {
@@ -183,6 +224,7 @@ export class XtreamClient implements IProvider {
 
   clearCache(): void {
     this.cache.flushAll();
+    this.processedListCache.clear();
   }
 
   async getChannelGroups(): Promise<Data<Genre[]>> {
@@ -345,42 +387,49 @@ export class XtreamClient implements IProvider {
       reqParams.category_id = params.category;
     }
 
-    const data = await this.makeRequest(reqParams);
-    
-    if (!Array.isArray(data)) {
-      logger.warn(`XtreamClient.getMovies expected an array, got: ${typeof data}`);
-      return { js: { total_items: 0, max_page_items: 0, data: [] } };
-    }
+    const processedKey = `movies:${params.category ?? "*"}:${params.search ?? ""}:${params.sort ?? ""}`;
+    let filteredVideos = this.getProcessedList(processedKey);
 
-    const videos: Video[] = data.map((item: any) => ({
-      id: item.stream_id,
-      name: item.name,
-      cmd: `${this.baseUrl}/movie/${this.username}/${this.password}/${item.stream_id}.${item.container_extension}`,
+    if (!filteredVideos) {
+      const data = await this.makeRequest(reqParams);
 
-      screenshot_uri: item.stream_icon,
-      category_id: item.category_id,
-      time: item.added ? parseInt(item.added) : 0,
-      rating_imdb: item.rating,
-      runtime: item.duration_secs
-        ? Math.floor(parseInt(item.duration_secs) / 60)
-        : 0,
-    }));
-
-    let filteredVideos = params.search
-      ? videos.filter((v) =>
-          v.name.toLowerCase().includes(params.search!.toLowerCase()),
-        )
-      : videos;
-
-    if (params.sort) {
-      const s = params.sort.toLowerCase();
-      if (s === "latest" || s === "added") {
-        filteredVideos.sort((a, b) => b.time - a.time);
-      } else if (s === "oldest") {
-        filteredVideos.sort((a, b) => a.time - b.time);
-      } else if (s === "alphabetic" || s === "name") {
-        filteredVideos.sort((a, b) => a.name.localeCompare(b.name));
+      if (!Array.isArray(data)) {
+        logger.warn(`XtreamClient.getMovies expected an array, got: ${typeof data}`);
+        return { js: { total_items: 0, max_page_items: 0, data: [] } };
       }
+
+      const videos: Video[] = data.map((item: any) => ({
+        id: item.stream_id,
+        name: item.name,
+        cmd: `${this.baseUrl}/movie/${this.username}/${this.password}/${item.stream_id}.${item.container_extension}`,
+
+        screenshot_uri: item.stream_icon,
+        category_id: item.category_id,
+        time: item.added ? parseInt(item.added) : 0,
+        rating_imdb: item.rating,
+        runtime: item.duration_secs
+          ? Math.floor(parseInt(item.duration_secs) / 60)
+          : 0,
+      }));
+
+      filteredVideos = params.search
+        ? videos.filter((v) =>
+            v.name.toLowerCase().includes(params.search!.toLowerCase()),
+          )
+        : videos;
+
+      if (params.sort) {
+        const s = params.sort.toLowerCase();
+        if (s === "latest" || s === "added") {
+          filteredVideos.sort((a, b) => b.time - a.time);
+        } else if (s === "oldest") {
+          filteredVideos.sort((a, b) => a.time - b.time);
+        } else if (s === "alphabetic" || s === "name") {
+          filteredVideos.sort((a, b) => a.name.localeCompare(b.name));
+        }
+      }
+
+      this.setProcessedList(processedKey, filteredVideos);
     }
 
     const page = params.page ? Number(params.page) : 1;
@@ -583,51 +632,58 @@ export class XtreamClient implements IProvider {
       reqParams.category_id = params.category;
     }
 
-    const data = await this.makeRequest(reqParams);
-    
-    if (!Array.isArray(data)) {
-      logger.warn(`XtreamClient.getSeries expected an array, got: ${typeof data}`);
-      return { js: { total_items: 0, max_page_items: 0, data: [] } };
-    }
+    const processedKey = `series:${params.category ?? "*"}:${params.search ?? ""}:${params.sort ?? ""}`;
+    let filteredSeries = this.getProcessedList(processedKey);
 
-    const series: Video[] = data.map((item: any) => ({
-      id: item.series_id,
-      name: item.name,
-      cmd: "",
-      screenshot_uri: item.cover,
-      category_id: item.category_id,
-      time: item.last_modified
-        ? parseInt(item.last_modified)
-        : item.added
-          ? parseInt(item.added)
-          : 0,
-      rating_imdb: item.rating,
-      series: [],
-      is_series: 1,
-      // Enriched Metadata
-      description: (item.plot || "").trim() || "No description available",
-      director: (item.director || "").trim() || "-",
-      actors: (item.cast || "").trim() || "-",
-      genres_str: (item.genre || "").trim() || "-",
-      year: (item.releaseDate ? item.releaseDate.split("-")[0] : "").trim() || "-",
-      country: (item.country || "").trim() || "-",
-    }));
+    if (!filteredSeries) {
+      const data = await this.makeRequest(reqParams);
 
-    let filteredSeries = params.search
-      ? series.filter((s) =>
-          s.name.toLowerCase().includes(params.search!.toLowerCase()),
-        )
-      : series;
-
-    if (params.sort) {
-      const s = params.sort.toLowerCase();
-      if (s === "latest" || s === "added") {
-        filteredSeries.sort((a, b) => b.time - a.time);
-      } else if (s === "oldest") {
-        filteredSeries.sort((a, b) => a.time - b.time);
-      } else if (s === "alphabetic" || s === "name") {
-        filteredSeries.sort((a, b) => a.name.localeCompare(b.name));
+      if (!Array.isArray(data)) {
+        logger.warn(`XtreamClient.getSeries expected an array, got: ${typeof data}`);
+        return { js: { total_items: 0, max_page_items: 0, data: [] } };
       }
+
+      const series: Video[] = data.map((item: any) => ({
+        id: item.series_id,
+        name: item.name,
+        cmd: "",
+        screenshot_uri: item.cover,
+        category_id: item.category_id,
+        time: item.last_modified
+          ? parseInt(item.last_modified)
+          : item.added
+            ? parseInt(item.added)
+            : 0,
+        rating_imdb: item.rating,
+        series: [],
+        is_series: 1,
+        // Enriched Metadata
+        description: (item.plot || "").trim() || "No description available",
+        director: (item.director || "").trim() || "-",
+        actors: (item.cast || "").trim() || "-",
+        genres_str: (item.genre || "").trim() || "-",
+        year: (item.releaseDate ? item.releaseDate.split("-")[0] : "").trim() || "-",
+        country: (item.country || "").trim() || "-",
+      }));
+
+      filteredSeries = params.search
+        ? series.filter((s) =>
+            s.name.toLowerCase().includes(params.search!.toLowerCase()),
+          )
+        : series;
+
+      if (params.sort) {
+        const s = params.sort.toLowerCase();
+        if (s === "latest" || s === "added") {
+          filteredSeries.sort((a, b) => b.time - a.time);
+        } else if (s === "oldest") {
+          filteredSeries.sort((a, b) => a.time - b.time);
+        } else if (s === "alphabetic" || s === "name") {
+          filteredSeries.sort((a, b) => a.name.localeCompare(b.name));
+        }
+      }
+
+      this.setProcessedList(processedKey, filteredSeries);
     }
 
     const page = params.page ? Number(params.page) : 1;

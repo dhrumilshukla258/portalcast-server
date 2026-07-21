@@ -41,7 +41,7 @@ The frontend picks its player type (`application/x-mpegurl` vs `video/mp4`) by c
 
 - **Web UI**: JWT via `authCheck(request)` → `payload.email || "user:" + payload.userId`. See `streamUserLabel()` in `src/routes/stalkerV2/`.
 - **Xtream players** (TiviMate etc.): already-verified username from `resolveXtreamUser(username, password)` → label is `xtream:${username}`.
-- **Legacy plain-M3U export** (`/playlist.m3u`, `/vod/playlist.m3u` in `src/routes/playlist.ts`): same `xtream:${username}` label, since these routes already validate credentials via `resolveXtreamUser` before generating the playlist.
+- **Legacy plain-M3U export** (`/playlist.m3u`, `/vod/playlist.m3u` in `src/routes/streaming/playlist.ts`): same `xtream:${username}` label, since these routes already validate credentials via `resolveXtreamUser` before generating the playlist.
 
 ### Fail-closed rule
 
@@ -123,7 +123,7 @@ keyed by `${type}:${ip}:${resource}`, refreshing `lastSeen`. A session is swept 
 
 3. **Unsafe "already have the URL" shortcuts.** The frontend used to have `if (!isPortal && item.cmd) return item.cmd directly` shortcuts for Xtream-provider setups, skipping the backend call entirely for movie/episode playback. That's safe *only* for already-tokenized URLs (live channels via `mapChannel`, which now tokenizes for both provider types). For episode/movie *files*, `item.cmd` from the listing API is raw untokenized upstream data — using it directly both leaked the real URL to the browser and broke playback outright (browsers can't play an arbitrary external CDN URL — CORS/host issues). These shortcuts were removed; playback always resolves through the backend now, regardless of provider type.
 
-4. **There's more than one unauthenticated proxy surface.** `/portal/proxy` (`src/routes/portalProxy.ts`) is a second, independent route with the exact same base64-`url=` shape as `/api/proxy` — easy to miss in a security sweep if you only think to check the obvious one. Any future gating/security change to stream routes needs to enumerate *all* proxy-shaped routes (grep for `http.get`/`axios`/`httpClient` fetching a client-supplied URL), not just `proxy.ts`.
+4. **There's more than one unauthenticated proxy surface.** `/portal/proxy` (`src/routes/streaming/portalProxy.ts`) is a second, independent route with the exact same base64-`url=` shape as `/api/proxy` — easy to miss in a security sweep if you only think to check the obvious one. Any future gating/security change to stream routes needs to enumerate *all* proxy-shaped routes (grep for `http.get`/`axios`/`httpClient` fetching a client-supplied URL), not just `proxy.ts`.
 
 5. **Idle timeout too aggressive breaks the "active streams" view, not just cosmetics.** `IDLE_TIMEOUT_MS` started at 20s (matched to a fast-case HLS segment interval) and caused actively-playing streams to disappear from the admin view whenever a player buffered ahead and legitimately went quiet between fetches for longer than that. Tune this to the *slowest* realistic gap between requests for a healthy session, not the fastest — raised to 60s (`STREAM_IDLE_TIMEOUT_MS` env var).
 
@@ -133,12 +133,12 @@ keyed by `${type}:${ip}:${resource}`, refreshing `lastSeen`. A session is swept 
 
 - `src/services/StreamTokens.ts` — mint/resolve primitive
 - `src/services/StreamTracker.ts` — live session tracking
-- `src/routes/proxy.ts` — `/api/proxy`, `/api/proxy/stream`, the m3u8 rewriter
-- `src/routes/portalProxy.ts` — `/portal/proxy`
-- `src/routes/live.ts` — `/live.m3u8`, `/player/{token}`
+- `src/routes/streaming/proxy.ts` — `/api/proxy`, `/api/proxy/stream`, the m3u8 rewriter
+- `src/routes/streaming/portalProxy.ts` — `/portal/proxy`
+- `src/routes/streaming/live.ts` — `/live.m3u8`, `/player/{token}`
 - `src/services/LiveStreamService.ts` — Xtream-provider live HLS proxying
-- `src/routes/vod.ts` — `/api/vod/play`
-- `src/routes/subtitles.ts` — `/api/media/info`, `/api/media/subtitle` (embedded-subtitle extraction for progressive files)
+- `src/routes/streaming/vod.ts` — `/api/vod/play`
+- `src/routes/streaming/subtitles.ts` — `/api/media/info`, `/api/media/subtitle` (embedded-subtitle extraction for progressive files)
 - `src/routes/stalkerV2/` — `mapChannel`, `/api/v2/movie-link`, `/api/v2/channel-link`, `mintDownloadToken`, `/api/v2/download`, `/api/v2/download-link`, `/api/images/{slug*}` (unauthenticated but extension/path-restricted)
 - `src/routes/xtream/` — Xtream player stream endpoints
 - `src/providers/getM3uUrls.ts` — legacy plain-M3U export tokenization

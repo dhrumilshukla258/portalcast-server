@@ -90,7 +90,7 @@ Channel fetch is parallelized via `Promise.all`. XML entities are escaped (`&amp
 
 ---
 
-## M3U Format (`M3U` class, `src/types/types.ts`)
+## M3U Format (`M3U` class, `src/types/domain.ts`)
 
 ```
 #EXTM3U
@@ -111,7 +111,7 @@ Live segment URLs (`/player/{token}.ts`) carry an opaque, server-side, randomly-
 ## Key Files
 
 - `src/providers/getM3uUrls.ts` — `getM3uV2`, `getVodM3uV2`, `getEPGV2`, `buildVodM3u`
-- `src/types/types.ts` — `M3U`, `M3ULine` classes
+- `src/types/domain.ts` — `M3U`, `M3ULine` classes
 - `src/content/overrides.ts` — `applyGenreOverrides`, `applyChannelOverrides`, `applyPortalItemOverrides`
-- `src/routes/proxy.ts` — `handleProxyStream`
+- `src/routes/streaming/proxy.ts` — `handleProxyStream`
 - `src/services/StreamTokens.ts` — token minting used throughout this file, see [[skill-stream-tokens]]

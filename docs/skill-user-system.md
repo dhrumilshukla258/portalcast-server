@@ -21,7 +21,7 @@ Related: [[skill-auth-system]] for login/tokens, [[skill-admin-dashboard]] for h
 | `passwordHash` | STRING | PBKDF2 hash (null for Google-only users) |
 | `salt` | STRING | Salt for password hashing |
 | `preferences` | JSON | `{ preferredContentType, favorites[], recentChannels[] }` |
-| `lastLogin` | DATE | Set on every successful login (Google, admin-bootstrap, email/password — see `src/routes/auth.ts`). Powers the Admin Dashboard's "logged in last 24h/7d" stats and recent-logins list — see [[skill-admin-dashboard]] |
+| `lastLogin` | DATE | Set on every successful login (Google, admin-bootstrap, email/password — see `src/routes/account/auth.ts`). Powers the Admin Dashboard's "logged in last 24h/7d" stats and recent-logins list — see [[skill-admin-dashboard]] |
 | `openSubtitlesUsername` | STRING | OpenSubtitles account username, if the user has linked one — see [[skill-subtitles]] |
 | `openSubtitlesPasswordEnc` | TEXT | AES-256-GCM encrypted (reversible, not hashed — OpenSubtitles has no refresh-token flow, only re-login) via `src/auth/crypto.ts` |
 
@@ -57,7 +57,7 @@ Used as a generic API response cache. Check `expiresAt` before serving — expir
 
 ---
 
-## User API Routes (`src/routes/user.ts`)
+## User API Routes (`src/routes/account/user.ts`)
 
 All routes require a valid JWT (any role).
 
@@ -77,7 +77,7 @@ Progress is **profile-scoped** — switching active profile shows different hist
 
 ---
 
-## Admin User Management Routes (`src/routes/userManagement.ts`)
+## Admin User Management Routes (`src/routes/account/userManagement.ts`)
 
 All routes require `role === "admin"`.
 
@@ -116,5 +116,5 @@ When `PUT /api/admin/users/{id}` flips a user from `isActive: false` → `true`,
 - `src/models/User.ts`
 - `src/models/UserProgress.ts`
 - `src/models/ContentCache.ts`
-- `src/routes/user.ts`
-- `src/routes/userManagement.ts`
+- `src/routes/account/user.ts`
+- `src/routes/account/userManagement.ts`

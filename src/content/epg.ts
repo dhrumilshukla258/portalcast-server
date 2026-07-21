@@ -5,7 +5,7 @@ import {
   writeEpgCache,
 } from "../infra/storage";
 import { serverManager } from "@/serverManager";
-import { Channel, EPG_List, Genre } from "@/types/types";
+import { Channel, EPG_List, Genre } from "@/types/domain";
 import { initialConfig } from "@/config/server";
 import { ConfigProfile } from "@/models/ConfigProfile";
 import { logger } from "@/infra/logger";

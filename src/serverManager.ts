@@ -1,5 +1,5 @@
 import { Server } from "@hapi/hapi";
-import { IProvider } from "@/interfaces/Provider";
+import { IProvider } from "@/providers/Provider";
 import { stalkerApi } from "@/providers/stalker";
 import { XtreamClient } from "@/providers/xtream-client";
 import { initialConfig, loadActiveProfileFromDB } from "@/config/server";

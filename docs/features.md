@@ -84,7 +84,11 @@ The `STALKER_*` env vars below only pre-fill the *default* values shown when cre
 | `RATE_LIMIT_MAX` | `120` | Max requests per window per IP for public stream endpoints |
 | `RATE_LIMIT_WINDOW_MS` | `60000` | Sliding window size (ms) for rate limiting |
 
-Applies to: `/live/*`, `/movie/*`, `/series/*`, `/live.m3u8`, `/player/*`, `/api/vod/play`. Returns `429 Too Many Requests` when exceeded.
+Two independent per-IP buckets, not one shared bucket — `RATE_LIMIT_MAX`/`RATE_LIMIT_WINDOW_MS` apply separately to each:
+- **live**: `/live/*`, `/live.m3u8`, `/player/*`
+- **vod**: `/movie/*`, `/series/*`, `/api/media/*`, `/api/vod/play`
+
+Split this way (`src/server.ts`'s `onRequest` limiter) so a client hammering one (e.g. an hls.js retry loop with no backoff spamming `/live.m3u8`) exhausts only its own bucket and can't 429 the other content type for that same IP. Returns `429 Too Many Requests` when a bucket's limit is exceeded.
 
 ### Circuit Breaker
 

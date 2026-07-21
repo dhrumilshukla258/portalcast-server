@@ -2,6 +2,8 @@
 
 SQLite via Sequelize-TypeScript. DB path resolved by `src/db/index.ts`. All models are registered in `sequelize.models` array.
 
+Related: [[skill-discover]], [[skill-user-system]], [[skill-profiles-epg]]
+
 ---
 
 ## DB Path Resolution
@@ -35,6 +37,10 @@ Export: `databasePath` (used by pull-db.sh and diagnostics).
 | `DeviceCode` | `device_codes` | TV device auth codes (added in `54846ea`) |
 | `UserProgress` | `user_progress` | Per-user watch progress (added in `54846ea`) |
 | `ContentCache` | `content_cache` | Generic API response cache (added in `d954af5`) |
+| `ContentMeta` | `content_meta` | TMDB-enriched catalog cache powering Discover — see [[skill-discover]] |
+| `ContentGenre` | `content_genres` | Discover genre tags, one row per `(contentId, value)` — see [[skill-discover]] |
+| `ContentCountry` | `content_countries` | Discover country tags — see [[skill-discover]] |
+| `ContentTheme` | `content_themes` | Discover theme tags (curated TMDB keyword buckets) — see [[skill-discover]] |
 
 ---
 
@@ -90,6 +96,16 @@ And one migration that runs **after** `sync()`:
    **This check must run after `sync()`, not before** — `sync()` is what (re)introduces the stray constraint in the first place, so repairing it beforehand just gets silently undone by the `sync()` call that follows. (This ran in the wrong order for a while, which is why the bug kept resurfacing across restarts even though a fix had already shipped once.) On detection, recreates the table with the correct `PRIMARY KEY (userId, profileId, mediaId)`, preserving all rows via `INSERT OR IGNORE`.
 
 After all migrations: `sequelize.sync({ alter: true })` (called between the "before" and "after" migrations above) adds any missing columns non-destructively.
+
+### content_meta / Discover migrations (all after `sync()`, non-destructive)
+
+Added alongside the Discover feature ([[skill-discover]]) — each is a plain "add column/index if missing" check, safe to run on every startup:
+
+- Adds `groupKey`, `isRepresentative`, `trimmedName`, `portalCategoryId`, `backdrop`, `backdropHd`, `cast`, `director` columns to `content_meta` if missing (one-at-a-time, incremental — this feature's schema grew in several passes)
+- Adds `isRepresentative` to `content_genres`/`content_countries`/`content_themes` (denormalized copy — see [[skill-discover]]'s Performance section for why)
+- Ensures indexes on `content_meta.enrichedAt`, `content_meta.groupKey`, and a composite `(value, contentId)` index on each tag table — added after two separate perf incidents where missing indexes caused full-table scans/joins under real data volume
+- One-time backfill of `groupKey`/`trimmedName` for any `content_meta` row that predates those columns, then re-scopes `groupKey` to include `type` and `year` (fixes cross-type/cross-era title collisions — see `ContentMeta.ts`'s comment on why)
+- Recomputes `isRepresentative` (`recomputeRepresentatives()`) and normalizes legacy ISO country codes in `content_countries` to full names
 
 ---
 

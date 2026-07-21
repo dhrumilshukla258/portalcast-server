@@ -27,5 +27,13 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/public ./public
 COPY package.json ./
 
+# Node's sqlite3 driver runs queries on libuv's threadpool, shared with every
+# other async I/O op on the process — the default size (4) is easily saturated
+# by a handful of concurrent DB-heavy requests (e.g. Discover's facet/genre
+# queries), which then stalls unrelated requests, including active stream
+# playback, until the pool clears. Must be set as a real env var (not mutated
+# in JS) since libuv reads it once at startup, before any application code runs.
+ENV UV_THREADPOOL_SIZE=16
+
 ENTRYPOINT []
 CMD ["node", "dist/server.js"]

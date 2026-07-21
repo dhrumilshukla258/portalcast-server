@@ -110,7 +110,7 @@ Connect at `ws://server:3000/` — the frontend uses this to auto-reload when th
 
 ## Key Files
 
-- `src/routes/profiles.ts` — Profile CRUD API
+- `src/routes/account/profiles.ts` — Profile CRUD API
 - `src/models/ConfigProfile.ts` — Profile Sequelize model
 - `src/models/EpgCache.ts` — EPG cache model
 - `src/content/epg.ts` — EPG fetch and cache logic

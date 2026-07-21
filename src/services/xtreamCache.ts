@@ -1,3 +1,4 @@
+import { Op } from "sequelize";
 import { XtreamCache } from "@/models/XtreamCache";
 import { SystemConfig } from "@/models/SystemConfig";
 import { logger } from "@/infra/logger";
@@ -7,10 +8,54 @@ import { readGenres, upsertGenre, deleteGenre } from "@/infra/storage";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
 
+// ── In-process read cache ────────────────────────────────────────────────────
+// Every xtreamCache.get/set round-trips SQLite plus a full JSON.parse/stringify of
+// the value (categories can be thousands of items). This process is the only writer
+// to the table, so a short-TTL in-memory cache of the raw JSON string is safe: it
+// still parses fresh on every read (no shared mutable object references handed to
+// callers — same behavior as before) but skips the DB hit and read query entirely
+// for anything requested again within the window. Bursts of near-simultaneous reads
+// of the same key (multiple genres in a listing, several users browsing the same
+// category) are the common case this targets.
+const MEM_TTL_MS = 30 * 1000;
+const MEM_MAX_ENTRIES = 3000;
+const memRaw = new Map<string, { value: string; expiresAt: Date; cachedAt: number }>();
+
+function memGet(key: string): { value: string; expiresAt: Date } | undefined {
+  const entry = memRaw.get(key);
+  if (!entry) return undefined;
+  if (entry.cachedAt + MEM_TTL_MS < Date.now()) {
+    memRaw.delete(key);
+    return undefined;
+  }
+  return entry;
+}
+
+function memSet(key: string, value: string, expiresAt: Date): void {
+  if (!memRaw.has(key) && memRaw.size >= MEM_MAX_ENTRIES) {
+    const oldestKey = memRaw.keys().next().value;
+    if (oldestKey !== undefined) memRaw.delete(oldestKey);
+  }
+  memRaw.set(key, { value, expiresAt, cachedAt: Date.now() });
+}
+
+function memDelete(key: string): void {
+  memRaw.delete(key);
+}
+
 export const xtreamCache = {
   async get<T>(key: string): Promise<T | undefined> {
+    const hit = memGet(key);
+    if (hit) {
+      try {
+        return JSON.parse(hit.value) as T;
+      } catch {
+        return undefined;
+      }
+    }
     const row = await XtreamCache.findOne({ where: { key } });
     if (!row) return undefined;
+    memSet(key, row.value, row.expiresAt);
     try {
       return JSON.parse(row.value) as T;
     } catch {
@@ -18,9 +63,49 @@ export const xtreamCache = {
     }
   },
 
+  // Batched read for N lookups in a single round trip — use in place of N individual
+  // `get()` calls in a loop/Promise.all (e.g. enriching a page of catalog items).
+  async getMany<T>(keys: string[]): Promise<Map<string, T>> {
+    const result = new Map<string, T>();
+    if (keys.length === 0) return result;
+
+    const misses: string[] = [];
+    for (const key of keys) {
+      const hit = memGet(key);
+      if (!hit) { misses.push(key); continue; }
+      try {
+        result.set(key, JSON.parse(hit.value) as T);
+      } catch {
+        // skip unparsable entries, same as get()
+      }
+    }
+    if (misses.length === 0) return result;
+
+    const rows = await XtreamCache.findAll({ where: { key: { [Op.in]: misses } } });
+    for (const row of rows) {
+      memSet(row.key, row.value, row.expiresAt);
+      try {
+        result.set(row.key, JSON.parse(row.value) as T);
+      } catch {
+        // skip unparsable entries, same as get()
+      }
+    }
+    return result;
+  },
+
   async getWithStaleness<T>(key: string): Promise<{ value: T | undefined; isStale: boolean }> {
+    const hit = memGet(key);
+    if (hit) {
+      const isStale = hit.expiresAt < new Date();
+      try {
+        return { value: JSON.parse(hit.value) as T, isStale };
+      } catch {
+        return { value: undefined, isStale: true };
+      }
+    }
     const row = await XtreamCache.findOne({ where: { key } });
     if (!row) return { value: undefined, isStale: true };
+    memSet(key, row.value, row.expiresAt);
     const isStale = row.expiresAt < new Date();
     try {
       return { value: JSON.parse(row.value) as T, isStale };
@@ -31,10 +116,13 @@ export const xtreamCache = {
 
   async set(key: string, value: any): Promise<void> {
     const expiresAt = new Date(Date.now() + TTL_MS);
-    await XtreamCache.upsert({ key, value: JSON.stringify(value), expiresAt });
+    const raw = JSON.stringify(value);
+    await XtreamCache.upsert({ key, value: raw, expiresAt });
+    memSet(key, raw, expiresAt);
   },
 
   async delete(key: string): Promise<void> {
+    memDelete(key);
     await XtreamCache.destroy({ where: { key } });
   },
 };
@@ -64,6 +152,23 @@ export async function bumpVodVersion(): Promise<void> {
   } finally {
     bumpInProgress = false;
   }
+}
+
+// `portal_series_source` almost never changes at runtime (it's set once when the provider's
+// series mode is detected) but was being re-fetched from SQLite + JSON.parse'd on every single
+// VOD/series request. Memoize it for a short window so bursts of requests share one DB read,
+// while still picking up a change (e.g. provider switch) within a few seconds.
+const SERIES_SOURCE_TTL_MS = 5000;
+let seriesSourceCache: { value: boolean; expiresAt: number } | undefined;
+
+async function isNativeSeriesSource(): Promise<boolean> {
+  if (seriesSourceCache && seriesSourceCache.expiresAt > Date.now()) {
+    return seriesSourceCache.value;
+  }
+  const sourceRow = await XtreamCache.findOne({ where: { key: "portal_series_source" } });
+  const value = sourceRow ? JSON.parse(sourceRow.value) === "native" : false;
+  seriesSourceCache = { value, expiresAt: Date.now() + SERIES_SOURCE_TTL_MS };
+  return value;
 }
 
 export const vodVersioningEnabled = process.env.VOD_CATEGORY_VERSIONING === "true";
@@ -233,15 +338,23 @@ export async function getOrRefreshVodStreams(categoryId: string): Promise<any[]>
   return promise;
 }
 
-async function getOrRefreshVodStreamsInner(categoryId: string): Promise<any[]> {
-  const provider = serverManager.getProvider();
+// Stale-cache refresh used to run synchronously in the request path, blocking the
+// response on an upstream provider round-trip once per category per TTL window (24h).
+// The warm/catchup background jobs already keep content fresh on their own schedule,
+// so a stale read here is rare and the freshest-possible response isn't worth making
+// every unlucky first-request-of-the-day wait on the provider. Serve the stale cache
+// immediately and refresh it in the background instead; the next request picks up the
+// updated result. Deduped separately from vodRefreshInFlight (which only covers the
+// cache-miss path) so concurrent stale reads don't each kick off their own refresh.
+const vodBackgroundRefreshing = new Set<string>();
+const seriesBackgroundRefreshing = new Set<string>();
+
+function refreshVodStreamsInBackground(categoryId: string, cached: any[]): void {
+  if (vodBackgroundRefreshing.has(categoryId)) return;
+  vodBackgroundRefreshing.add(categoryId);
   const cacheKey = `vod_streams_${categoryId}`;
-  const { value: cached, isStale } = await xtreamCache.getWithStaleness<any[]>(cacheKey);
-
-  if (cached && !isStale) return cached;
-
-  if (cached) {
-    // Stale — fetch only new items; stop on first known item
+  (async () => {
+    const provider = serverManager.getProvider();
     const existingMovieIds = new Set(cached.map((m: any) => String(m.stream_id)));
     const existingSeries = await xtreamCache.get<any[]>(`series_list_${categoryId}`);
     const existingSeriesIds = new Set((existingSeries || []).map((s: any) => String(s.series_id)));
@@ -255,14 +368,28 @@ async function getOrRefreshVodStreamsInner(categoryId: string): Promise<any[]> {
     const newItems = newRaw.filter((i: any) => i[seriesFlag] != 1);
     if (newItems.length === 0) {
       await xtreamCache.set(cacheKey, cached);
-      return cached;
+      return;
     }
     const result = [
       ...newItems.map((m, idx) => mapVodItem(m, idx + 1, categoryId)),
       ...cached.map((m: any, idx: number) => ({ ...m, num: newItems.length + idx + 1 })),
     ];
     await xtreamCache.set(cacheKey, result);
-    return result;
+  })()
+    .catch((e: any) => logger.error(`[XtreamCache] Background refresh failed for ${cacheKey}: ${e.message}`))
+    .finally(() => vodBackgroundRefreshing.delete(categoryId));
+}
+
+async function getOrRefreshVodStreamsInner(categoryId: string): Promise<any[]> {
+  const provider = serverManager.getProvider();
+  const cacheKey = `vod_streams_${categoryId}`;
+  const { value: cached, isStale } = await xtreamCache.getWithStaleness<any[]>(cacheKey);
+
+  if (cached && !isStale) return cached;
+
+  if (cached) {
+    refreshVodStreamsInBackground(categoryId, cached);
+    return cached;
   }
 
   // Cache miss — full fetch
@@ -287,17 +414,12 @@ export async function getOrRefreshSeriesList(categoryId: string): Promise<any[]>
   return promise;
 }
 
-async function getOrRefreshSeriesListInner(categoryId: string): Promise<any[]> {
-  const provider = serverManager.getProvider();
+function refreshSeriesListInBackground(categoryId: string, cached: any[], isNativeSeries: boolean): void {
+  if (seriesBackgroundRefreshing.has(categoryId)) return;
+  seriesBackgroundRefreshing.add(categoryId);
   const cacheKey = `series_list_${categoryId}`;
-  const { value: cached, isStale } = await xtreamCache.getWithStaleness<any[]>(cacheKey);
-  const sourceRow = await XtreamCache.findOne({ where: { key: "portal_series_source" } });
-  const isNativeSeries = sourceRow ? JSON.parse(sourceRow.value) === "native" : false;
-
-  if (cached && !isStale) return cached;
-
-  if (cached) {
-    // Stale — fetch only new items
+  (async () => {
+    const provider = serverManager.getProvider();
     const existingSeriesIds = new Set(cached.map((s: any) => String(s.series_id)));
     const existingMovies = isNativeSeries ? null : await xtreamCache.get<any[]>(`vod_streams_${categoryId}`);
     const existingMovieIds = new Set((existingMovies || []).map((m: any) => String(m.stream_id)));
@@ -313,14 +435,29 @@ async function getOrRefreshSeriesListInner(categoryId: string): Promise<any[]> {
     const newItems = isNativeSeries ? newRaw : newRaw.filter((i: any) => i[seriesFlag] == 1);
     if (newItems.length === 0) {
       await xtreamCache.set(cacheKey, cached);
-      return cached;
+      return;
     }
     const result = [
       ...newItems.map((s, idx) => mapSeriesItem(s, idx + 1, categoryId)),
       ...cached.map((s: any, idx: number) => ({ ...s, num: newItems.length + idx + 1 })),
     ];
     await xtreamCache.set(cacheKey, result);
-    return result;
+  })()
+    .catch((e: any) => logger.error(`[XtreamCache] Background refresh failed for ${cacheKey}: ${e.message}`))
+    .finally(() => seriesBackgroundRefreshing.delete(categoryId));
+}
+
+async function getOrRefreshSeriesListInner(categoryId: string): Promise<any[]> {
+  const provider = serverManager.getProvider();
+  const cacheKey = `series_list_${categoryId}`;
+  const { value: cached, isStale } = await xtreamCache.getWithStaleness<any[]>(cacheKey);
+  const isNativeSeries = await isNativeSeriesSource();
+
+  if (cached && !isStale) return cached;
+
+  if (cached) {
+    refreshSeriesListInBackground(categoryId, cached, isNativeSeries);
+    return cached;
   }
 
   // Cache miss — full fetch
@@ -350,8 +487,7 @@ export async function warmSeriesCache(): Promise<boolean> {
   seriesWarmRunning = true;
   let newContentFound = false;
   try {
-    const sourceRow = await XtreamCache.findOne({ where: { key: "portal_series_source" } });
-    const isNativeSeries = sourceRow ? JSON.parse(sourceRow.value) === "native" : false;
+    const isNativeSeries = await isNativeSeriesSource();
     const genres = await readGenres("series");
     const provider = serverManager.getProvider();
 
@@ -563,8 +699,7 @@ export async function catchupScan(): Promise<void> {
   catchupRunning = true;
   try {
     const provider = serverManager.getProvider();
-    const sourceRow = await XtreamCache.findOne({ where: { key: "portal_series_source" } });
-    const isNativeSeries = sourceRow ? JSON.parse(sourceRow.value) === "native" : false;
+    const isNativeSeries = await isNativeSeriesSource();
 
     // ── Helper: reconcile a mixed movie+series category from getMovies() ────────
     const reconcileMovieGenre = async (genre: any) => {

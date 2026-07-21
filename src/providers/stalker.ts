@@ -9,8 +9,8 @@ import {
   Program,
   Programs,
   Video,
-} from "@/types/types";
-import { IProvider } from "@/interfaces/Provider";
+} from "@/types/domain";
+import { IProvider } from "@/providers/Provider";
 import axios, { AxiosError, AxiosRequestConfig } from "axios";
 import { httpClient } from "@/streaming/httpClient";
 import NodeCache from "node-cache";
@@ -18,9 +18,26 @@ import { Token } from "@/models/Token";
 import pLimit from "p-limit";
 import { logger } from "@/infra/logger";
 import { CircuitBreaker } from "@/streaming/circuitBreaker";
+import { requestMetrics, PortalRequestCategory } from "@/services/RequestMetrics";
 
 const requestLimit = pLimit(5);
 const PROVIDER_TIMEOUT = parseInt(process.env.PROVIDER_TIMEOUT || "120000", 10);
+
+// Best-effort classification from the Stalker portal's own request params. Note:
+// this portal's protocol uses type:"vod" for both movie AND series listing
+// (get_ordered_list) — there is no request-level field that tells them apart, only
+// a flag on the *response* data — so "vod" is bucketed as "movie" here. Good enough
+// for a request-volume dashboard; not meant to be an exact split.
+function classifyStalkerRequest(params: Record<string, any>): PortalRequestCategory {
+  const type = params.type;
+  const action = String(params.action || "");
+  if (type === "itv") return "live";
+  if (type === "series" && action === "get_categories") return "series";
+  if (type === "vod" || type === "series") return "movie";
+  if (action.includes("epg")) return "epg";
+  if (type === "stb" || action === "handshake" || action === "get_profile" || action === "get_token") return "auth";
+  return "other";
+}
 
 async function httpRequest<T = any>(
   url: string,
@@ -594,6 +611,7 @@ export class StalkerAPI implements IProvider {
               })(),
             );
           });
+          requestMetrics.record(classifyStalkerRequest(params), "success");
 
           if (
             (typeof response === "string" &&
@@ -622,6 +640,9 @@ export class StalkerAPI implements IProvider {
           }
           return response;
         } catch (error: any) {
+          const statusCode = axios.isAxiosError(error) ? error.response?.status : undefined;
+          requestMetrics.record(classifyStalkerRequest(params), "error", statusCode);
+
           const isAuthError =
             (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) ||
             (error instanceof Error && (error.message.includes("401") || error.message.includes("403")));

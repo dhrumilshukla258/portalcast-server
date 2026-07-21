@@ -4,8 +4,8 @@ import { ConfigProfile } from "@/models/ConfigProfile";
 import { liveStreamService } from "@/services/LiveStreamService";
 import { serverManager } from "@/serverManager";
 import { logger } from "@/infra/logger";
-import { initialConfig } from "@/config/server";
-import { handleProxyStream } from "../proxy";
+import { initialConfig, seriesFlag } from "@/config/server";
+import { handleProxyStream } from "../streaming/proxy";
 import { stalkerApi } from "@/providers/stalker";
 import { cmdPlayerV2 } from "@/streaming/cmdPlayer";
 import { streamTracker } from "@/services/StreamTracker";
@@ -35,7 +35,14 @@ async function handleStalkerVodStream(request: any, h: any) {
     let url: string = link?.js?.cmd || (item.cmd || item.url) || "";
     if (url.startsWith("ffrt ")) url = url.slice(5);
     logger.info(`[VOD stream] ${streamId} portal_id=${item.id} → ${url}`);
-    return h.redirect(proxyUrlFor(url, `xtream:${request.params.username}`, { kind: "movie", label: item.name })).code(302);
+    // `item` is whichever quality/language variant sorted first among possibly several
+    // entries the portal returns under this movie_id — its own `.name` is frequently a
+    // descriptor like "English / Excellent quality (1080)", not the movie's title. The
+    // real title is already sitting in our own catalog cache under the movie's id.
+    const vodInfo = await xtreamCache.get<any>(`vod_info_${streamId}`);
+    const label = vodInfo?.info?.name || vodInfo?.movie_data?.name || item.name;
+    const category = vodInfo?.info?.genre || undefined;
+    return h.redirect(proxyUrlFor(url, `xtream:${request.params.username}`, { kind: "movie", label, category })).code(302);
   } catch (err: any) {
     logger.error(`[VOD stream] ${err.message}`);
     return h.response({ error: err.message }).code(500);
@@ -49,6 +56,7 @@ async function handleStalkerSeriesStream(request: any, h: any) {
     const provider = serverManager.getProvider();
     let url: string | undefined;
     let label: string | undefined;
+    let category: string | undefined;
     const epInfo = await xtreamCache.get<{ movieId: number; seasonId: number; seriesNum: number }>(`ep_info_${id}`);
     if (epInfo) {
       const epData = await provider.getMovies({
@@ -61,8 +69,34 @@ async function handleStalkerSeriesStream(request: any, h: any) {
       const epItem = (epData?.js?.data || []).find((e: any) => String(e.id) === id)
         || epData?.js?.data?.[0];
       if (epItem) {
-        label = epItem.name;
+        // epItem.name is the raw portal item's own name, which for episode entries is
+        // often a quality/language descriptor rather than the episode's actual title.
+        // `id` here is exactly the key ep_info_ was populated under for this specific
+        // episode (no shared-id ambiguity, unlike movie-link's season-pack case), so
+        // series_info_ can be trusted directly to build the real title.
+        const seriesInfo = await xtreamCache.get<any>(`series_info_${epInfo.movieId}`);
+        const seasonEpisodes = seriesInfo?.episodes?.[String(epInfo.seasonId)] || [];
+        const epEntry = seasonEpisodes.find((e: any) => String(e.id) === id);
         const seriesNum = epItem.series_number ?? epInfo.seriesNum;
+
+        category = seriesInfo?.info?.genre || undefined;
+        if (seriesInfo?.info?.name && epEntry?.title) {
+          label = `${seriesInfo.info.name} - ${epEntry.title}`;
+        } else {
+          // series_info_ is only populated by the slow, rate-limited warmSeriesInfoCache
+          // job — a freshly-added or not-yet-warmed series won't have it yet. Rather than
+          // fall back to epItem.name (often a quality/language descriptor), do a one-off
+          // live lookup of just the series' own name. Costs one extra portal call, but
+          // only for this cold-cache case — not a recurring per-stream cost once warmed.
+          try {
+            const seriesData = await provider.getMovies({ category: "*", page: 1, movieId: epInfo.movieId });
+            const seriesItems: any[] = seriesData?.js?.data || [];
+            const seriesItem = seriesItems.find((i: any) => i[seriesFlag]) || seriesItems[0];
+            label = seriesItem?.name ? `${seriesItem.name} - Episode ${seriesNum}` : epItem.name;
+          } catch {
+            label = epItem.name;
+          }
+        }
         const link = await provider.getMovieLink({
           series:   String(seriesNum),
           id:       parseInt(String(epItem.id)),
@@ -93,7 +127,7 @@ async function handleStalkerSeriesStream(request: any, h: any) {
     }
     if (!url) return h.response({ error: "Episode not found" }).code(404);
     logger.info(`[Series stream] ep ${id} → ${url}`);
-    return h.redirect(proxyUrlFor(url, `xtream:${request.params.username}`, { kind: "series", label })).code(302);
+    return h.redirect(proxyUrlFor(url, `xtream:${request.params.username}`, { kind: "series", label, category })).code(302);
   } catch (err: any) {
     logger.error(`[Series stream] ${err.message}`);
     return h.response({ error: err.message }).code(500);

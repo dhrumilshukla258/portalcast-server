@@ -1,6 +1,8 @@
 import { Server as SocketIOServer, Socket } from "socket.io";
 import { Server } from "http";
 import { logger, setLogBroadcaster } from "@/infra/logger";
+import { verifyJWT } from "@/auth/jwt";
+import type { PortalRequestEvent } from "@/services/RequestMetrics";
 
 interface Device {
   id: string;
@@ -99,16 +101,38 @@ class SocketService {
         }
       });
 
-      socket.on("start_logging", () => {
+      // Live server logs and portal-request events are admin-only — anyone who can
+      // open a socket connection (device pairing/casting doesn't require auth) could
+      // otherwise subscribe to either just by knowing the event name. Require the
+      // same admin JWT the REST admin endpoints already check, passed in the event
+      // payload rather than gating the whole connection (regular receiver/controller
+      // casting has no admin token and must keep working unauthenticated).
+      socket.on("start_logging", (payload?: { token?: string }) => {
+        if (!this.isAdminToken(payload?.token)) return;
         socket.join("logging");
       });
 
       socket.on("stop_logging", () => {
         socket.leave("logging");
       });
+
+      socket.on("start_portal_metrics", (payload?: { token?: string }) => {
+        if (!this.isAdminToken(payload?.token)) return;
+        socket.join("portal-metrics");
+      });
+
+      socket.on("stop_portal_metrics", () => {
+        socket.leave("portal-metrics");
+      });
     });
 
     logger.info("[Socket] Service initialized");
+  }
+
+  private isAdminToken(token: string | undefined): boolean {
+    if (!token) return false;
+    const payload = verifyJWT(token);
+    return !!payload && payload.role === "admin";
   }
 
   private getReceivers(): Device[] {
@@ -142,6 +166,10 @@ class SocketService {
 
   public broadcastConfigChange(hash: string) {
     this.io?.emit("config_changed", { timestamp: Date.now(), hash });
+  }
+
+  public broadcastPortalRequest(event: PortalRequestEvent) {
+    this.io?.to("portal-metrics").emit("portal_request", event);
   }
 
   public getActiveDeviceCount(): number {

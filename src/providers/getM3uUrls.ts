@@ -1,4 +1,4 @@
-import { Channel, M3U, M3ULine } from "@/types/types";
+import { Channel, M3U, M3ULine } from "@/types/domain";
 import { initialConfig, seriesFlag } from "@/config/server";
 import { readChannels, readGenres } from "../infra/storage";
 import { serverManager } from "@/serverManager";
@@ -98,8 +98,9 @@ export async function getPlaylistV2() {
   const profileId = activeProfile?.id;
   const genres = await readGenres("channel", profileId);
   const allPrograms = await readChannels(profileId);
+  const genreById = new Map(genres.map((g: any) => [g.id, g]));
   const m3u = (allPrograms ?? []).filter((channel) => {
-    const genre = genres.find((r) => r.id === channel.tv_genre_id);
+    const genre = genreById.get(channel.tv_genre_id);
     if (!genre) return false;
     return matchesGroups(genre.title);
   });
@@ -152,20 +153,26 @@ export async function getEPGV2() {
   const profileId = activeProfile?.id;
   const genres = await readGenres("channel", profileId);
   const allPrograms = await readChannels(profileId);
+  const genreById = new Map(genres.map((g: any) => [g.id, g]));
   const channels = (allPrograms ?? []).filter((channel) => {
-    const genre = genres.find((r) => r.id === channel.tv_genre_id);
+    const genre = genreById.get(channel.tv_genre_id);
     if (!genre) return false;
     return matchesGroups(genre.title);
   });
 
-  let xmltv = '<?xml version="1.0" encoding="UTF-8"?>\n';
-  xmltv += '<!DOCTYPE tv SYSTEM "xmltv.dtd">\n';
-  xmltv += '<tv generator-info-name="Portalcast">\n';
+  // Building the XML via repeated `+=` on one big string is O(n^2) as the string
+  // grows (each concat re-copies the whole buffer) — push chunks into an array and
+  // join once instead, same output, no quadratic blowup for large channel counts.
+  const parts: string[] = [
+    '<?xml version="1.0" encoding="UTF-8"?>\n',
+    '<!DOCTYPE tv SYSTEM "xmltv.dtd">\n',
+    '<tv generator-info-name="Portalcast">\n',
+  ];
 
   channels.forEach((channel) => {
-    xmltv += `  <channel id="${channel.id}">\n`;
-    xmltv += `    <display-name>${channel.name}</display-name>\n`;
-    xmltv += `    <icon src="${
+    parts.push(`  <channel id="${channel.id}">\n`);
+    parts.push(`    <display-name>${channel.name}</display-name>\n`);
+    parts.push(`    <icon src="${
       channel.logo
         ? decodeURI(
             `http://${initialConfig.hostname}:${initialConfig.port}${
@@ -175,33 +182,36 @@ export async function getEPGV2() {
             }/misc/logos/320/${channel.logo}`,
           )
         : ""
-    }"/>\n`;
-    xmltv += `  </channel>\n`;
+    }"/>\n`);
+    parts.push(`  </channel>\n`);
   });
 
-  await Promise.all(
+  const programmeParts: string[][] = await Promise.all(
     channels.map(async (channel) => {
+      const chunks: string[] = [];
       try {
         const epg = await serverManager.getProvider().getEPG(channel.id);
         if (epg?.js) {
           epg.js.forEach((program) => {
-            xmltv += `  <programme start="${formatTimestamp(
+            chunks.push(`  <programme start="${formatTimestamp(
               program.start_timestamp,
             )}" stop="${formatTimestamp(program.stop_timestamp)}" channel="${
               channel.id
-            }">\n`;
-            xmltv += `    <title>${escapeXML(program.name)}</title>\n`;
-            xmltv += `  </programme>\n`;
+            }">\n`);
+            chunks.push(`    <title>${escapeXML(program.name)}</title>\n`);
+            chunks.push(`  </programme>\n`);
           });
         }
       } catch (error) {
         logger.error(`Failed to fetch EPG data for channel ${channel.name}: ${error}`);
       }
+      return chunks;
     }),
   );
+  for (const chunks of programmeParts) parts.push(...chunks);
 
-  xmltv += "</tv>";
-  return xmltv;
+  parts.push("</tv>");
+  return parts.join("");
 }
 
 // NOTE: the VOD playlist is cached for VOD_CACHE_TTL (6h) and shared across
@@ -220,6 +230,29 @@ async function buildVodM3u(serverUrl: string, userLabel?: string): Promise<strin
     xtreamCache.get<any[]>(`vod_streams_${catId}`).then((v) => v ?? []);
   const getSeriesCache = (catId: string) =>
     xtreamCache.get<any[]>(`series_list_${catId}`).then((v) => v ?? []);
+
+  // Virtual categories can point many overrides at the same source category —
+  // memoize each source category's items as a stream_id/series_id → item Map
+  // (built once per category) instead of re-fetching + linear-scanning it for
+  // every override that references it.
+  const vodItemMapCache = new Map<string, Promise<Map<string, any>>>();
+  const getVodItemMap = (catId: string) => {
+    let cached = vodItemMapCache.get(catId);
+    if (!cached) {
+      cached = getVodCache(catId).then((items) => new Map(items.map((i: any) => [String(i.stream_id), i])));
+      vodItemMapCache.set(catId, cached);
+    }
+    return cached;
+  };
+  const seriesItemMapCache = new Map<string, Promise<Map<string, any>>>();
+  const getSeriesItemMap = (catId: string) => {
+    let cached = seriesItemMapCache.get(catId);
+    if (!cached) {
+      cached = getSeriesCache(catId).then((items) => new Map(items.map((i: any) => [String(i.series_id), i])));
+      seriesItemMapCache.set(catId, cached);
+    }
+    return cached;
+  };
 
   const buildLine = (item: any, isSeries: boolean, groupTitle: string, groupId: string | number) => {
     const rawLogo = (item as any).screenshot_uri || (item as any).stream_icon || (item as any).cover || "";
@@ -256,16 +289,16 @@ async function buildVodM3u(serverUrl: string, userLabel?: string): Promise<strin
           for (const ov of movedMovies) {
             if (ov.hidden || !ov.original_category_id) continue;
             const itemId = ov.item_key.replace("movie_", "");
-            const srcItems = await getVodCache(ov.original_category_id);
-            const srcItem = srcItems.find((i: any) => String(i.stream_id) === itemId);
+            const srcItemMap = await getVodItemMap(ov.original_category_id);
+            const srcItem = srcItemMap.get(itemId);
             if (!srcItem) continue;
             lines.push(buildLine({ ...srcItem, id: itemId, name: ov.display_name ?? srcItem.name }, false, group.title, group.id));
           }
           for (const ov of movedSeries) {
             if (ov.hidden || !ov.original_category_id) continue;
             const itemId = ov.item_key.replace("series_", "");
-            const srcItems = await getSeriesCache(ov.original_category_id);
-            const srcItem = srcItems.find((i: any) => String(i.series_id) === itemId);
+            const srcItemMap = await getSeriesItemMap(ov.original_category_id);
+            const srcItem = srcItemMap.get(itemId);
             if (!srcItem) continue;
             lines.push(buildLine({ ...srcItem, id: itemId, name: ov.display_name ?? srcItem.name }, true, group.title, group.id));
           }

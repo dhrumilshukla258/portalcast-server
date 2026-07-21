@@ -24,6 +24,7 @@ import {
   applyGenreOverrides,
   applyChannelOverrides,
   applyPortalItemOverrides,
+  getHiddenGenreIds,
 } from "@/content/overrides";
 import { mintDownloadToken, DownloadPayload } from "@/services/downloadTokens";
 import crypto from "crypto";
@@ -33,6 +34,7 @@ import { getM3uV2, getVodM3uV2 } from "@/providers/getM3uUrls";
 import { channelLogoPath, proxiedLogoPath } from "@/providers/portalAssets";
 import { fetchMovieMeta, fetchTVMeta } from "@/content/tmdb";
 import { searchSubtitles, resolveSubtitleDownloadUrl } from "@/content/opensubtitles";
+import { pruneContentMeta } from "@/content/metaEnrichment";
 import {
   streamUserLabel,
   CACHE_DURATION_MS,
@@ -43,6 +45,7 @@ import {
   getActiveProfileId,
   generateCacheKey,
   mapChannel,
+  filterBySearch,
 } from "./shared";
 export const seriesRoutes: ServerRoute[] = [
   {
@@ -52,7 +55,7 @@ export const seriesRoutes: ServerRoute[] = [
       try {
         const profileId = (await getActiveProfileId()) || 0;
         const query = request.query as any;
-        const {
+        let {
           category = 0,
           movieId = 0,
           seasonId = 0,
@@ -65,6 +68,27 @@ export const seriesRoutes: ServerRoute[] = [
 
         if (category == 0 && movieId == 0) {
           return h.redirect("/api/v2/series-groups");
+        }
+
+        // Discover's item-open flow (App.tsx openDiscoverItem) doesn't know which
+        // real category a title lives in, so it always requests category="*" alongside
+        // a specific movieId. The movieId===0 fast path below explicitly doesn't cover
+        // this case, so without this resolution it falls all the way through to the
+        // live-provider call further down with category="*" — the exact "dozens of
+        // sequential HTTP round-trips" scan the comment there warns never completes
+        // under load. Resolve the real category from the already-warmed per-category
+        // cache first so a Discover click hits the same fast, cached path any other
+        // series lookup does.
+        if (Number(movieId) !== 0 && String(category) === "*") {
+          const genres = await readGenres("series", profileId);
+          for (const g of genres) {
+            if (!g.id || g.id === "*") continue;
+            const cached = await xtreamCache.get<any[]>(`series_list_${g.id}`);
+            if (cached?.some((s: any) => String(s.series_id) === String(movieId))) {
+              category = g.id;
+              break;
+            }
+          }
         }
 
         const cacheKey = generateCacheKey("series", query);
@@ -117,21 +141,40 @@ export const seriesRoutes: ServerRoute[] = [
         // Prefer already-warmed DB data over a live portal call for category browsing —
         // same getOrRefreshSeriesList() the Xtream player API uses, so both surfaces get
         // identical staleness/refresh behavior instead of the web UI trusting stale rows forever.
-        if (Number(movieId) === 0 && !search) {
-          const cachedSeries = await getOrRefreshSeriesList(String(category));
-          if (cachedSeries && cachedSeries.length > 0) {
-            // Existing cached series entries already carry rich data under Xtream-shaped
-            // field names (cover/plot/cast/genre) — map them to what the web UI expects
-            // instead of requiring every cache entry to be rebuilt from the portal.
-            const allNormalized = cachedSeries.map((s: any) => ({
-              ...s,
-              id: String(s.series_id),
-              [seriesFlag]: 1,
-              screenshot_uri: s.screenshot_uri || s.cover || "",
-              description: s.description || s.plot || "",
-              actors: s.actors || s.cast || "",
-              genres_str: s.genres_str || s.genre || "",
-            }));
+        //
+        // category === "*" ("All Series") is special: the warm cycle deliberately skips
+        // "*" as a category (it only warms real genre IDs), so treating it like any other
+        // category ID here would mean a real cache miss — triggering a full from-scratch
+        // portal pagination scan across every page of every series category. On a Stalker
+        // portal that's dozens of sequential HTTP round-trips, slow enough to time out the
+        // client and, worse, prone to getting rate-limited (429) by the portal itself. But
+        // every item "All Series" would return is already sitting in the per-category DB
+        // cache from the regular warm cycle — so build it by unioning those instead of ever
+        // touching the portal, the same way the Xtream player API already does for its
+        // no-category-id "all" request in protocol.ts.
+        if (Number(movieId) === 0 && String(category) === "*") {
+          const genres = await readGenres("series", profileId);
+          const hiddenIds = await getHiddenGenreIds("series");
+          const visibleIds = genres
+            .filter((g: any) => g.id && g.id !== "*" && !hiddenIds.has(String(g.id)))
+            .map((g: any) => `series_list_${g.id}`);
+          const cachedByKey = await xtreamCache.getMany<any[]>(visibleIds);
+          const cachedSeries: any[] = [];
+          for (const key of visibleIds) {
+            const cached = cachedByKey.get(key);
+            if (cached) cachedSeries.push(...cached);
+          }
+          if (cachedSeries.length > 0) {
+            const allNormalized = filterBySearch(cachedSeries, search)
+              .map((s: any) => ({
+                ...s,
+                id: String(s.series_id),
+                [seriesFlag]: 1,
+                screenshot_uri: s.screenshot_uri || s.cover || "",
+                description: s.description || s.plot || "",
+                actors: s.actors || s.cast || "",
+                genres_str: s.genres_str || s.genre || "",
+              }));
             const allOverridden = await applyPortalItemOverrides(allNormalized, "series", String(category), getSeriesCache);
             const offset = (startApiPage - 1) * itemsPerApiPage;
             const pageData = allOverridden.slice(offset, offset + itemsPerApiPage);
@@ -146,13 +189,80 @@ export const seriesRoutes: ServerRoute[] = [
               errors: false,
               isPortal: initialConfig.providerType === "stalker",
             };
-            await ContentCache.upsert({
-              profileId,
-              cacheKey,
-              response: responsePayload,
-              expiresAt: new Date(Date.now() + CACHE_DURATION_MS),
-            });
+            if (!search) {
+              await ContentCache.upsert({
+                profileId,
+                cacheKey,
+                response: responsePayload,
+                expiresAt: new Date(Date.now() + CACHE_DURATION_MS),
+              });
+            }
             return responsePayload;
+          }
+        }
+
+        if (Number(movieId) === 0) {
+          // getOrRefreshSeriesList() does a live full portal fetch on a cache
+          // miss — fine for normal browsing, but search must never touch the
+          // portal, so it reads whatever is already warmed and nothing more.
+          const cachedSeries = search
+            ? await xtreamCache.get<any[]>(`series_list_${category}`)
+            : await getOrRefreshSeriesList(String(category));
+          if (cachedSeries && cachedSeries.length > 0) {
+            // Existing cached series entries already carry rich data under Xtream-shaped
+            // field names (cover/plot/cast/genre) — map them to what the web UI expects
+            // instead of requiring every cache entry to be rebuilt from the portal.
+            const allNormalized = filterBySearch(cachedSeries, search)
+              .map((s: any) => ({
+                ...s,
+                id: String(s.series_id),
+                [seriesFlag]: 1,
+                screenshot_uri: s.screenshot_uri || s.cover || "",
+                description: s.description || s.plot || "",
+                actors: s.actors || s.cast || "",
+                genres_str: s.genres_str || s.genre || "",
+              }));
+            const allOverridden = await applyPortalItemOverrides(allNormalized, "series", String(category), getSeriesCache);
+            const offset = (startApiPage - 1) * itemsPerApiPage;
+            const pageData = allOverridden.slice(offset, offset + itemsPerApiPage);
+            const responsePayload = {
+              success: true,
+              page: Number(page),
+              pageAtaTime: 1,
+              total_items: allOverridden.length,
+              actual_length: itemsPerApiPage,
+              total_loaded: pageData.length,
+              data: await enrichArtworkFromTmdb(pageData, "series"),
+              errors: false,
+              isPortal: initialConfig.providerType === "stalker",
+            };
+            if (!search) {
+              await ContentCache.upsert({
+                profileId,
+                cacheKey,
+                response: responsePayload,
+                expiresAt: new Date(Date.now() + CACHE_DURATION_MS),
+              });
+            }
+            return responsePayload;
+          }
+
+          // Browsing/search never talks to the portal directly — only actual
+          // stream playback is allowed to reach it. If nothing is cached yet
+          // for this category, return an empty page instead of falling
+          // through to a live portal call below.
+          if (search) {
+            return {
+              success: true,
+              page: Number(page),
+              pageAtaTime: 1,
+              total_items: 0,
+              actual_length: itemsPerApiPage,
+              total_loaded: 0,
+              data: [],
+              errors: false,
+              isPortal: initialConfig.providerType === "stalker",
+            };
           }
         }
 
@@ -171,8 +281,52 @@ export const seriesRoutes: ServerRoute[] = [
 
         const rawData = res?.js?.data ?? [];
         let firstPageData = Number(movieId) === 0
-          ? (isNativeSeries ? rawData : rawData.filter((item: any) => item[seriesFlag] == 1))
+          ? (isNativeSeries
+              ? rawData.map((item: any) => ({ ...item, [seriesFlag]: 1 }))
+              : rawData.filter((item: any) => item[seriesFlag] == 1))
           : rawData;
+
+        // For episode-level requests refresh cmd via create_link — mirrors the
+        // same block in movies.ts. Without this, episode items keep whatever
+        // raw `cmd` the portal listing returned, which for season-pack-style
+        // portals (every episode sharing the same catalog `id`, only
+        // `series_number` distinguishing them) can be blank or identical
+        // across episodes. The webui then calls /api/v2/movie-link with no
+        // `cmd`, and the resolvedCmd fallback in getSeriesLink/getMovieLink
+        // uses the bare `id` — identical for every episode in the pack — so
+        // different episodes end up serving the same file.
+        if (Number(episodeId) > 0) {
+          for (const item of firstPageData as any[]) {
+            try {
+              const link = isNativeSeries
+                ? await serverManager.getProvider().getSeriesLink({
+                    series: String(item.series_number ?? "0"),
+                    id: Number(item.id),
+                    download: 0,
+                  })
+                : await serverManager.getProvider().getMovieLink({
+                    series: item.series_number ?? "0",
+                    id: Number(item.id),
+                    download: 0,
+                  });
+              const freshCmd = link?.js?.cmd;
+              if (freshCmd && typeof freshCmd === "string") {
+                item.cmd = freshCmd.startsWith("ffrt ") ? freshCmd.slice(5) : freshCmd;
+              }
+            } catch (err) {
+              logger.error(`[episode link] failed for id=${item.id}: ${err}`);
+            }
+          }
+        }
+
+        // A direct movieId lookup for the season list (not a specific season's
+        // episodes) that came back empty means the portal no longer has this
+        // series at all — same reasoning as the movies route's prune below.
+        if (Number(movieId) !== 0 && !seasonId && firstPageData.length === 0) {
+          pruneContentMeta(`series_${movieId}`, String(category)).catch((e) =>
+            logger.error({ err: e }, `[MetaEnrich] prune failed for series_${movieId}`)
+          );
+        }
 
         const portalTotal = res?.js?.total_items ?? 0;
         const ratio = isNativeSeries ? 1 : (rawData.length > 0 ? firstPageData.length / rawData.length : 1);

@@ -1,11 +1,12 @@
 <svg width="200" height="80" viewBox="0 0 200 80" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="pcGradientCard" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#7C3AED;" />
-      <stop offset="100%" style="stop-color:#06B6D4;" />
+      <stop offset="0%" style="stop-color:#00C6FF;" />
+      <stop offset="100%" style="stop-color:#0072FF;" />
     </linearGradient>
   </defs>
-  <rect width="200" height="80" fill="#111827"/>
+  <!-- Frosted glass panel, matching the app's translucent card/header treatment instead of a flat opaque fill -->
+  <rect width="200" height="80" rx="12" fill="#0b0d12" fill-opacity="0.45" stroke="#ffffff" stroke-opacity="0.1" />
   <circle cx="34" cy="40" r="20" fill="none" stroke="url(#pcGradientCard)" stroke-width="4" stroke-linecap="round" stroke-dasharray="108 8" />
   <path d="M28 32 L44 40 L28 49 Z" fill="url(#pcGradientCard)" />
   <text x="64" y="35" font-family="Arial, sans-serif" font-size="19" font-weight="bold" fill="url(#pcGradientCard)">

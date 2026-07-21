@@ -64,6 +64,37 @@ function removeStaleFile(outputDir: string, folderPath: string, fileName: string
   }
 }
 
+// Writes all unsynced entries concurrently (bounded) instead of one blocking
+// mkdirSync+writeFileSync pair per file — avoids stalling the event loop on
+// large libraries and skips mkdir syscalls for folders already created this run.
+const WRITE_CONCURRENCY = 32;
+
+async function writeEntries(outputDir: string, entries: any[], label: string): Promise<string[]> {
+  const madeDirs = new Set<string>();
+  const written: string[] = [];
+  let cursor = 0;
+
+  async function worker(): Promise<void> {
+    while (cursor < entries.length) {
+      const entry = entries[cursor++];
+      try {
+        const dir = path.join(outputDir, entry.folder_path);
+        if (!madeDirs.has(dir)) {
+          await fs.promises.mkdir(dir, { recursive: true });
+          madeDirs.add(dir);
+        }
+        await fs.promises.writeFile(path.join(dir, entry.file_name), entry.url, "utf8");
+        written.push(entry.id);
+      } catch (e: any) {
+        logger.error(`[STRM] ${label} ${entry.file_name}: ${e.message}`);
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(WRITE_CONCURRENCY, entries.length) }, worker));
+  return written;
+}
+
 // ── Public entry point ─────────────────────────────────────────────────────────
 
 let isGenerating = false;
@@ -133,23 +164,27 @@ async function generateMovies(outputDir: string): Promise<void> {
       if (seen.has(id)) continue;
       seen.add(id);
 
-      const rawName    = sanitize(movie.name || `Movie_${id}`);
-      const year       = extractYear(movie.year || movie.added || "");
-      const folderName = year ? `${rawName} (${year})` : rawName;
-      const tags       = extractTags(folderName);
-      const ext        = movie.container_extension || "mp4";
-      const url        = `${base}/movie/${u}/${p}/${id}.${ext}`;
-      const entryId    = `movie_${id}`;
-      const existing   = existingById.get(entryId);
+      const rawName      = sanitize(movie.name || `Movie_${id}`);
+      const year         = extractYear(movie.year || movie.added || "");
+      const folderName   = year ? `${rawName} (${year})` : rawName;
+      const canonicalKey = normalize(folderName);
+      const tags         = extractTags(folderName);
+      const ext          = movie.container_extension || "mp4";
+      const url          = `${base}/movie/${u}/${p}/${id}.${ext}`;
+      const entryId      = `movie_${id}`;
+      const existing     = existingById.get(entryId);
 
-      if (!existing || existing.url !== url || existing.raw_folder !== folderName) {
+      // Re-check canonical_key too, not just url/raw_folder — a titleClean.ts normalization
+      // change (new alias, bug fix) must retroactively reflow already-generated entries into
+      // their new merge groups, not just apply to newly-discovered content.
+      if (!existing || existing.url !== url || existing.raw_folder !== folderName || existing.canonical_key !== canonicalKey) {
         if (existing && existing.raw_folder !== folderName) {
           // title changed upstream — drop the old file, it'll be rewritten under the new name/folder
           removeStaleFile(outputDir, existing.folder_path, existing.file_name);
         }
         toUpsert.push({
           id:             entryId,
-          canonical_key:  normalize(folderName),
+          canonical_key:  canonicalKey,
           raw_folder:     folderName,
           variant_tags:   tags.length,
           folder_path:    folderName,
@@ -191,6 +226,7 @@ async function generateMovies(outputDir: string): Promise<void> {
     byKey.set(e.canonical_key, group);
   }
 
+  const mergeUpdates: any[] = [];
   for (const [, group] of byKey) {
     if (group.length <= 1) continue;
 
@@ -207,13 +243,20 @@ async function generateMovies(outputDir: string): Promise<void> {
 
       if (sec.folder_path !== primary.folder_path || sec.file_name !== mergedFile) {
         if (sec.synced_to_disk) removeStaleFile(outputDir, sec.folder_path, sec.file_name);
-        await StrmMovie.update(
-          { folder_path: primary.folder_path, file_name: mergedFile, synced_to_disk: false },
-          { where: { id: sec.id } },
-        );
+        mergeUpdates.push({
+          id:             sec.id,
+          canonical_key:  sec.canonical_key,
+          raw_folder:     sec.raw_folder,
+          variant_tags:   sec.variant_tags,
+          folder_path:    primary.folder_path,
+          file_name:      mergedFile,
+          url:            sec.url,
+          synced_to_disk: false,
+        });
       }
     }
   }
+  if (mergeUpdates.length > 0) await bulkUpsert(StrmMovie, mergeUpdates);
 
   // ── Phase 3: write unsynced entries to disk ───────────────────────────────────
 
@@ -224,16 +267,7 @@ async function generateMovies(outputDir: string): Promise<void> {
     return;
   }
 
-  const written: string[] = [];
-  for (const entry of toWrite) {
-    try {
-      fs.mkdirSync(path.join(outputDir, entry.folder_path), { recursive: true });
-      fs.writeFileSync(path.join(outputDir, entry.folder_path, entry.file_name), entry.url, "utf8");
-      written.push(entry.id);
-    } catch (e: any) {
-      logger.error(`[STRM] movie ${entry.file_name}: ${e.message}`);
-    }
-  }
+  const written = await writeEntries(outputDir, toWrite, "movie");
 
   for (let i = 0; i < written.length; i += CHUNK) {
     await StrmMovie.update({ synced_to_disk: true }, { where: { id: { [Op.in]: written.slice(i, i + CHUNK) } } });
@@ -268,13 +302,15 @@ async function generateSeries(outputDir: string): Promise<void> {
     const seriesList = await xtreamCache.get<any[]>(`series_list_${genre.id}`);
     if (!seriesList) { cacheIncomplete = true; continue; }
 
-    for (const series of seriesList) {
+    const uniqueSeries = seriesList.filter((s) => s.series_id && !seenShows.has(s.series_id as number));
+    for (const s of uniqueSeries) seenShows.add(s.series_id as number);
+    const infoByKey = await xtreamCache.getMany<any>(uniqueSeries.map((s) => `series_info_${s.series_id}`));
+
+    for (const series of uniqueSeries) {
       const seriesId = series.series_id as number;
-      if (!seriesId || seenShows.has(seriesId)) continue;
-      seenShows.add(seriesId);
 
       try {
-        const seriesInfo = await xtreamCache.get<any>(`series_info_${seriesId}`);
+        const seriesInfo = infoByKey.get(`series_info_${seriesId}`);
         if (!seriesInfo?.episodes) { cacheIncomplete = true; continue; }
 
         const rawName  = sanitize(series.name || `Series_${seriesId}`);
@@ -300,7 +336,9 @@ async function generateSeries(outputDir: string): Promise<void> {
             const ext      = ep.container_extension || "mp4";
             const url      = `${base}/series/${u}/${p}/${epId}.${ext}`;
 
-            if (!existing || existing.url !== url || existing.raw_folder !== showName) {
+            // Re-check canonical_key too, not just url/raw_folder — see the movies-phase
+            // comment above: normalization changes must reflow already-generated entries.
+            if (!existing || existing.url !== url || existing.raw_folder !== showName || existing.canonical_key !== canonicalKey) {
               if (existing && existing.raw_folder !== showName) {
                 // show renamed upstream — drop the old file, it'll be rewritten under the new name
                 removeStaleFile(outputDir, existing.folder_path, existing.file_name);
@@ -348,6 +386,7 @@ async function generateSeries(outputDir: string): Promise<void> {
     primaryShowByKey.set(key, sorted[0]);
   }
 
+  const mergeUpdates: any[] = [];
   for (const e of allEntries) {
     const primaryShow = primaryShowByKey.get(e.canonical_key);
     if (!primaryShow || e.raw_folder === primaryShow) continue;
@@ -358,12 +397,19 @@ async function generateSeries(outputDir: string): Promise<void> {
 
     if (e.folder_path !== mergedFolder || e.file_name !== mergedFile) {
       if (e.synced_to_disk) removeStaleFile(outputDir, e.folder_path, e.file_name);
-      await StrmSeries.update(
-        { folder_path: mergedFolder, file_name: mergedFile, synced_to_disk: false },
-        { where: { id: e.id } },
-      );
+      mergeUpdates.push({
+        id:             e.id,
+        canonical_key:  e.canonical_key,
+        raw_folder:     e.raw_folder,
+        variant_tags:   e.variant_tags,
+        folder_path:    mergedFolder,
+        file_name:      mergedFile,
+        url:            e.url,
+        synced_to_disk: false,
+      });
     }
   }
+  if (mergeUpdates.length > 0) await bulkUpsert(StrmSeries, mergeUpdates);
 
   // ── Phase 2b: prune episodes/shows no longer present upstream ───────────────
   // Skipped when any series' cache wasn't fully warmed — otherwise we'd delete
@@ -392,16 +438,7 @@ async function generateSeries(outputDir: string): Promise<void> {
     return;
   }
 
-  const written: string[] = [];
-  for (const entry of toWrite) {
-    try {
-      fs.mkdirSync(path.join(outputDir, entry.folder_path), { recursive: true });
-      fs.writeFileSync(path.join(outputDir, entry.folder_path, entry.file_name), entry.url, "utf8");
-      written.push(entry.id);
-    } catch (e: any) {
-      logger.error(`[STRM] episode ${entry.file_name}: ${e.message}`);
-    }
-  }
+  const written = await writeEntries(outputDir, toWrite, "episode");
 
   for (let i = 0; i < written.length; i += CHUNK) {
     await StrmSeries.update({ synced_to_disk: true }, { where: { id: { [Op.in]: written.slice(i, i + CHUNK) } } });
