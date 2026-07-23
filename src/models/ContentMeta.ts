@@ -45,6 +45,15 @@ export class ContentMeta extends Model {
   @Column(DataType.STRING)
   declare backdropHd: string;
 
+  // Set the moment backfillBackdrops() (metaEnrichment.ts) has attempted this
+  // row, regardless of outcome — a null `backdropHd` alone can't distinguish
+  // "never checked" from "checked, TMDB genuinely has no HD backdrop for
+  // this title," which used to make every backfill run re-fetch the same
+  // permanently-backdrop-less rows from TMDB forever. Filtering on this
+  // column instead means each row only ever gets fetched once.
+  @Column(DataType.DATE)
+  declare backdropCheckedAt: Date;
+
   @Column(DataType.STRING)
   declare year: string;
 

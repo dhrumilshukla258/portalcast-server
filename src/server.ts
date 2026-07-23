@@ -26,9 +26,10 @@ import { initDB } from "./db";
 import { migrateToProfiles, loadActiveProfileFromDB } from "./config/server";
 import { loadPlaylistCache } from "./providers/getM3uUrls";
 import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres, bumpVodVersion } from "./services/xtreamCache";
-import { enrichContentMeta } from "./content/metaEnrichment";
+import { enrichContentMeta, sweepStaleContent } from "./content/metaEnrichment";
 import { fetchAndCacheEpg, getEpgCache } from "./content/epg";
 import { EpgCache } from "./models/EpgCache";
+import { DeviceCode } from "./models/DeviceCode";
 import { Op } from "sequelize";
 import { getVodRefreshStatus } from "./providers/getM3uUrls";
 import { logger } from "./infra/logger";
@@ -100,10 +101,28 @@ const init = async () => {
   const RL_MAX = parseInt(process.env.RATE_LIMIT_MAX || "120", 10); // requests per window
   const RL_WINDOW = parseInt(process.env.RATE_LIMIT_WINDOW_MS || "60000", 10); // window in ms
   const rlMap = new Map<string, { count: number; windowStart: number }>();
+
+  // Separate, much stricter bucket for the admin login endpoint — it's
+  // publicly reachable (exempted from the global JWT gate, see onPreHandler
+  // below, since you need to call it to GET a token in the first place) and
+  // guards ADMIN_PASSWORD with a plain string comparison, no lockout of its
+  // own. Reusing the streaming-tuned RL_MAX (120/min, sized for legitimate
+  // HLS segment/playlist request volume) here would let an attacker try 120
+  // passwords a minute — the ~120min catalog CLAUDE.md search space online
+  // isn't the concern, someone script-brute-forcing a weak password is. A
+  // dedicated 5-attempts-per-5-minutes bucket per IP makes that impractical
+  // without touching the streaming limiter's tuning at all.
+  const ADMIN_LOGIN_RL_MAX = parseInt(process.env.ADMIN_LOGIN_RATE_LIMIT_MAX || "5", 10);
+  const ADMIN_LOGIN_RL_WINDOW = parseInt(process.env.ADMIN_LOGIN_RATE_LIMIT_WINDOW_MS || "300000", 10); // 5 min
+  const adminLoginRlMap = new Map<string, { count: number; windowStart: number }>();
+
   setInterval(() => {
     const now = Date.now();
     for (const [key, entry] of rlMap) {
       if (now - entry.windowStart > RL_WINDOW) rlMap.delete(key);
+    }
+    for (const [key, entry] of adminLoginRlMap) {
+      if (now - entry.windowStart > ADMIN_LOGIN_RL_WINDOW) adminLoginRlMap.delete(key);
     }
   }, RL_WINDOW);
 
@@ -111,6 +130,21 @@ const init = async () => {
 
   server.ext("onRequest", (request, h) => {
     const p = request.path;
+
+    if (p === "/api/auth/admin" && request.method.toUpperCase() === "POST") {
+      const ip = request.info.remoteAddress;
+      const now = Date.now();
+      const entry = adminLoginRlMap.get(ip);
+      if (!entry || now - entry.windowStart > ADMIN_LOGIN_RL_WINDOW) {
+        adminLoginRlMap.set(ip, { count: 1, windowStart: now });
+      } else {
+        entry.count++;
+        if (entry.count > ADMIN_LOGIN_RL_MAX) {
+          return h.response({ error: "Too Many Requests" }).code(429).takeover();
+        }
+      }
+    }
+
     // Bucketed by stream family, not one shared bucket for every public stream
     // route — a runaway client-side retry loop against live TV (e.g. hls.js
     // hammering /live.m3u8 with no backoff on error) must only exhaust its own
@@ -212,7 +246,7 @@ const init = async () => {
     method: "GET",
     path: "/{param*}",
     handler: (request, h) => {
-      const param = request.params.param || "";
+      const param = (request.params.param as string) || "";
       const filePath = path.join(
         process.cwd(),
         "public",
@@ -309,17 +343,33 @@ const init = async () => {
       await cleanupGenres().catch((e) => logger.error(`[cleanupGenres interval] ${e}`));
       await warmSeriesInfoCache().catch((e) => logger.error(`[warmSeriesInfoCache interval] ${e}`));
       enrichContentMeta().catch((e) => logger.error(`[enrichContentMeta interval] ${e}`));
+      sweepStaleContent().catch((e) => logger.error(`[sweepStaleContent interval] ${e}`));
     })();
   }, 24 * 60 * 60 * 1000);
 
-  // Daily DB cleanup: purge stale EPG entries (>7 days old).
+  // Daily DB cleanup: purge stale EPG entries (>7 days old) and expired TV
+  // device-pairing codes.
   // XtreamCache content rows are managed exclusively by the warm cycle's diff logic — do not delete them here.
+  //
+  // device_codes rows are only ever deleted on the successful-pairing path
+  // (routes/account/auth.ts) — an abandoned or expired QR/device-code pairing
+  // attempt just gets its status flipped to "expired" and the row itself
+  // sits there permanently otherwise. TV pairing is actively used, so these
+  // genuinely accumulate over time. Unlike XtreamCache, there's no stale-serve/
+  // background-refresh pattern reading this table, so a plain expiresAt-based
+  // delete is safe with no edge cases to worry about.
   const runDbCleanup = async () => {
     try {
       const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
       const epgDeleted = await EpgCache.destroy({ where: { updatedAt: { [Op.lt]: cutoff } } });
       if (epgDeleted > 0) logger.info(`[cleanup] Purged ${epgDeleted} stale EpgCache rows older than 7 days.`);
     } catch (e) { logger.error(`[cleanup] EpgCache purge failed: ${e}`); }
+
+    try {
+      const now = new Date();
+      const deviceCodesDeleted = await DeviceCode.destroy({ where: { expiresAt: { [Op.lt]: now } } });
+      if (deviceCodesDeleted > 0) logger.info(`[cleanup] Purged ${deviceCodesDeleted} expired device_codes row(s).`);
+    } catch (e) { logger.error(`[cleanup] device_codes purge failed: ${e}`); }
   };
 
   runDbCleanup().catch((e) => logger.error(`[cleanup startup] ${e}`));

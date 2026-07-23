@@ -1,4 +1,4 @@
-FROM node:18-alpine AS builder
+FROM node:20-alpine AS builder
 
 WORKDIR /app
 
@@ -15,7 +15,7 @@ RUN npm prune --omit=dev
 
 # ─────────────────────────────────────────────────────────────────────────────
 
-FROM node:18-alpine
+FROM node:20-alpine
 
 # ffmpeg (with ffprobe) is required at runtime for HEVC live transcode and VOD transcode
 RUN apk add --no-cache tzdata ffmpeg

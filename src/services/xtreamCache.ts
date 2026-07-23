@@ -181,6 +181,13 @@ export function stripVer(id: string): string {
   return id.replace(/_v\d+$/, "");
 }
 
+// Stores the REAL upstream URL — this is our own persisted cache, never sent
+// to a client directly. Every place that serves this back out in an Xtream
+// API response converts it to a same-origin proxied URL per-request via
+// absolutizeIconFields (infra/publicUrl.ts), the same way mapChannel/
+// enrichArtworkFromTmdb/Discover all convert at serve time rather than at
+// write time — so there's nothing to backfill/migrate if this logic ever
+// changes again, and no legacy-shaped rows to worry about.
 export function buildIconUrl(uri: string | undefined): string {
   if (!uri) return "";
   if (uri.startsWith("http")) return uri;
@@ -694,8 +701,37 @@ export async function warmSeriesInfoCache(): Promise<void> {
 
 let catchupRunning = false;
 
-export async function catchupScan(): Promise<void> {
-  if (catchupRunning) { logger.info("[Catchup] Already running, skipping"); return; }
+export interface CatchupScanOptions {
+  // Scopes the scan to just these genre ids instead of the whole catalog —
+  // used by the daily rotating stale-content sweep (metaEnrichment.ts) so it
+  // only pays for a handful of categories per run, not a full-catalog pass.
+  // Omit (the manual /api/v2/catchup-scan endpoint's usage) to scan everything.
+  genreIds?: string[];
+  // Called for every id this scan confirms is no longer on the portal, before
+  // it's dropped from the XtreamCache list. catchupScan itself only
+  // reconciles that list cache — it has no notion of ContentMeta/Discover
+  // tags/UserProgress, so without this callback a "removed" id here would
+  // still leave orphaned metadata/Continue-Watching rows behind. Awaited
+  // sequentially per removal, same throttle-friendly shape as the rest of
+  // this file.
+  onRemoved?: (contentId: string, categoryId: string) => Promise<void> | void;
+  // Optional pause between each genre's reconcile call — the manual full-scan
+  // endpoint has run throttle-free since it existed, so this defaults to 0
+  // there; the daily rotating sweep passes a real value since even 5
+  // categories a day is worth pacing.
+  throttleMs?: number;
+}
+
+// Returns whether the scan actually ran (false = skipped because another
+// scan was already in progress) — callers that track external state keyed
+// to "this scan happened" (e.g. the rotating sweep's cursor) need to know
+// the difference between "ran and found nothing to change" and "didn't run
+// at all," since silently treating a skip as a completed pass would advance
+// past categories that were never actually checked.
+export async function catchupScan(options: CatchupScanOptions = {}): Promise<boolean> {
+  const { genreIds, onRemoved, throttleMs = 0 } = options;
+  const genreFilter = genreIds ? new Set(genreIds.map(String)) : null;
+  if (catchupRunning) { logger.info("[Catchup] Already running, skipping"); return false; }
   catchupRunning = true;
   try {
     const provider = serverManager.getProvider();
@@ -758,6 +794,11 @@ export async function catchupScan(): Promise<void> {
         const deletedMovieIds  = new Set([...existingMovieIds].filter(id => seenPortalIds.has(`m:${id}`) === false && balance < diff));
         const deletedSeriesIds = new Set([...existingSeriesIds].filter(id => seenPortalIds.has(`s:${id}`) === false && balance < diff));
 
+        if (onRemoved) {
+          for (const id of deletedMovieIds) await onRemoved(`movie_${id}`, genre.id);
+          for (const id of deletedSeriesIds) await onRemoved(`series_${id}`, genre.id);
+        }
+
         const keptMovies  = existingMovies.filter((m: any) => !deletedMovieIds.has(String(m.stream_id)));
         const keptSeries  = existingSeries.filter((s: any) => !deletedSeriesIds.has(String(s.series_id)));
 
@@ -808,23 +849,25 @@ export async function catchupScan(): Promise<void> {
         }
 
         const keptMovies  = existingMovies.filter((m: any) => portalMovieIds.has(String(m.stream_id)));
-        const removedMovies = existingMovies.length - keptMovies.length;
+        const removedMovieIds = existingMovies.filter((m: any) => !portalMovieIds.has(String(m.stream_id))).map((m: any) => String(m.stream_id));
+        if (onRemoved) for (const id of removedMovieIds) await onRemoved(`movie_${id}`, genre.id);
         const allMovies = [
           ...toAddMovies.map((m, i) => mapVodItem(m, i + 1, genre.id)),
           ...keptMovies.map((m: any, i: number) => ({ ...m, num: toAddMovies.length + i + 1 })),
         ];
         await xtreamCache.set(vodKey, allMovies);
-        logger.info(`[Catchup] ${vodKey}: -${removedMovies} removed, +${toAddMovies.length} added (total=${allMovies.length})`);
+        logger.info(`[Catchup] ${vodKey}: -${removedMovieIds.length} removed, +${toAddMovies.length} added (total=${allMovies.length})`);
 
         if (!isNativeSeries) {
           const keptSeries  = existingSeries.filter((s: any) => portalSeriesIds.has(String(s.series_id)));
-          const removedSeries = existingSeries.length - keptSeries.length;
+          const removedSeriesIds = existingSeries.filter((s: any) => !portalSeriesIds.has(String(s.series_id))).map((s: any) => String(s.series_id));
+          if (onRemoved) for (const id of removedSeriesIds) await onRemoved(`series_${id}`, genre.id);
           const allSeries = [
             ...toAddSeries.map((s, i) => mapSeriesItem(s, i + 1, genre.id)),
             ...keptSeries.map((s: any, i: number) => ({ ...s, num: toAddSeries.length + i + 1 })),
           ];
           await xtreamCache.set(seriesKey, allSeries);
-          logger.info(`[Catchup] ${seriesKey}: -${removedSeries} removed, +${toAddSeries.length} added (total=${allSeries.length})`);
+          logger.info(`[Catchup] ${seriesKey}: -${removedSeriesIds.length} removed, +${toAddSeries.length} added (total=${allSeries.length})`);
         }
       }
     };
@@ -872,6 +915,7 @@ export async function catchupScan(): Promise<void> {
         }
 
         const deletedIds = new Set([...existingIds].filter(id => !seenIds.has(id) && balance < diff));
+        if (onRemoved) for (const id of deletedIds) await onRemoved(`series_${id}`, genre.id);
         const kept       = existing.filter((s: any) => !deletedIds.has(String(s.series_id)));
         const all        = [
           ...toAdd.map((s, i) => mapSeriesItem(s, i + 1, genre.id)),
@@ -894,19 +938,25 @@ export async function catchupScan(): Promise<void> {
         const portalIds = new Set(allPortalItems.map((s: any) => String(s.id)));
         const toAdd     = allPortalItems.filter((s: any) => !existingIds.has(String(s.id)));
         const kept      = existing.filter((s: any) => portalIds.has(String(s.series_id)));
+        const removedIds = existing.filter((s: any) => !portalIds.has(String(s.series_id))).map((s: any) => String(s.series_id));
+        if (onRemoved) for (const id of removedIds) await onRemoved(`series_${id}`, genre.id);
         const all       = [
           ...toAdd.map((s, i) => mapSeriesItem(s, i + 1, genre.id)),
           ...kept.map((s: any, i: number) => ({ ...s, num: toAdd.length + i + 1 })),
         ];
         await xtreamCache.set(seriesKey, all);
-        logger.info(`[Catchup] ${seriesKey}: -${existing.length - kept.length} removed, +${toAdd.length} added (total=${all.length})`);
+        logger.info(`[Catchup] ${seriesKey}: -${removedIds.length} removed, +${toAdd.length} added (total=${all.length})`);
       }
     };
 
+    const matchesFilter = (id: string) => !genreFilter || genreFilter.has(id);
+    const pace = async () => { if (throttleMs > 0) await new Promise((r) => setTimeout(r, throttleMs)); };
+
     const movieGenres = await readGenres("movie");
     for (const genre of movieGenres) {
-      if (!genre.id || genre.id === "*") continue;
+      if (!genre.id || genre.id === "*" || !matchesFilter(String(genre.id))) continue;
       try { await reconcileMovieGenre(genre); } catch (e: any) { logger.error(`[Catchup] Failed ${genre.id}: ${e.message}`); }
+      await pace();
     }
 
     // Portal A: series-only genres not covered by movie genres loop
@@ -914,8 +964,9 @@ export async function catchupScan(): Promise<void> {
       const processedIds = new Set(movieGenres.map((g: any) => String(g.id)));
       const seriesGenres = await readGenres("series");
       for (const genre of seriesGenres) {
-        if (!genre.id || genre.id === "*" || processedIds.has(String(genre.id))) continue;
+        if (!genre.id || genre.id === "*" || processedIds.has(String(genre.id)) || !matchesFilter(String(genre.id))) continue;
         try { await reconcileMovieGenre(genre); } catch (e: any) { logger.error(`[Catchup] Failed series-only genre ${genre.id}: ${e.message}`); }
+        await pace();
       }
     }
 
@@ -923,13 +974,15 @@ export async function catchupScan(): Promise<void> {
     if (isNativeSeries) {
       const seriesGenres = await readGenres("series");
       for (const genre of seriesGenres) {
-        if (!genre.id || genre.id === "*") continue;
+        if (!genre.id || genre.id === "*" || !matchesFilter(String(genre.id))) continue;
         try { await reconcileSeriesGenre(genre); } catch (e: any) { logger.error(`[Catchup] Failed series ${genre.id}: ${e.message}`); }
+        await pace();
       }
     }
 
     await bumpVodVersion();
     logger.info("[Catchup] Scan complete");
+    return true;
   } finally {
     catchupRunning = false;
   }

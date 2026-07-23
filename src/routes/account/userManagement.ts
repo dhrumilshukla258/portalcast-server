@@ -195,7 +195,7 @@ export const userManagementRoutes: ServerRoute[] = [
       }
 
       try {
-        const id = request.params.id;
+        const id = request.params.id as string;
         const payload = request.payload as any;
         const { name, role, isActive, password } = payload;
 
@@ -260,7 +260,7 @@ export const userManagementRoutes: ServerRoute[] = [
       }
 
       try {
-        const id = request.params.id;
+        const id = request.params.id as string;
 
         const user = await User.findByPk(id);
         if (!user) {

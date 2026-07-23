@@ -172,7 +172,11 @@ Content is cached in SQLite (`XtreamCache` table, 24-hour TTL) so the server nev
 - **diff < 0** (portal has fewer): scans ALL portal pages; builds a complete portal ID set; removes local items absent from portal; also picks up newly added items.
 - **diff = 0**: skip (already in sync).
 
-Use after a long offline period to fill gaps the incremental warm misses (it stops at the first known item).
+Use after a long offline period to fill gaps the incremental warm misses (it stops at the first known item). Manually triggering it this way scans the **whole catalog**, no throttle, and — on its own — only reconciles the `XtreamCache` list cache (`vod_streams_*`/`series_list_*`); it never touches `ContentMeta`, the Discover tag tables, or `UserProgress` (see [[skill-content-lifecycle]] for the layer that does). That layer now reuses this same function automatically, scoped down — see below.
+
+### Stale content sweep (automatic, rotating — new)
+
+`sweepStaleContent()` runs automatically on the same 24h interval as the incremental warm (deliberately not also at startup — no need for an extra portal round-trip on every restart) by calling the catchup-scan logic above with three options the manual endpoint doesn't use: `genreIds` (a small rotating slice of 5 categories per run instead of the whole catalog — cursor persisted in `SystemConfig`, so a full pass completes gradually over many days rather than in one burst), `throttleMs` (a pace between categories), and `onRemoved` (prunes `ContentMeta`, its genre/country/theme tags, and any orphaned Continue Watching/`UserProgress` entry for every id the scan confirms gone — not just the list cache). Full detail → [[skill-content-lifecycle]].
 
 ### Cache key patterns
 
@@ -465,7 +469,9 @@ For Samsung TV apps and other headless clients that can't do browser-based OAuth
 3. A logged-in user enters the code in the web UI (`POST /api/auth/device/authorize`)
 4. Device polls `POST /api/auth/device/poll` with its device code — receives access + refresh JWTs once authorized (TV refresh tokens last 6 months)
 
-Codes expire after 5 minutes. The device can poll until expiry.
+Codes expire after 5 minutes. The device can poll until expiry. Expired/unclaimed codes are purged by the daily DB cleanup job, not by this flow itself — see [[skill-database]].
+
+The web UI's `/verify` page (step 3) auto-redirects the user back into the app a couple seconds after successful authorization rather than leaving them on a static confirmation screen — relevant now that a logged-in user can reach it directly via a header menu entry ("Authorize a Device"), not only via a logged-out phone scanning a QR code with nothing else to do. Browser-history handling around login redirects was also hardened (`replace`, not `push`) to prevent a loop where pressing Back after logging in kept bouncing back to the login screen instead of reaching the page visited beforehand. Full detail → [[skill-auth-system]].
 
 ### JWT scope & role gating
 
@@ -579,11 +585,15 @@ When a player authenticates via `GET /player_api.php`, the `user_info.password` 
 | Endpoint | Description |
 |----------|-------------|
 | `GET /api/user/profile` | Get own profile |
-| `PUT /api/user/preferences` | Update preferences |
+| `PUT /api/user/preferences` | Update preferences. Pushes a `preferences_changed` Socket.IO event to the user's other logged-in sessions — see below |
 | `GET /api/user/progress` | Get watch progress |
 | `POST /api/user/progress` | Save watch progress |
 | `DELETE /api/user/progress/{mediaId}` | Remove progress entry |
-| `POST /api/user/clear-history` | Clear all watch history |
+| `POST /api/user/clear-history` | Clear all watch history. Also pushes `preferences_changed` |
+
+#### Real-time preference sync (Socket.IO)
+
+Preferences (favorites, recent channels, last-selected category/TV group/channel, etc. — see [[skill-user-system]]) sync across a user's own devices in two ways: a pull on login and on tab focus/`visibilitychange`, and — since this session — an instant push. The client joins room `user:{userId}` by emitting `join_user_room` with its JWT once connected; the server verifies the token and joins that socket to the room. Every successful `PUT /api/user/preferences` or `POST /api/user/clear-history` then emits `preferences_changed` to that room only (never broadcast-to-all), and any other open session for that account calls `refreshProfile()` in response. Full detail → [[skill-user-system]].
 
 ### Profiles
 
@@ -614,6 +624,14 @@ When a player authenticates via `GET /player_api.php`, the `user_info.password` 
 | `PUT /api/admin/items/{type}/{category_id}/reorder` | Bulk-set item sort order |
 | `DELETE /api/admin/items/{type}/{id}` | Remove item override |
 | `POST /api/admin/strm/generate` | Trigger `.strm` generation |
+
+### Content Enrichment (admin only)
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /api/admin/content-meta/enrich` | Trigger TMDB enrichment for any un-enriched titles. Pass `includeBackdropBackfill: true` to also run the backdrop-image retry pass (`backfillBackdrops()`) — this is the **only** thing that ever advances it; the automatic startup/24h cycle never includes it. See [[skill-content-lifecycle]] |
+| `GET /api/admin/content-meta/status` | Enrichment progress/status |
+| `POST /api/v2/catchup-scan` | Manual full-catalog reconciliation of the `XtreamCache` list cache against the portal's own totals (adds + removes ids), no throttle. Only touches the list cache, not `ContentMeta`/`UserProgress` — the same underlying `catchupScan()` function is reused automatically in a scoped/throttled form by the daily stale-content sweep, see [[skill-content-lifecycle]] |
 
 ### Debug
 

@@ -7,7 +7,7 @@ import { authCheck } from "@/auth/jwt";
 import { mintStreamToken } from "@/services/StreamTokens";
 import { xtreamCache } from "@/services/xtreamCache";
 import { fetchMovieMeta, fetchTVMeta } from "@/content/tmdb";
-import { channelLogoPath } from "@/providers/portalAssets";
+import { channelLogoPath, proxiedImageUrl } from "@/providers/portalAssets";
 
 // Resolves a stable, human-readable identity label for the "active streams"
 // admin view from the request's JWT — undefined for unauthenticated requests
@@ -143,7 +143,7 @@ export async function* streamHlsSegments(
 // known, and the TMDB lookup runs in the background to populate the cache for next time.
 // This keeps every page load fast regardless of TMDB's response time; the trade-off is a
 // brand-new (never-viewed) item may show without its TMDB image until a later reload.
-export async function enrichArtworkFromTmdb(items: any[], kind: "movie" | "series"): Promise<any[]> {
+export async function enrichArtworkFromTmdb(items: any[], kind: "movie" | "series", origin?: string): Promise<any[]> {
   const cacheKeys = items.map((item: any) => {
     const itemId = item.id ?? item.stream_id ?? item.series_id;
     return itemId ? `tmdb_web_${kind}_${itemId}` : undefined;
@@ -175,13 +175,20 @@ export async function enrichArtworkFromTmdb(items: any[], kind: "movie" | "serie
             .then((fetched) => xtreamCache.set(cacheKey, fetched ?? { _not_found: true }))
             .catch(() => {});
         }
-        return { ...item, backdrop_path: existingBackdrop };
+        // item.screenshot_uri here is whatever the portal returned raw — proxy
+        // it so the upstream host is never sent to the browser (see
+        // proxiedImageUrl in portalAssets.ts). Every return path in this
+        // function goes through this same rewrite for the same reason.
+        // origin makes it absolute — see proxiedImageUrl's comment on why a
+        // relative /api/images-shaped path here would get double-prefixed by
+        // the frontend's own /api/images convention.
+        return { ...item, screenshot_uri: proxiedImageUrl(item.screenshot_uri, origin), backdrop_path: existingBackdrop };
       }
 
       if (meta && !meta._not_found) {
         return {
           ...item,
-          screenshot_uri: meta.poster || item.screenshot_uri,
+          screenshot_uri: proxiedImageUrl(meta.poster || item.screenshot_uri, origin),
           backdrop_path: meta.backdrop || existingBackdrop,
           // No `existingBackdrop` fallback here — that's a portal-supplied
           // image of unknown resolution, so it can't be trusted as "high-res"
@@ -194,7 +201,7 @@ export async function enrichArtworkFromTmdb(items: any[], kind: "movie" | "serie
           trailer_key: meta.trailerKey || undefined,
         };
       }
-      return { ...item, backdrop_path: existingBackdrop };
+      return { ...item, screenshot_uri: proxiedImageUrl(item.screenshot_uri, origin), backdrop_path: existingBackdrop };
     }),
   );
 }
@@ -239,6 +246,14 @@ export const mapChannel = (channel: any, origin: string, userLabel?: string, gen
     // Frontend prefixes non-http values with /api/images — hand it a portal-root path
     logo = channelLogoPath(logo);
   }
+  // Whatever's left absolute at this point (an Xtream logo URL, or a Stalker
+  // logo that was already absolute) points straight at the real portal/CDN
+  // host — proxy it so that host is never sent to the browser. Relative
+  // /api/images paths from channelLogoPath above pass through untouched.
+  // origin is passed so the result is absolute — the frontend only prefixes
+  // *non*-http values with /api/images itself, so leaving our own already
+  // /api/images-shaped proxy path relative here would get double-prefixed.
+  logo = proxiedImageUrl(logo, origin);
   return {
     ...channel,
     cmd: cmdUrl,

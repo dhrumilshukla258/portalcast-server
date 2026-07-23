@@ -58,7 +58,7 @@ export const vodRoutes: ServerRoute[] = [
       };
 
       if (request.headers.range) {
-        headers["Range"] = request.headers.range;
+        headers["Range"] = String(request.headers.range);
         logger.info(`[VOD Proxy] Forwarding Range: ${request.headers.range}`);
       }
 
@@ -74,7 +74,7 @@ export const vodRoutes: ServerRoute[] = [
         const proxyResponse = h.response(response.data);
 
         if (response.headers["content-type"]) {
-          proxyResponse.type(response.headers["content-type"]);
+          proxyResponse.type(String(response.headers["content-type"]));
         } else {
           proxyResponse.type("video/mp4");
         }
@@ -82,7 +82,7 @@ export const vodRoutes: ServerRoute[] = [
         if (response.headers["content-length"]) {
           proxyResponse.header(
             "Content-Length",
-            response.headers["content-length"],
+            String(response.headers["content-length"]),
           );
         }
 

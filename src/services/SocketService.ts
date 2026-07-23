@@ -124,6 +124,17 @@ class SocketService {
       socket.on("stop_portal_metrics", () => {
         socket.leave("portal-metrics");
       });
+
+      // Lets a logged-in user's other open tabs/devices receive a
+      // preferences_changed push (see broadcastPreferencesChanged) instead of
+      // only picking up changes on their next focus/visibility refetch.
+      // Token passed in the event payload rather than the connection
+      // handshake to match the start_logging/start_portal_metrics pattern
+      // above — this socket has no auth gate at connect time.
+      socket.on("join_user_room", (payload?: { token?: string }) => {
+        const userId = this.getUserIdFromToken(payload?.token);
+        if (userId) socket.join(`user:${userId}`);
+      });
     });
 
     logger.info("[Socket] Service initialized");
@@ -133,6 +144,12 @@ class SocketService {
     if (!token) return false;
     const payload = verifyJWT(token);
     return !!payload && payload.role === "admin";
+  }
+
+  private getUserIdFromToken(token: string | undefined): number | null {
+    if (!token) return null;
+    const payload = verifyJWT(token);
+    return payload && payload.userId ? payload.userId : null;
   }
 
   private getReceivers(): Device[] {
@@ -166,6 +183,14 @@ class SocketService {
 
   public broadcastConfigChange(hash: string) {
     this.io?.emit("config_changed", { timestamp: Date.now(), hash });
+  }
+
+  // Pushed to a user's own other sessions (see join_user_room above) whenever
+  // their preferences are saved server-side, so e.g. a channel/category
+  // selection on one device shows up on another without waiting for that
+  // device's next focus/visibility refetch.
+  public broadcastPreferencesChanged(userId: number, preferences: unknown) {
+    this.io?.to(`user:${userId}`).emit("preferences_changed", { preferences });
   }
 
   public broadcastPortalRequest(event: PortalRequestEvent) {

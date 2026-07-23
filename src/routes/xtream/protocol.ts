@@ -2,7 +2,7 @@ import { ServerRoute } from "@hapi/hapi";
 import { serverManager } from "@/serverManager";
 import { logger } from "@/infra/logger";
 import { initialConfig, seriesFlag } from "@/config/server";
-import { getPublicProto, getPublicHost, getPublicOrigin } from "@/infra/publicUrl";
+import { getPublicProto, getPublicHost, getPublicOrigin, absolutizeIconFields, absolutizeIconFieldsList } from "@/infra/publicUrl";
 import { proxiedLogoPath } from "@/providers/portalAssets";
 import { readGenres, readChannels } from "@/infra/storage";
 import {
@@ -262,7 +262,11 @@ export const protocolRoutes: ServerRoute[] = [
 
           const vodOverridden = await applyVodOverrides(rawResult, category_id ?? null, getVodCache);
           const vv = await getVodVersion();
-          const finalResult = vodOverridden.map((item: any) => ({ ...item, category_id: addVer(item.category_id, vv) }));
+          const origin = getPublicOrigin(request);
+          const finalResult = absolutizeIconFieldsList(
+            vodOverridden.map((item: any) => ({ ...item, category_id: addVer(item.category_id, vv) })),
+            origin,
+          );
           return h.response(finalResult);
         }
 
@@ -292,10 +296,12 @@ export const protocolRoutes: ServerRoute[] = [
             await xtreamCache.set(tmdbKey, tmdb);
           }
 
+          const origin = getPublicOrigin(request);
+
           if (tmdb && !("_not_found" in tmdb)) {
             return h.response({
               ...cached,
-              info: {
+              info: absolutizeIconFields({
                 ...cached.info,
                 cover_big:     tmdb.poster   ?? cached.info?.cover_big,
                 movie_image:   tmdb.poster   ?? cached.info?.movie_image,
@@ -303,10 +309,10 @@ export const protocolRoutes: ServerRoute[] = [
                 plot:          cached.info?.plot || tmdb.overview,
                 cast:          cached.info?.cast || tmdb.cast,
                 director:      cached.info?.director || tmdb.director,
-              },
+              }, origin),
             });
           }
-          return h.response(cached);
+          return h.response({ ...cached, info: absolutizeIconFields(cached.info ?? {}, origin) });
         }
 
         // ── Series ───────────────────────────────────────────────────────────
@@ -371,7 +377,10 @@ export const protocolRoutes: ServerRoute[] = [
           const seriesOverridden = await applySeriesOverrides(rawResult, category_id ?? null, getSeriesCache);
           const vs = await getVodVersion();
           return h.response(
-            seriesOverridden.map((item: any) => ({ ...item, category_id: addVer(item.category_id, vs) })),
+            absolutizeIconFieldsList(
+              seriesOverridden.map((item: any) => ({ ...item, category_id: addVer(item.category_id, vs) })),
+              getPublicOrigin(request),
+            ),
           );
         }
 
@@ -379,6 +388,7 @@ export const protocolRoutes: ServerRoute[] = [
           const { series_id } = request.query as Record<string, string>;
           if (!series_id) return h.response({ info: {}, episodes: {}, seasons: [] });
 
+          const seriesInfoOrigin = getPublicOrigin(request);
           const cacheKey = `series_info_${series_id}`;
           const { value: cached, isStale } = await xtreamCache.getWithStaleness<any>(cacheKey);
           if (cached) {
@@ -396,7 +406,7 @@ export const protocolRoutes: ServerRoute[] = [
                 });
               }
             }
-            if (!isStale) return h.response(cached);
+            if (!isStale) return h.response({ ...cached, info: absolutizeIconFields(c.info ?? {}, seriesInfoOrigin) });
             // Stale — fall through to re-fetch
           }
 
@@ -411,7 +421,7 @@ export const protocolRoutes: ServerRoute[] = [
           if (allItems.length === 0) {
             if (cached) {
               await xtreamCache.set(cacheKey, cached);
-              return h.response(cached);
+              return h.response({ ...cached, info: absolutizeIconFields((cached as any).info ?? {}, seriesInfoOrigin) });
             }
             return h.response({ info: {}, episodes: {}, seasons: [] });
           }
@@ -515,16 +525,16 @@ export const protocolRoutes: ServerRoute[] = [
           if (tmdb && !("_not_found" in tmdb)) {
             const enriched = {
               ...result,
-              info: {
+              info: absolutizeIconFields({
                 ...result.info,
                 cover:         tmdb.poster   ?? result.info.cover,
                 backdrop_path: tmdb.backdrop ? [tmdb.backdrop] : (result.info.backdrop_path ?? []),
                 plot:          tmdb.overview ?? result.info.plot,
-              },
+              }, seriesInfoOrigin),
             };
             return h.response(enriched);
           }
-          return h.response(result);
+          return h.response({ ...result, info: absolutizeIconFields(result.info, seriesInfoOrigin) });
         }
 
         if (action === "get_short_epg" || action === "get_simple_data_table") {
@@ -570,8 +580,10 @@ export const protocolRoutes: ServerRoute[] = [
         return h.response([]);
 
       } catch (err: any) {
+        // Log the real error (a DNS/connection failure can name the real portal
+        // host) but never forward err.message to the client.
         logger.error(`[player_api] action=${action} error: ${err.message}`);
-        return h.response({ error: err.message }).code(500);
+        return h.response({ error: "Internal error" }).code(500);
       }
     },
   },

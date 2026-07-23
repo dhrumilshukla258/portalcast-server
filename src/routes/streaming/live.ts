@@ -413,8 +413,11 @@ export const liveRoutes: ServerRoute[] = [
             );
             return response;
           } catch (err: any) {
+            // Log the real error (may include the upstream host in a DNS/connection
+            // failure message) but never forward err.message to the client — that's
+            // exactly the kind of string that leaks the real portal address.
             logger.error(`[Player] Xtream Segment fetch error: ${err.message || err}`);
-            return h.response(err.message || "Segment fetch failed").code(err.response?.status || 502);
+            return h.response("Segment fetch failed").code(err.response?.status || 502);
           }
         }
 

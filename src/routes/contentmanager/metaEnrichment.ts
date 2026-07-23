@@ -1,9 +1,8 @@
 import { ServerRoute } from "@hapi/hapi";
 import { logger } from "@/infra/logger";
-import { authCheck } from "@/auth/jwt";
 import { enrichContentMeta } from "@/content/metaEnrichment";
 import { ContentMeta } from "@/models/ContentMeta";
-import { unauthorized } from "./shared";
+import { requireAdmin, forbidden } from "./shared";
 
 export const metaEnrichmentRoutes: ServerRoute[] = [
   {
@@ -15,7 +14,7 @@ export const metaEnrichmentRoutes: ServerRoute[] = [
     method: "POST",
     path: "/api/admin/content-meta/enrich",
     handler: async (request, h) => {
-      if (!authCheck(request)) return unauthorized(h);
+      if (!requireAdmin(request)) return forbidden(h);
       enrichContentMeta({ includeBackdropBackfill: true }).catch((e) => logger.error({ err: e }, "[MetaEnrich] enrich error"));
       return h.response({ success: true, message: "Content metadata enrichment started in background" });
     },
@@ -24,7 +23,7 @@ export const metaEnrichmentRoutes: ServerRoute[] = [
     method: "GET",
     path: "/api/admin/content-meta/status",
     handler: async (request, h) => {
-      if (!authCheck(request)) return unauthorized(h);
+      if (!requireAdmin(request)) return forbidden(h);
       const [total, byType, bySource] = await Promise.all([
         ContentMeta.count(),
         ContentMeta.count({ group: ["type"] }) as unknown as Promise<{ type: string; count: number }[]>,

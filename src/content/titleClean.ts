@@ -150,7 +150,16 @@ export function stripReleaseNoise(name: string): string {
 // is still correct — they just don't get the benefit of tag-based grouping).
 export function normalizeTitleKey(name: string): string {
   const stripped = stripReleaseNoise(name).toLowerCase();
-  return stripped || name.trim().toLowerCase();
+  // Grouping-key only — stripReleaseNoise only trims stray punctuation at the
+  // START/END of a title (a mid-title colon is meaningful for DISPLAY and
+  // must be preserved there, e.g. "Title: Subtitle"). But two catalog entries
+  // for the same real show can differ only by whether the provider/TMDB
+  // happened to include that colon at all ("Murdaugh Murders Deadly Dynasty"
+  // vs "Murdaugh Murders: Deadly Dynasty" — same show, two entries that never
+  // grouped together) — collapse it everywhere for the key so that no longer
+  // splits them into separate groups.
+  const collapsed = stripped.replace(/\s*:\s*/g, " ").replace(/\s+/g, " ").trim();
+  return collapsed || name.trim().toLowerCase();
 }
 
 export function extractVariantTags(name: string): string[] {
@@ -185,6 +194,7 @@ const ISO_LANGUAGE_NAMES: Record<string, string> = {
   ms: "Malay", tl: "Filipino", nl: "Dutch", pl: "Polish", sv: "Swedish",
   fa: "Persian", he: "Hebrew", el: "Greek", cs: "Czech", ro: "Romanian",
   hu: "Hungarian", uk: "Ukrainian", da: "Danish", fi: "Finnish", no: "Norwegian",
+  dz: "Dzongkha", cr: "Cree", ab: "Abkhazian", os: "Ossetian", bo: "Tibetan", ik: "Inupiaq",
 };
 
 // Maps a raw ISO 639-1 code to its display name, falling back to the

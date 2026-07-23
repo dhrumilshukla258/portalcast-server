@@ -185,7 +185,7 @@ export const seriesRoutes: ServerRoute[] = [
               total_items: allOverridden.length,
               actual_length: itemsPerApiPage,
               total_loaded: pageData.length,
-              data: await enrichArtworkFromTmdb(pageData, "series"),
+              data: await enrichArtworkFromTmdb(pageData, "series", getPublicOrigin(request)),
               errors: false,
               isPortal: initialConfig.providerType === "stalker",
             };
@@ -232,7 +232,7 @@ export const seriesRoutes: ServerRoute[] = [
               total_items: allOverridden.length,
               actual_length: itemsPerApiPage,
               total_loaded: pageData.length,
-              data: await enrichArtworkFromTmdb(pageData, "series"),
+              data: await enrichArtworkFromTmdb(pageData, "series", getPublicOrigin(request)),
               errors: false,
               isPortal: initialConfig.providerType === "stalker",
             };
@@ -343,7 +343,7 @@ export const seriesRoutes: ServerRoute[] = [
           total_items: actualTotalItems,
           actual_length: itemsPerApiPage,
           total_loaded: firstPageData.length,
-          data: await enrichArtworkFromTmdb(overriddenSeriesData, "series"),
+          data: await enrichArtworkFromTmdb(overriddenSeriesData, "series", getPublicOrigin(request)),
           errors: false,
           isPortal: initialConfig.providerType === "stalker",
         };

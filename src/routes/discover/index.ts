@@ -9,8 +9,11 @@ import { UserProgress } from "@/models/UserProgress";
 import { getActiveProfileId } from "@/routes/stalkerV2/shared";
 import { getCached, setCached } from "@/services/discoverCache";
 import { extractLanguageInfo, extractQualityTags, extractLanguageFromCategoryName } from "@/content/titleClean";
+import { UNCATEGORIZED_GENRE } from "@/content/metaEnrichment";
 import { readGenres } from "@/infra/storage";
 import { logger } from "@/infra/logger";
+import { proxiedImageUrl } from "@/providers/portalAssets";
+import { getPublicOrigin } from "@/infra/publicUrl";
 
 const PAGE_SIZE = 40;
 
@@ -24,7 +27,7 @@ function unauthorized(h: any) {
 // (vs. proxying relative paths through /api/images), which is exactly the shape
 // TMDB poster URLs already are. Map to that convention so results render through
 // the existing MainContentGrid/MediaCard without any special-casing.
-function toMediaItem(row: any, genresById: Map<string, string[]>, countriesById: Map<string, string[]>): any {
+function toMediaItem(row: any, genresById: Map<string, string[]>, countriesById: Map<string, string[]>, origin: string): any {
   return {
     id: row.id,
     // row.id is "movie_{rawId}"/"series_{rawId}" — the webui strips the
@@ -37,7 +40,11 @@ function toMediaItem(row: any, genresById: Map<string, string[]>, countriesById:
     // predates the column somehow slipping through the migration.
     name: row.trimmedName || row.name,
     title: row.trimmedName || row.name,
-    screenshot_uri: row.poster,
+    // row.poster is TMDB (image.tmdb.org) when enrichment found a match, but
+    // falls back to the raw portal stream_icon/cover otherwise (see
+    // metaEnrichment.ts's resolveMeta) — proxiedImageUrl passes TMDB through
+    // untouched and only routes the portal fallback through /api/images/proxy.
+    screenshot_uri: proxiedImageUrl(row.poster, origin),
     // Any-resolution backdrop — used by the detail-page hero
     // (MediaInfoHeader), which would rather show a lower-res image than none.
     backdrop_path: row.backdrop || undefined,
@@ -75,8 +82,6 @@ async function tagsByContentId(Model: typeof ContentGenre | typeof ContentCountr
 }
 
 async function facetCounts(Model: typeof ContentGenre | typeof ContentCountry | typeof ContentTheme, type?: ContentType) {
-  const t0 = Date.now();
-  const modelName = (Model as any).name;
   // PERF INCIDENT (2026-07-16): filtering to representative-only rows used
   // to require joining back to ContentMeta on every call (including the
   // no-`type` case, which is 100% of real traffic — the webui never actually
@@ -102,7 +107,6 @@ async function facetCounts(Model: typeof ContentGenre | typeof ContentCountry | 
     order: [[fn("COUNT", col("value")), "DESC"]],
     raw: true,
   }) as any[];
-  logger.info(`[Discover] facetCounts(${modelName}, type=${type || "none"}) took ${Date.now() - t0}ms, ${rows.length} groups`);
   return rows.map((r) => ({ value: r.value, count: Number(r.count) }));
 }
 
@@ -114,20 +118,14 @@ export const discoverRoutes: ServerRoute[] = [
     method: "GET",
     path: "/api/v2/discover/facets",
     handler: async (request) => {
-      const tRequestStart = Date.now();
       const type = (request.query as any).type as ContentType | undefined;
-      logger.info(`[Discover] facets start: type=${type || "none"}`);
 
       // Identical result for every user until the next enrichment run — see
       // discoverCache.ts. Cache key just needs to vary by `type`.
       const cacheKey = `facets:${type || "all"}`;
       const cached = getCached<Record<string, unknown>>(cacheKey);
-      if (cached) {
-        logger.info(`[Discover] facets cache hit (${Date.now() - tRequestStart}ms)`);
-        return cached;
-      }
+      if (cached) return cached;
 
-      const tLangStart = Date.now();
       const [genres, countries, themes, languages] = await Promise.all([
         facetCounts(ContentGenre, type),
         facetCounts(ContentCountry, type),
@@ -140,16 +138,24 @@ export const discoverRoutes: ServerRoute[] = [
           raw: true,
         }) as unknown as Promise<{ originalLanguage: string; count: number }[]>,
       ]);
-      logger.info(`[Discover] facets all sub-queries settled after ${Date.now() - tLangStart}ms (this is the max of the 4 parallel calls, see their own individual logs above for which one was slowest)`);
+
+      // "Uncategorized" is a catch-all, not a real genre (see UNCATEGORIZED_GENRE
+      // in metaEnrichment.ts) — facetCounts() orders by count DESC like every
+      // other genre, which could land it anywhere in the list depending on how
+      // many titles fall into it. Pin it to the end regardless of count so it
+      // reads as "everything else," not as a genre competing on popularity.
+      const genresOrdered = [
+        ...genres.filter((g) => g.value !== UNCATEGORIZED_GENRE),
+        ...genres.filter((g) => g.value === UNCATEGORIZED_GENRE),
+      ];
 
       const result = {
-        genres,
+        genres: genresOrdered,
         countries,
         themes,
         languages: languages.map((l: any) => ({ value: l.originalLanguage, count: Number(l.count) })),
       };
       setCached(cacheKey, result);
-      logger.info(`[Discover] facets total: ${Date.now() - tRequestStart}ms`);
       return result;
     },
   },
@@ -161,21 +167,27 @@ export const discoverRoutes: ServerRoute[] = [
     method: "GET",
     path: "/api/v2/discover/browse",
     handler: async (request) => {
-      const tRequestStart = Date.now();
       const q = request.query as any;
       const type = q.type as ContentType | undefined;
       const page = Math.max(1, Number(q.page) || 1);
-      logger.info(`[Discover] browse start: genre=${q.genre || "-"} country=${q.country || "-"} language=${q.language || "-"} theme=${q.theme || "-"} page=${page}`);
+
+      // Comma-separated for multi-genre (AND — a title must carry every
+      // selected genre, e.g. Drama+Comedy narrows to rom-com-shaped titles
+      // instead of just being "Drama" alone, which alone runs ~30k deep).
+      // Sorted so "Comedy,Drama" and "Drama,Comedy" (same selection, made in
+      // a different click order) hit the same cache entry instead of each
+      // populating its own redundant copy.
+      const genreValues: string[] = q.genre
+        ? String(q.genre).split(",").map((v: string) => v.trim()).filter(Boolean).sort()
+        : [];
+      const genreKey = genreValues.join("+");
 
       // Same reasoning as facets — browse results (genre/country/language/theme
       // filter combos) are identical for every user, so cache by the exact
       // filter+page combination that was requested.
-      const cacheKey = `browse:${type || ""}:${q.genre || ""}:${q.country || ""}:${q.language || ""}:${q.theme || ""}:${page}`;
+      const cacheKey = `browse:${type || ""}:${genreKey}:${q.country || ""}:${q.language || ""}:${q.theme || ""}:${page}`;
       const cached = getCached<Record<string, unknown>>(cacheKey);
-      if (cached) {
-        logger.info(`[Discover] browse cache hit (${Date.now() - tRequestStart}ms)`);
-        return cached;
-      }
+      if (cached) return cached;
 
       // One card per real title — every language/format variant of the same
       // title shares a groupKey but only the flagged representative row shows
@@ -197,7 +209,11 @@ export const discoverRoutes: ServerRoute[] = [
       // already uses) and intersecting them in JS, THEN querying ContentMeta
       // by a plain `id IN (...)` — no join, so the enrichedAt sort stays cheap.
       const tagFilters: { model: typeof ContentGenre | typeof ContentCountry | typeof ContentTheme; value: string }[] = [];
-      if (q.genre) tagFilters.push({ model: ContentGenre, value: q.genre });
+      // One filter entry per selected genre — the intersection below already
+      // ANDs every entry in this array regardless of dimension, so multiple
+      // genre entries naturally AND together the same way genre+country+theme
+      // already did across dimensions.
+      for (const value of genreValues) tagFilters.push({ model: ContentGenre, value });
       if (q.country) tagFilters.push({ model: ContentCountry, value: q.country });
       if (q.theme) tagFilters.push({ model: ContentTheme, value: q.theme });
 
@@ -211,7 +227,7 @@ export const discoverRoutes: ServerRoute[] = [
       // the images) can't start loading until this resolves.
       let filteredIds: string[] | null = null;
       if (tagFilters.length > 0) {
-        const filterIdsCacheKey = `browseIds:${q.genre || ""}:${q.country || ""}:${q.theme || ""}`;
+        const filterIdsCacheKey = `browseIds:${genreKey}:${q.country || ""}:${q.theme || ""}`;
         const cachedIds = getCached<string[]>(filterIdsCacheKey);
         if (cachedIds) {
           filteredIds = cachedIds;
@@ -232,39 +248,33 @@ export const discoverRoutes: ServerRoute[] = [
         if (filteredIds.length === 0) {
           const empty = { data: [], page, total_items: 0 };
           setCached(cacheKey, empty);
-          logger.info(`[Discover] browse total: ${Date.now() - tRequestStart}ms (no matches for filter combo)`);
           return empty;
         }
         where.id = { [Op.in]: filteredIds };
       }
 
-      const tQueryStart = Date.now();
       const { rows, count } = await ContentMeta.findAndCountAll({
         where,
         limit: PAGE_SIZE,
         offset: (page - 1) * PAGE_SIZE,
         order: [["enrichedAt", "DESC"]],
       });
-      logger.info(`[Discover] browse main query took ${Date.now() - tQueryStart}ms, ${rows.length} rows / ${count} total`);
 
-      const tTagsStart = Date.now();
       const ids = rows.map((r: any) => r.id);
       const [genresById, countriesById] = await Promise.all([
         tagsByContentId(ContentGenre, ids),
         tagsByContentId(ContentCountry, ids),
       ]);
-      logger.info(`[Discover] browse tag lookups took ${Date.now() - tTagsStart}ms`);
 
       // Matches the PaginatedResponse<T> shape the webui's api/types/channels.ts and
       // useMediaLibrary.ts pagination logic already expect ({data, page, total_items}),
       // not a bespoke shape — so browse results can reuse the existing append-page logic.
       const result = {
-        data: rows.map((r: any) => toMediaItem(r, genresById, countriesById)),
+        data: rows.map((r: any) => toMediaItem(r, genresById, countriesById, getPublicOrigin(request))),
         page,
         total_items: count,
       };
       setCached(cacheKey, result);
-      logger.info(`[Discover] browse total: ${Date.now() - tRequestStart}ms`);
       return result;
     },
   },
@@ -392,7 +402,7 @@ export const discoverRoutes: ServerRoute[] = [
       // webui's own progress payload (useProgressTracking.ts) already carries
       // the title it displayed during playback. Use that as a fallback
       // instead of leaving basedOnTitle null.
-      let mostRecentMeta = progress[0].meta;
+      let mostRecentMeta: any = progress[0].meta;
       if (typeof mostRecentMeta === "string") {
         try { mostRecentMeta = JSON.parse(mostRecentMeta); } catch { mostRecentMeta = null; }
       }
@@ -470,7 +480,7 @@ export const discoverRoutes: ServerRoute[] = [
       ]);
 
       return {
-        data: top.map((r: any) => toMediaItem(r, genresById, countriesById)),
+        data: top.map((r: any) => toMediaItem(r, genresById, countriesById, getPublicOrigin(request))),
         basedOnTitle,
       };
     },
@@ -549,7 +559,7 @@ export const discoverRoutes: ServerRoute[] = [
               ? qualityTags.join(" ")
               : r.name;
 
-          return { ...toMediaItem(r, genresById, countriesById), variantLabel };
+          return { ...toMediaItem(r, genresById, countriesById, getPublicOrigin(request)), variantLabel };
         }),
       };
     },

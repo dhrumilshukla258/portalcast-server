@@ -33,6 +33,8 @@ export class User extends Model {
         videoFitMode?: string;
         lastSelectedCategory?: Record<string, string>;
         lastSelectedCategoryTitle?: Record<string, string>;
+        lastSelectedTvGroup?: Record<string, string>;
+        lastSelectedTvChannel?: Record<string, string>;
     };
 
     @Column(DataType.STRING)

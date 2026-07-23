@@ -15,12 +15,25 @@ import axios, { AxiosError, AxiosRequestConfig } from "axios";
 import { httpClient } from "@/streaming/httpClient";
 import NodeCache from "node-cache";
 import { Token } from "@/models/Token";
-import pLimit from "p-limit";
+import type { LimitFunction } from "p-limit";
 import { logger } from "@/infra/logger";
 import { CircuitBreaker } from "@/streaming/circuitBreaker";
 import { requestMetrics, PortalRequestCategory } from "@/services/RequestMetrics";
 
-const requestLimit = pLimit(5);
+// p-limit is ESM-only (v4+); ts-node-dev runs this file as CommonJS, so a
+// static import throws ERR_REQUIRE_ESM at dev-server startup. Load it lazily
+// via dynamic import (works under both ts-node-dev and the bundled tsup build).
+let requestLimitPromise: Promise<LimitFunction> | null = null;
+let resolvedRequestLimit: LimitFunction | null = null;
+function getRequestLimit(): Promise<LimitFunction> {
+  if (!requestLimitPromise) {
+    requestLimitPromise = import("p-limit").then((mod) => {
+      resolvedRequestLimit = mod.default(5);
+      return resolvedRequestLimit;
+    });
+  }
+  return requestLimitPromise;
+}
 const PROVIDER_TIMEOUT = parseInt(process.env.PROVIDER_TIMEOUT || "120000", 10);
 
 // Best-effort classification from the Stalker portal's own request params. Note:
@@ -595,6 +608,7 @@ export class StalkerAPI implements IProvider {
         }
 
         try {
+          const requestLimit = await getRequestLimit();
           const response = await requestLimit(async () => {
             return httpRequest(
               url,
@@ -899,7 +913,8 @@ export class StalkerAPI implements IProvider {
   }
 
   getActiveRequestCount() {
-    return requestLimit.activeCount + requestLimit.pendingCount;
+    if (!resolvedRequestLimit) return 0;
+    return resolvedRequestLimit.activeCount + resolvedRequestLimit.pendingCount;
   }
 
   getLastRequestTime() {

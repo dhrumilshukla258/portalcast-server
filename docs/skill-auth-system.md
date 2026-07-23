@@ -69,7 +69,19 @@ TV clients can't do browser-based OAuth. Flow:
 3. User opens `verificationUrl` (e.g. `http://server/#/verify?code=ABC-DEF`) on their phone/PC, authenticates there
 4. TV polls `POST /api/auth/device/poll` with `{ deviceCode }` every few seconds
 5. Poll returns `{ status: "pending" | "authorized" | "expired" }` — when authorized, includes tokens
-6. `DeviceCode` records expire after 5 minutes
+6. `DeviceCode` records expire after 5 minutes — expired rows are purged by the daily `runDbCleanup()` job (`src/server.ts`, see [[skill-database]]), not by this flow itself
+
+### Webui entry points into `/verify`
+
+Two ways a user reaches the code-entry screen (`portalcast-webui`'s `Verify.tsx`):
+- **Already logged in**: the header profile dropdown has an explicit "Authorize a Device" entry that navigates straight there.
+- **Not logged in**: the logged-out Home page's "Have a TV Pairing Code?" button navigates to `/verify`, which immediately bounces to `/login?redirect=/verify?code=...` since authorization requires being logged in first.
+
+### UX bugs fixed (webui)
+
+- **Login-history loop**: `Login.tsx`'s "already logged in → forward to redirectPath" effect, and the Google/credentials login-success handlers, all used a plain history *push* (`navigate(redirectPath)`). Since the "already logged in" effect re-fires every time `/login` is (re)mounted — including via the browser Back button — a plain push meant every Back press landed back on `/login`, which immediately pushed forward again, trapping the user in a loop that could never reach whatever page existed before Login. Fixed by using `navigate(redirectPath, { replace: true })` everywhere a post-login redirect happens, including on `/verify`'s own post-authorization redirect.
+- **QR tab shown where it shouldn't be**: arriving at `/login` via `/verify`'s not-logged-in bounce (`redirect=/verify?code=...`) means the visitor already has a pairing code to type in — they need real credentials, not a second TV code. `Login.tsx` now detects this (`redirectPath.startsWith('/verify')`) and forces the credentials tab, hiding the QR/TV tab entirely for that path. Without this fix, picking the QR tab there generated an unrelated second code that, once approved, bounced back to `/verify` instead of into the app.
+- **`/verify` no longer strands the user**: on successful authorization, the page used to show a static "TV Authorized!" confirmation requiring a manual "Go to Web Portal" click. It now auto-redirects to `/` after ~1.8s (still with the manual button available for anyone who doesn't want to wait) — relevant now that an already-logged-in user can reach this page via the header entry point above, not just a logged-out phone scanning a QR with nothing else to do.
 
 ---
 
@@ -94,7 +106,7 @@ Admin self-protection guards prevent: disabling own account, downgrading own rol
 | `POST` | `/api/auth/refresh` | Refresh access token |
 | `POST` | `/api/auth/device/code` | Get device code (TV) |
 | `POST` | `/api/auth/device/poll` | Poll for TV auth result |
-| `POST` | `/api/auth/device/activate` | Activate a device code (from browser) |
+| `POST` | `/api/auth/device/authorize` | Authorize a device code (from an already-logged-in browser) |
 
 ---
 

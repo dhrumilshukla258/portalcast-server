@@ -181,7 +181,7 @@ export const proxy: ServerRoute[] = [
 
         try {
           const headRes = await httpClient.head(playlistUrl, { headers });
-          const contentType = headRes.headers["content-type"] || "";
+          const contentType = String(headRes.headers["content-type"] || "");
 
           if (
             contentType.includes("video/") ||

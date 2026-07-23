@@ -107,7 +107,7 @@ export const movieRoutes: ServerRoute[] = [
     },
   },
   {
-    method: "GET",
+    method: "POST",
     path: "/api/v2/reset-movies",
     handler: async (request, h) => {
       try {
@@ -247,7 +247,7 @@ export const movieRoutes: ServerRoute[] = [
               total_items: allOverridden.length,
               actual_length: itemsPerApiPage,
               total_loaded: pageData.length,
-              data: await enrichArtworkFromTmdb(pageData, "movie"),
+              data: await enrichArtworkFromTmdb(pageData, "movie", getPublicOrigin(request)),
               errors: false,
               isPortal: initialConfig.providerType === "stalker",
             };
@@ -291,7 +291,7 @@ export const movieRoutes: ServerRoute[] = [
               total_items: allOverridden.length,
               actual_length: itemsPerApiPage,
               total_loaded: pageData.length,
-              data: await enrichArtworkFromTmdb(pageData, "movie"),
+              data: await enrichArtworkFromTmdb(pageData, "movie", getPublicOrigin(request)),
               errors: false,
               isPortal: initialConfig.providerType === "stalker",
             };
@@ -403,7 +403,7 @@ export const movieRoutes: ServerRoute[] = [
           total_items: actualTotalItems,
           actual_length: itemsPerApiPage,
           total_loaded: firstPageData.length,
-          data: await enrichArtworkFromTmdb(overriddenMovieData, "movie"),
+          data: await enrichArtworkFromTmdb(overriddenMovieData, "movie", getPublicOrigin(request)),
           errors: false,
           isPortal: initialConfig.providerType === "stalker",
         };

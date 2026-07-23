@@ -44,6 +44,14 @@ export interface TmdbMeta {
   originalLanguage: string | null;
   countries: string[];
   keywordIds: number[];
+  // TMDB's own resolved release year — distinct from the `year` a caller may
+  // have extracted from the raw provider title text (used only to bias the
+  // search query, see `search()`'s yearParam). Two catalog entries for the
+  // same real title can differ in whether their raw text happened to contain
+  // a parseable year at all, which silently produced different `groupKey`s
+  // for what TMDB confirms is the same title — this is the authoritative
+  // value to group by once a TMDB match exists.
+  releaseYear: string | null;
 }
 
 interface Credits {
@@ -114,6 +122,8 @@ function buildMeta(detail: any, kind: "movie" | "tv"): TmdbMeta {
   const countries = kind === "movie"
     ? (detail.production_countries || []).map((c: any) => c.name).filter(Boolean)
     : (detail.origin_country || []).filter(Boolean).map((code: string) => countryLabel(code));
+  const releaseDateStr = kind === "movie" ? detail.release_date : detail.first_air_date;
+  const releaseYear = releaseDateStr ? String(releaseDateStr).slice(0, 4) : null;
 
   return {
     poster:     detail.poster_path ? `${IMG_BASE}/w500${detail.poster_path}`           : null,
@@ -128,6 +138,7 @@ function buildMeta(detail: any, kind: "movie" | "tv"): TmdbMeta {
     originalLanguage: detail.original_language || null,
     countries,
     keywordIds: extractKeywordIds(detail, kind),
+    releaseYear,
   };
 }
 

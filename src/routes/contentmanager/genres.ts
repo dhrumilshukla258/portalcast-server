@@ -1,6 +1,5 @@
 ﻿import { ServerRoute } from "@hapi/hapi";
 import { logger } from "@/infra/logger";
-import { authCheck } from "@/auth/jwt";
 import { GenreOverride } from "@/models/GenreOverride";
 import { ContentOverride } from "@/models/ContentOverride";
 import { readGenres, readChannels } from "@/infra/storage";
@@ -9,13 +8,13 @@ import { genreKey, contentKey } from "@/content/overrides";
 import { invalidateVodCache } from "@/providers/getM3uUrls";
 import { GenreType } from "@/models/Genre";
 import { generateStrmFiles } from "@/content/strmGenerator";
-import { unauthorized, getItemCount } from "./shared";
+import { requireAdmin, forbidden, getItemCount } from "./shared";
 export const genreRoutes: ServerRoute[] = [
   {
     method: "GET",
     path: "/api/admin/genres",
     handler: async (request, h) => {
-      if (!authCheck(request)) return unauthorized(h);
+      if (!requireAdmin(request)) return forbidden(h);
       const { type } = request.query as { type?: string };
       if (!type || !["channel", "movie", "series"].includes(type)) {
         return h.response({ error: "Invalid type" }).code(400);
@@ -76,7 +75,7 @@ export const genreRoutes: ServerRoute[] = [
     method: "POST",
     path: "/api/admin/genres/{type}",
     handler: async (request, h) => {
-      if (!authCheck(request)) return unauthorized(h);
+      if (!requireAdmin(request)) return forbidden(h);
       const { type } = request.params as { type: string };
       if (!["movie", "series"].includes(type)) {
         return h.response({ error: "Virtual categories only supported for movie and series" }).code(400);
@@ -94,7 +93,7 @@ export const genreRoutes: ServerRoute[] = [
     method: "PUT",
     path: "/api/admin/genres/{type}/reorder",
     handler: async (request, h) => {
-      if (!authCheck(request)) return unauthorized(h);
+      if (!requireAdmin(request)) return forbidden(h);
       const { type } = request.params as { type: string };
       if (!["channel", "movie", "series"].includes(type)) {
         return h.response({ error: "Invalid type" }).code(400);
@@ -118,7 +117,7 @@ export const genreRoutes: ServerRoute[] = [
     method: "PUT",
     path: "/api/admin/genres/{type}/{id}",
     handler: async (request, h) => {
-      if (!authCheck(request)) return unauthorized(h);
+      if (!requireAdmin(request)) return forbidden(h);
       const { type, id } = request.params as { type: string; id: string };
       if (!["channel", "movie", "series"].includes(type)) {
         return h.response({ error: "Invalid type" }).code(400);
@@ -141,7 +140,7 @@ export const genreRoutes: ServerRoute[] = [
     method: "DELETE",
     path: "/api/admin/genres/{type}/order",
     handler: async (request, h) => {
-      if (!authCheck(request)) return unauthorized(h);
+      if (!requireAdmin(request)) return forbidden(h);
       const { type } = request.params as { type: string };
       if (!["channel", "movie", "series"].includes(type)) {
         return h.response({ error: "Invalid type" }).code(400);
@@ -168,7 +167,7 @@ export const genreRoutes: ServerRoute[] = [
     method: "DELETE",
     path: "/api/admin/genres/{type}/{id}",
     handler: async (request, h) => {
-      if (!authCheck(request)) return unauthorized(h);
+      if (!requireAdmin(request)) return forbidden(h);
       const { type, id } = request.params as { type: string; id: string };
       if (!["channel", "movie", "series"].includes(type)) {
         return h.response({ error: "Invalid type" }).code(400);

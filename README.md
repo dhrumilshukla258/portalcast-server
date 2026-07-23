@@ -32,7 +32,8 @@ Connects to a **Stalker portal** or **Xtream Codes API** and re-serves the conte
 - **Admin Dashboard** — user stats, live "who's watching what right now" (type, title, category, user, IP, duration), STRM generation trigger — see `/admin` in the web UI
 - **Content Manager** — browser UI to rename, hide, move, and reorder content without touching the portal — available both standalone (`/contentmanager`) and as a tab inside the Admin Dashboard
 - **Virtual categories** — create custom groupings; move items in from any portal category
-- **Cache warming** — incremental background fetching so players always see fresh content
+- **Cache warming** — incremental background fetching so players always see fresh content, plus an automatic rotating sweep that detects and cleans up content the portal has since removed (metadata, Discover tags, and any orphaned Continue Watching entry) — see `docs/skill-content-lifecycle.md`
+- **Real-time multi-device sync** — favorites, recent channels, and last-selected category/TV channel sync instantly across every device a user is logged into via Socket.IO, not just on next login
 - **VOD category versioning** — tricks free IPTV players into re-fetching updated categories on force-refresh
 - **Jellyfin / Emby** — generates `.strm` files with automatic duplicate merging, variant tag detection, orphan pruning, and rename handling
 - **TMDB metadata** — optional poster/backdrop enrichment for VOD and series

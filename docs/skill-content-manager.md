@@ -4,6 +4,8 @@ The Content Manager is the admin UI and API for customizing how content appears 
 
 Related: [[skill-database]], [[skill-xtream-provider]], [[skill-m3u-playlist]], [[skill-admin-dashboard]], [[skill-stream-tokens]]
 
+Note: this doc covers **manual admin overrides** (rename/hide/move/reorder). For **automatic** removal of content the portal itself no longer has (no admin action involved), see [[skill-content-lifecycle]] instead.
+
 ---
 
 ## What It Does

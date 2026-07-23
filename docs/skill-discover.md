@@ -2,7 +2,7 @@
 
 Netflix-style genre/country/language/theme browse + "Because You Watched" recommendations, built on top of a TMDB-enriched catalog cache (`ContentMeta`) that sits alongside — not instead of — the existing portal-driven browse (StalkerV2/Xtream).
 
-Related: [[skill-database]], [[skill-xtream-provider]], [[skill-stalker-provider]]
+Related: [[skill-database]], [[skill-xtream-provider]], [[skill-stalker-provider]], [[skill-content-lifecycle]] (proactive pruning of removed content, backdrop backfill scope)
 
 **Status: in progress.** This doc reflects the code as of 2026-07-21; the feature is still being iterated on (see the perf-incident comments throughout the code — this has already been rewritten more than once under real data volume).
 
@@ -23,6 +23,12 @@ Catalogs list the same real title multiple times per language/dub/quality varian
 - `trimmedName = stripReleaseNoise(name)` — case-preserved cleaned title shown to users, computed once at enrichment time (not per-request).
 - `isRepresentative` — exactly one `true` row per `groupKey`, recomputed by `recomputeRepresentatives()` (prefers TMDB-sourced, then has a poster, then most recently enriched). Browse/facets/recommendations all filter on this flag; the rest of a group is reachable via `/api/v2/discover/variants`.
 
+`normalizeTitleKey()` (`src/content/titleClean.ts`) also collapses a mid-title colon (`"Title: Sub"` vs `"Title Sub"`) into the same key as of this session — display-facing `trimmedName` keeps the colon, only the grouping key strips it. Before this fix, the same real show could land in two different `groupKey` groups depending on which punctuation variant the provider/TMDB happened to return, and get two separate Discover cards.
+
+### One-time reconciliation (`src/content/reconcileDuplicateGroups.ts`, `npm run reconcile-groups`)
+
+Fixes only apply going forward to newly enriched rows — existing `content_meta` rows enriched before the colon fix (and before a separate fix that resolves `year` from TMDB's own release year rather than a raw-title regex) can still be sitting in duplicate groups. This script re-buckets every existing row by the fixed `normalizeTitleKey()`, then within each name-bucket only merges rows that are safe to merge (same year, or one side missing a year) — two same-titled rows with two different non-empty years (e.g. a 1959 vs. 2024 remake) are left alone since those are genuinely different shows. Merging deletes the losing rows' tag rows and `ContentMeta` row (keeping the same "TMDB-sourced > has poster > most recently enriched" tie-break as `pruneContentMeta`'s sibling-promotion), repoints any `UserProgress.mediaId` that happened to match a loser's id, and recomputes the winner's `groupKey`/`year`/`isRepresentative`. Run once after deploying the colon/year fixes; safe to leave unrun otherwise since it's a cosmetic dedup, not a correctness issue.
+
 ## Enrichment pipeline (`src/content/metaEnrichment.ts`)
 
 `enrichContentMeta({ includeBackdropBackfill? })` — **manual trigger only**, never automatic (a full-catalog TMDB backfill takes hours at the throttled rate — `THROTTLE_MS = 350`). Runs, in order:
@@ -37,7 +43,7 @@ Triggered via `POST /api/admin/content-meta/enrich` (`src/routes/contentmanager/
 
 ### Pruning stale items (`pruneContentMeta`)
 
-Called from `routes/stalkerV2/movies.ts`/`series.ts` at click-time when a direct portal lookup for an already-enriched id comes back empty (item removed from the portal). Deletes the `ContentMeta` row + its tag rows, strips the id out of the relevant `vod_streams_*`/`series_list_*` list cache (so it stops surfacing in regular search immediately, not just after the next warm cycle), and — if the pruned row was the group's representative — promotes the next-best surviving variant so the title doesn't vanish from Discover if a still-valid variant exists.
+Called from `routes/stalkerV2/movies.ts`/`series.ts` at click-time when a direct portal lookup for an already-enriched id comes back empty (item removed from the portal), **and** proactively by `sweepStaleContent()`'s rotating category sweep (new this session, doesn't require a user to click the item). Deletes the `ContentMeta` row + its tag rows, strips the id out of the relevant `vod_streams_*`/`series_list_*` list cache (so it stops surfacing in regular search immediately, not just after the next warm cycle), deletes any orphaned `UserProgress`/Continue Watching row for the same id, and — if the pruned row was the group's representative — promotes the next-best surviving variant so the title doesn't vanish from Discover if a still-valid variant exists. Full detail (including why the proactive sweep only checks a few categories per run instead of the whole catalog) → [[skill-content-lifecycle]].
 
 ## Routes (`src/routes/discover/index.ts`)
 

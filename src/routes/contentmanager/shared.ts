@@ -3,8 +3,18 @@ import { readChannels } from "@/infra/storage";
 import { xtreamCache } from "@/services/xtreamCache";
 import { GenreType } from "@/models/Genre";
 
+// Re-exported from the central definition in auth/jwt.ts — kept here too
+// since every route file in this content-manager panel already imports its
+// auth helpers from "./shared" (see also routes/providerConfig.ts, which
+// imports requireAdmin directly from @/auth/jwt instead).
+export { requireAdmin } from "@/auth/jwt";
+
 export function unauthorized(h: any) {
   return h.response({ error: "Unauthorized" }).code(401);
+}
+
+export function forbidden(h: any) {
+  return h.response({ error: "Forbidden" }).code(403);
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────

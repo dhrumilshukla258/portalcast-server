@@ -1,6 +1,5 @@
 ﻿import { ServerRoute } from "@hapi/hapi";
 import { logger } from "@/infra/logger";
-import { authCheck } from "@/auth/jwt";
 import { GenreOverride } from "@/models/GenreOverride";
 import { ContentOverride } from "@/models/ContentOverride";
 import { readGenres, readChannels } from "@/infra/storage";
@@ -9,13 +8,13 @@ import { genreKey, contentKey } from "@/content/overrides";
 import { invalidateVodCache } from "@/providers/getM3uUrls";
 import { GenreType } from "@/models/Genre";
 import { generateStrmFiles } from "@/content/strmGenerator";
-import { unauthorized, getItemCount } from "./shared";
+import { requireAdmin, forbidden, getItemCount } from "./shared";
 export const itemRoutes: ServerRoute[] = [
   {
     method: "GET",
     path: "/api/admin/items",
     handler: async (request, h) => {
-      if (!authCheck(request)) return unauthorized(h);
+      if (!requireAdmin(request)) return forbidden(h);
       const { type, category_id } = request.query as { type?: string; category_id?: string };
       if (!type || !["channel", "movie", "series"].includes(type)) {
         return h.response({ error: "Invalid type" }).code(400);
@@ -136,7 +135,7 @@ export const itemRoutes: ServerRoute[] = [
     method: "PUT",
     path: "/api/admin/items/{type}/{category_id}/reorder",
     handler: async (request, h) => {
-      if (!authCheck(request)) return unauthorized(h);
+      if (!requireAdmin(request)) return forbidden(h);
       const { type, category_id } = request.params as { type: string; category_id: string };
       if (!["channel", "movie", "series"].includes(type)) {
         return h.response({ error: "Invalid type" }).code(400);
@@ -172,7 +171,7 @@ export const itemRoutes: ServerRoute[] = [
     method: "PUT",
     path: "/api/admin/items/{type}/{id}",
     handler: async (request, h) => {
-      if (!authCheck(request)) return unauthorized(h);
+      if (!requireAdmin(request)) return forbidden(h);
       const { type, id } = request.params as { type: string; id: string };
       if (!["channel", "movie", "series"].includes(type)) {
         return h.response({ error: "Invalid type" }).code(400);
@@ -195,7 +194,7 @@ export const itemRoutes: ServerRoute[] = [
     method: "DELETE",
     path: "/api/admin/items/{type}/{id}",
     handler: async (request, h) => {
-      if (!authCheck(request)) return unauthorized(h);
+      if (!requireAdmin(request)) return forbidden(h);
       const { type, id } = request.params as { type: string; id: string };
       if (!["channel", "movie", "series"].includes(type)) {
         return h.response({ error: "Invalid type" }).code(400);

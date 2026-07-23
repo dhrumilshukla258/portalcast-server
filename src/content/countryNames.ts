@@ -1,23 +1,43 @@
 // TMDB's TV/series responses give origin_country as raw ISO 3166-1 alpha-2
 // codes (e.g. "IN", "US") with no name attached, unlike movies'
-// production_countries, which already include the full name — without this
-// map, the same country shows up as two different facet values depending on
-// whether it was tagged via a movie or a series (e.g. "India" and "IN").
-export const COUNTRY_NAMES: Record<string, string> = {
-  US: "United States of America", GB: "United Kingdom", IN: "India", CA: "Canada",
-  AU: "Australia", FR: "France", DE: "Germany", IT: "Italy", ES: "Spain",
-  JP: "Japan", KR: "South Korea", CN: "China", HK: "Hong Kong", TW: "Taiwan",
-  RU: "Russia", BR: "Brazil", MX: "Mexico", AR: "Argentina", NL: "Netherlands",
-  SE: "Sweden", NO: "Norway", DK: "Denmark", FI: "Finland", PL: "Poland",
-  TR: "Turkey", TH: "Thailand", ID: "Indonesia", MY: "Malaysia", PH: "Philippines",
-  VN: "Vietnam", SG: "Singapore", PK: "Pakistan", BD: "Bangladesh", LK: "Sri Lanka",
-  NP: "Nepal", IE: "Ireland", NZ: "New Zealand", ZA: "South Africa", EG: "Egypt",
-  SA: "Saudi Arabia", AE: "United Arab Emirates", IL: "Israel", IR: "Iran",
-  PT: "Portugal", BE: "Belgium", CH: "Switzerland", AT: "Austria", GR: "Greece",
-  CZ: "Czech Republic", HU: "Hungary", RO: "Romania", UA: "Ukraine", CO: "Colombia",
-  CL: "Chile", PE: "Peru",
+// production_countries, which already include the full name — without
+// resolving these, the same country shows up as two different facet values
+// depending on whether it was tagged via a movie or a series (e.g. "India"
+// and "IN"). Only ever hand-maintaining a lookup table for this (the
+// original approach here) is a losing game — the catalog kept turning up
+// codes the table didn't cover (IO, NG, LV, KW, JO, GE, AZ, AM, HR, ...),
+// each one a fresh silent gap, same failure mode already hit once for
+// ISO_LANGUAGE_NAMES in titleClean.ts. Intl.DisplayNames (Node 18+, this
+// project targets Node 20) resolves any real ISO 3166-1 code generically —
+// same fix the webui already applies for language codes (languageName() in
+// DiscoverFilters.tsx via Intl.DisplayNames type:'language').
+let regionDisplayNames: Intl.DisplayNames | undefined;
+try {
+  regionDisplayNames = new Intl.DisplayNames(["en"], { type: "region" });
+} catch {
+  // Environments without Intl.DisplayNames support fall through to the
+  // overrides/raw-code fallback below.
+}
+
+// A handful of non-standard/historical codes TMDB still emits that aren't
+// real current ISO 3166-1 alpha-2 codes, so Intl.DisplayNames can't resolve
+// them either — "SU" (Soviet Union) and "XC"/"XI" (TMDB's own placeholder
+// codes for Czechoslovakia/Kosovo) are user-assigned, not CLDR-registered.
+const COUNTRY_NAME_OVERRIDES: Record<string, string> = {
+  SU: "Soviet Union",
+  XC: "Czechoslovakia",
+  XI: "Kosovo",
 };
 
 export function countryLabel(code: string): string {
-  return COUNTRY_NAMES[code.toUpperCase()] || code;
+  const upper = code.toUpperCase();
+  if (COUNTRY_NAME_OVERRIDES[upper]) return COUNTRY_NAME_OVERRIDES[upper];
+  try {
+    const name = regionDisplayNames?.of(upper);
+    if (name && name.toUpperCase() !== upper) return name;
+  } catch {
+    // Intl.DisplayNames throws on a string it doesn't recognize as a valid
+    // region code at all (e.g. a 3-letter code) — fall through to raw code.
+  }
+  return code;
 }

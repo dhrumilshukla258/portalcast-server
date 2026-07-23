@@ -1,5 +1,5 @@
 import { Transaction } from "sequelize";
-import { xtreamCache } from "@/services/xtreamCache";
+import { xtreamCache, catchupScan } from "@/services/xtreamCache";
 import { readGenres } from "@/infra/storage";
 import { logger } from "@/infra/logger";
 import { fetchMovieMeta, fetchTVMeta, fetchMetaByTmdbId, TmdbMeta } from "@/content/tmdb";
@@ -8,8 +8,25 @@ import { ContentMeta, ContentType, ContentMetaSource } from "@/models/ContentMet
 import { ContentGenre } from "@/models/ContentGenre";
 import { ContentCountry } from "@/models/ContentCountry";
 import { ContentTheme } from "@/models/ContentTheme";
+import { UserProgress } from "@/models/UserProgress";
+import { SystemConfig } from "@/models/SystemConfig";
 import { clearDiscoverCache } from "@/services/discoverCache";
 import { normalizeTitleKey, stripReleaseNoise } from "@/content/titleClean";
+
+// Single catch-all genre tag for titles whose only "genre" signal is a
+// provider category label (e.g. "Hindi Web Series", "Urdu Tv Show") — the
+// provider's genres_str/genre field is literally its category name, a
+// <language> + <content-format> label, never a real genre. These are
+// typically the exact regional titles TMDB has no match for at all, so
+// dropping them to zero genres would make them unreachable via the genre
+// facet entirely — tagging them into one dedicated bucket instead keeps them
+// reachable via a single clean filter chip rather than leaking dozens of
+// distinct noise values into the genre facet.
+export const UNCATEGORIZED_GENRE = "Uncategorized";
+
+function resolveFallbackGenres(fallbackGenres: string[]): string[] {
+  return fallbackGenres.length > 0 ? [UNCATEGORIZED_GENRE] : [];
+}
 
 // Same pace as the existing warmSeriesInfoCache() TMDB/portal throttle in xtreamCache.ts —
 // a full-catalog backfill (100k+ movies) at this rate takes hours, which is expected and
@@ -77,7 +94,7 @@ async function resolveMeta(
   // a poster-only legacy entry would permanently leave that title without them (xtreamCache
   // entries don't expire on plain .get() reads) — treat a legacy-shaped hit as a miss and
   // re-fetch fresh instead of degrading quietly.
-  const isLegacyShape = tmdb && !("_not_found" in tmdb) && !("originalLanguage" in tmdb);
+  const isLegacyShape = tmdb && !("_not_found" in tmdb) && (!("originalLanguage" in tmdb) || !("releaseYear" in tmdb));
   if (!tmdb || isLegacyShape) {
     const fetched = kind === "movie" ? await fetchMovieMeta(name, year) : await fetchTVMeta(name, year);
     tmdb = fetched || { _not_found: true };
@@ -90,11 +107,16 @@ async function resolveMeta(
       poster: tmdb.poster || fallbackPoster,
       backdrop: tmdb.backdrop || null,
       backdropHd: tmdb.backdropHd || null,
-      year,
+      // Prefer TMDB's own resolved release year over whatever (if anything)
+      // was extracted from the raw provider title text — two catalog entries
+      // for the same real title can differ in whether their raw text had a
+      // parseable year at all, which used to silently produce two different
+      // groupKeys for what TMDB confirms is the same title.
+      year: tmdb.releaseYear || year,
       originalLanguage: tmdb.originalLanguage ?? null,
       tmdbId: tmdb.tmdbId,
       source: "tmdb",
-      genres: tmdb.genres.length > 0 ? tmdb.genres : fallbackGenres,
+      genres: tmdb.genres.length > 0 ? tmdb.genres : resolveFallbackGenres(fallbackGenres),
       countries: tmdb.countries.length > 0 ? tmdb.countries : fallbackCountries,
       themes: themesForKeywordIds(tmdb.keywordIds),
       cast: tmdb.cast,
@@ -110,7 +132,7 @@ async function resolveMeta(
     originalLanguage: null,
     tmdbId: undefined,
     source: fallbackGenres.length > 0 || fallbackCountries.length > 0 ? "provider" : "none",
-    genres: fallbackGenres,
+    genres: resolveFallbackGenres(fallbackGenres),
     countries: fallbackCountries,
     themes: [],
     cast: null,
@@ -368,8 +390,12 @@ async function backfillPortalCategoryIds(): Promise<void> {
 // is expected to take a while over a large catalog — it's the same
 // manual-trigger-only, run-when-convenient tradeoff as everything else here.
 async function backfillBackdrops(): Promise<void> {
+  // backdropCheckedAt (not backdropHd) is the "already handled" signal — a
+  // null backdropHd alone can't tell "never checked" apart from "checked,
+  // TMDB genuinely has no HD backdrop for this title," which used to make
+  // every run re-fetch the same permanently-backdrop-less rows forever.
   const missing = (await ContentMeta.findAll({
-    where: { backdropHd: null as any, source: "tmdb" },
+    where: { backdropCheckedAt: null as any, source: "tmdb" },
     attributes: ["id", "type", "tmdbId"],
     raw: true,
   })) as unknown as { id: string; type: ContentType; tmdbId: number | null }[];
@@ -383,14 +409,17 @@ async function backfillBackdrops(): Promise<void> {
       const kind = row.type === "movie" ? "movie" : "tv";
       const meta = await fetchMetaByTmdbId(kind, row.tmdbId!);
       await sleep(THROTTLE_MS);
+      // No result at all (API error/transient failure) is left unchecked so a
+      // later run retries it — only a successful fetch (whether or not it
+      // actually has a backdrop) counts as "checked" and stops future retries.
       if (!meta) continue;
+      const updates: any = { backdropCheckedAt: new Date() };
       if (meta.backdrop || meta.backdropHd) {
-        await ContentMeta.update(
-          { backdrop: meta.backdrop || null, backdropHd: meta.backdropHd || null },
-          { where: { id: row.id } }
-        );
+        updates.backdrop = meta.backdrop || null;
+        updates.backdropHd = meta.backdropHd || null;
         updated++;
       }
+      await ContentMeta.update(updates, { where: { id: row.id } });
     } catch (e: any) {
       logger.error(`[MetaEnrich] backdrop refresh failed for ${row.id}: ${e.message}`);
     }
@@ -420,6 +449,22 @@ export async function pruneContentMeta(contentId: string, portalCategoryId?: str
   const groupKey = existing?.groupKey;
   const wasRepresentative = existing?.isRepresentative;
   const categoryId = portalCategoryId || existing?.portalCategoryId;
+
+  // UserProgress.mediaId uses this same movie_{id}/series_{id} shape (see
+  // client's saveUserProgress), so any Continue Watching entry for content
+  // that's been removed from the portal was otherwise left permanently
+  // orphaned — pointing at a title that no longer exists anywhere, with
+  // nothing to ever clean it up. Unconditional on `existing` (runs even if
+  // ContentMeta was already pruned by an earlier version of this function,
+  // before this cleanup existed) so it also retroactively catches those.
+  try {
+    const deleted = await UserProgress.destroy({ where: { mediaId: contentId } });
+    if (deleted > 0) {
+      logger.info(`[MetaEnrich] Removed ${deleted} orphaned UserProgress row(s) for pruned content ${contentId}`);
+    }
+  } catch (e: any) {
+    logger.error(`[MetaEnrich] Failed to clean up UserProgress for pruned content ${contentId}: ${e.message}`);
+  }
 
   if (existing) {
     await ContentGenre.destroy({ where: { contentId } });
@@ -466,6 +511,72 @@ export async function pruneContentMeta(contentId: string, portalCategoryId?: str
 
   clearDiscoverCache();
   logger.info(`[MetaEnrich] Pruned stale content ${contentId} (no longer present on portal)`);
+}
+
+// warmVodCache/warmSeriesCache (services/xtreamCache.ts) use fetchUntilKnown,
+// which stops paginating the instant it hits an already-cached item — cheap
+// (usually just page 1), but purely additive: it can only ever discover NEW
+// items, never notice one that's disappeared from the provider. Otherwise-
+// orphaned content only ever got cleaned up reactively, one item at a time,
+// when a user happened to click something the portal had since 404'd on
+// (pruneContentMeta's caller in movies.ts/series.ts) — anything nobody
+// clicked again just sat there forever.
+//
+// catchupScan() (services/xtreamCache.ts) already solves the detection side
+// efficiently — it compares the portal's own reported total_items against
+// the local count per category, doing a cheap bounded incremental scan when
+// the portal has more, and only paying for a full-page scan when the total
+// actually dropped (i.e. something was genuinely removed). It's normally
+// manual-trigger-only (POST /api/v2/catchup-scan) and scans every category.
+// This wraps it instead of reimplementing detection: passes `onRemoved` so
+// every id catchupScan confirms gone also gets pruned here (ContentMeta +
+// tags + UserProgress + list-cache — catchupScan itself only touches the
+// list-cache), and scopes it to a small rotating slice of categories
+// (SWEEP_CATEGORIES_PER_RUN) via `genreIds` so a full pass over the whole
+// catalog completes gradually over many days/weeks — with a `throttleMs`
+// pace on top — rather than a full-catalog re-fetch on every run. Content
+// removal isn't time-sensitive the way new content is, so a slow rolling
+// sweep is the right tradeoff.
+const SWEEP_CATEGORIES_PER_RUN = 5;
+const SWEEP_CURSOR_KEY = "content_sweep_cursor";
+
+export async function sweepStaleContent(): Promise<void> {
+  const movieGenres = await readGenres("movie");
+  const seriesGenres = await readGenres("series");
+  const genreIds = new Set<string>();
+  for (const g of [...movieGenres, ...seriesGenres]) {
+    if (g.id && g.id !== "*") genreIds.add(g.id);
+  }
+  const allIds = Array.from(genreIds).sort();
+  if (allIds.length === 0) return;
+
+  const cursorRow = await SystemConfig.findByPk(SWEEP_CURSOR_KEY);
+  const startIdx = (Number(cursorRow?.value) || 0) % allIds.length;
+  const sliceSize = Math.min(SWEEP_CATEGORIES_PER_RUN, allIds.length);
+  const slice = Array.from({ length: sliceSize }, (_, i) => allIds[(startIdx + i) % allIds.length]);
+
+  let prunedCount = 0;
+  const didRun = await catchupScan({
+    genreIds: slice,
+    throttleMs: THROTTLE_MS,
+    onRemoved: async (contentId, categoryId) => {
+      await pruneContentMeta(contentId, categoryId);
+      prunedCount++;
+    },
+  });
+
+  if (!didRun) {
+    // Another catchupScan (manual /api/v2/catchup-scan or an overlapping
+    // previous sweep) was already in progress — this slice was never
+    // actually checked. Don't advance the cursor, or these categories would
+    // get silently skipped for a full rotation cycle instead of just retried
+    // on the next run.
+    logger.info(`[ContentSweep] Skipped — another catchup scan was already in progress. Will retry the same ${slice.length} categor${slice.length === 1 ? "y" : "ies"} next run.`);
+    return;
+  }
+
+  await SystemConfig.upsert({ key: SWEEP_CURSOR_KEY, value: (startIdx + sliceSize) % allIds.length });
+  logger.info(`[ContentSweep] Checked ${slice.length} categor${slice.length === 1 ? "y" : "ies"} via catchupScan, pruned ${prunedCount} removed item(s).`);
 }
 
 let isEnriching = false;

@@ -6,6 +6,9 @@ import { ConfigProfile } from "../../models/ConfigProfile";
 import { authCheck } from "../../auth/jwt";
 import { encryptSecret } from "../../auth/crypto";
 import { linkOpenSubtitlesAccount } from "../../content/opensubtitles";
+import { proxiedImageUrl } from "@/providers/portalAssets";
+import { getPublicOrigin } from "@/infra/publicUrl";
+import { socketService } from "@/services/SocketService";
 import fs from "fs/promises";
 import path from "path";
 
@@ -80,6 +83,8 @@ export const userRoutes: ServerRoute[] = [
         user.changed("preferences", true);
         await user.save();
 
+        socketService.broadcastPreferencesChanged(user.id, user.preferences);
+
         return { success: true, preferences: user.preferences };
       } catch (error) {
         logger.error({ err: error }, "Error updating user preferences");
@@ -108,10 +113,21 @@ export const userRoutes: ServerRoute[] = [
         // `"meta": {"title":...}`). The frontend's `record.meta as Type` cast
         // silently accepts either shape at compile time, so every `entry.*`
         // field reads as undefined at runtime without this — normalize here.
+        const origin = getPublicOrigin(request);
         return progressRecords.map((r) => {
           const plain = r.toJSON() as any;
           if (typeof plain.meta === "string") {
             try { plain.meta = JSON.parse(plain.meta); } catch { /* leave as-is */ }
+          }
+          // meta.screenshot_uri was saved verbatim from whatever the client had
+          // in-memory at playback time (see webui's useProgressTracking.ts) —
+          // rows saved before proxiedImageUrl existed still carry the raw
+          // upstream portal/CDN URL, which never self-heals since this row is
+          // never rebuilt from the catalog. Every other surface re-proxies at
+          // serve time (enrichArtworkFromTmdb, mapChannel, Discover's
+          // toMediaItem); do the same here so old rows aren't stuck forever.
+          if (plain.meta && typeof plain.meta === "object" && typeof plain.meta.screenshot_uri === "string") {
+            plain.meta.screenshot_uri = proxiedImageUrl(plain.meta.screenshot_uri, origin);
           }
           return plain;
         });
@@ -180,6 +196,7 @@ export const userRoutes: ServerRoute[] = [
           };
           user.changed("preferences", true);
           await user.save();
+          socketService.broadcastPreferencesChanged(user.id, user.preferences);
         }
 
         return { success: true };

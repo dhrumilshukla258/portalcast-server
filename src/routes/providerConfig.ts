@@ -8,7 +8,7 @@ import { stalkerApi } from "@/providers/stalker";
 import { ConfigProfile } from "@/models/ConfigProfile";
 import crypto from "crypto";
 import { socketService } from "@/services/SocketService";
-import { createJWT, authCheck } from "@/auth/jwt";
+import { createJWT, requireAdmin } from "@/auth/jwt";
 import { SystemConfig } from "../models/SystemConfig";
 import { Channel } from "@/models/Channel";
 import { Genre } from "@/models/Genre";
@@ -26,7 +26,7 @@ export const configRoutes: ServerRoute[] = [
     method: "GET",
     path: "/api/config",
     handler: async (request, h) => {
-      if (!authCheck(request)) return h.response({ error: "Unauthorized" }).code(401);
+      if (!requireAdmin(request)) return h.response({ error: "Forbidden" }).code(403);
       return initialConfig;
     },
   },
@@ -34,7 +34,7 @@ export const configRoutes: ServerRoute[] = [
     method: "POST",
     path: "/api/config",
     handler: async (request, h) => {
-      if (!authCheck(request)) return h.response({ error: "Unauthorized" }).code(401);
+      if (!requireAdmin(request)) return h.response({ error: "Forbidden" }).code(403);
       try {
         const newConfig = request.payload as any;
         const activeProfile = await ConfigProfile.findOne({ where: { isActive: true } });
@@ -103,7 +103,7 @@ export const configRoutes: ServerRoute[] = [
     method: "POST",
     path: "/api/clear-cache",
     handler: async (request, h) => {
-      if (!authCheck(request)) return h.response({ error: "Unauthorized" }).code(401);
+      if (!requireAdmin(request)) return h.response({ error: "Forbidden" }).code(403);
       try {
         serverManager.getProvider().clearCache();
         const activeProfile = await ConfigProfile.findOne({ where: { isActive: true } });
@@ -139,7 +139,7 @@ export const configRoutes: ServerRoute[] = [
     method: "POST",
     path: "/api/carousel",
     handler: async (request, h) => {
-      if (!authCheck(request)) return h.response({ error: "Unauthorized" }).code(401);
+      if (!requireAdmin(request)) return h.response({ error: "Forbidden" }).code(403);
       try {
         const payload = request.payload;
         await SystemConfig.upsert({ key: "carousel_slides", value: payload });
@@ -162,7 +162,7 @@ export const configRoutes: ServerRoute[] = [
       },
     },
     handler: async (request, h) => {
-      if (!authCheck(request)) return h.response({ error: "Unauthorized" }).code(401);
+      if (!requireAdmin(request)) return h.response({ error: "Forbidden" }).code(403);
       try {
         const payload = request.payload as any;
         const file = payload?.file;

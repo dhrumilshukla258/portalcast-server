@@ -174,13 +174,17 @@ Use after a long offline period. The incremental warm stops at the first known i
 
 `fetchAllPages()` accepts an optional `startPage` parameter so already-fetched page 1 data can be reused.
 
-### XtreamCache daily cleanup
+### XtreamCache is never purged by age
 
-A job in `server.ts` runs on startup and every 24h:
-```ts
-XtreamCache.destroy({ where: { expiresAt: { [Op.lt]: new Date() } } })
-```
-Expired rows are purged automatically — no manual intervention needed.
+Despite genuinely accumulating unbounded per-item rows over time (no scheduled job ever deletes an expired `vod_info_*`/`ep_info_*`/etc. row), `XtreamCache` is **deliberately excluded** from `runDbCleanup()` in `src/server.ts`. A 7-day-stale purge was tried this session and reverted after it broke production: even scoped to only `vod_streams_*`/`series_list_*` keys, an earlier unscoped version of it also deleted write-once rows like `series_info_*` — populated once by `warmSeriesInfoCache()` and never rewritten again once complete, so their `expiresAt` freezes at creation time and eventually crosses any age threshold regardless of the row still being actively read by real `get_series_info` requests. Deleting them forced a full catalog rebuild on the next warm cycle. See [[skill-database#Scheduled Cleanup]] for the full incident writeup.
+
+`runDbCleanup()` does still purge expired `device_codes` rows — a much simpler, unrelated table with no stale-serve/write-once pattern to worry about.
+
+### `catchupScan()` — now also used by the automatic stale-content sweep
+
+Originally manual-only (`POST /api/v2/catchup-scan`, `src/routes/stalkerV2/maintenance.ts`): compares the portal's own reported `total_items` against the locally cached count per category, doing a cheap bounded incremental scan when the portal has more, and only paying for a full-page scan when the total has dropped (the only way to know exactly which ids are gone). It now accepts an optional `CatchupScanOptions` (`genreIds`, `onRemoved`, `throttleMs`) so [[skill-content-lifecycle]]'s automatic sweep can reuse this same detection logic, scoped to a small rotating slice of categories and with the actually-removed ids fed to `pruneContentMeta()` — something `catchupScan()` itself still never does; called with no options (the manual endpoint's usage), its behavior is unchanged: full catalog, no throttle, updates only the `XtreamCache` list cache.
+
+`catchupScan()` returns `Promise<boolean>` — `true` if it actually ran, `false` if it was skipped because another scan (manual or automatic) already held its single global in-progress mutex. The manual endpoint ignores this; the automatic sweep does not — see [[skill-content-lifecycle]] for why that distinction matters there.
 
 ---
 
@@ -188,7 +192,7 @@ Expired rows are purged automatically — no manual intervention needed.
 
 - `src/providers/xtream-client.ts` — XtreamClient implementation (includes circuit breaker)
 - `src/routes/xtream/` — API routes (`protocol.ts`, `streams.ts`)
-- `src/services/xtreamCache.ts` — XtreamCache object, versioning, warm functions, catchupScan
+- `src/services/xtreamCache.ts` — XtreamCache object, versioning, warm functions, `catchupScan()` (see above)
 - `src/services/xtreamAuth.ts` — stream token generation, resolveXtreamUser
 - `src/models/XtreamCache.ts` — Sequelize model
 - `src/streaming/circuitBreaker.ts` — Reusable `CircuitBreaker` class (configurable via `CB_*` env vars)

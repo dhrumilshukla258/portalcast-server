@@ -1,9 +1,9 @@
 import crypto from "crypto";
 
-const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET) {
+if (!process.env.JWT_SECRET) {
   throw new Error("JWT_SECRET environment variable must be set");
 }
+const JWT_SECRET: string = process.env.JWT_SECRET;
 
 export function createJWT(payload: any, expiresInSeconds?: number): string {
   const head = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
@@ -39,4 +39,18 @@ export function authCheck(request: any): any | false {
   }
   const token = authHeader.split(" ")[1];
   return verifyJWT(token);
+}
+
+// authCheck() alone only proves the JWT is validly signed and unexpired — it
+// says nothing about WHO it belongs to. Several routes gated only on
+// authCheck() under paths clearly meant to be admin-only (content-manager
+// panel, provider config, cache clearing, uploads) turned out reachable by
+// any regular logged-in user, not just the admin login (createJWT({role:
+// "admin"}) in routes/providerConfig.ts is the only place that ever sets this
+// claim). Use this wherever a route needs to actually enforce "admin only,"
+// not just "logged in."
+export function requireAdmin(request: any): any | false {
+  const userPayload = authCheck(request);
+  if (!userPayload || userPayload.role !== "admin") return false;
+  return userPayload;
 }

@@ -1,6 +1,5 @@
 ﻿import { ServerRoute } from "@hapi/hapi";
 import { logger } from "@/infra/logger";
-import { authCheck } from "@/auth/jwt";
 import { GenreOverride } from "@/models/GenreOverride";
 import { ContentOverride } from "@/models/ContentOverride";
 import { readGenres, readChannels } from "@/infra/storage";
@@ -11,13 +10,13 @@ import { GenreType } from "@/models/Genre";
 import { generateStrmFiles } from "@/content/strmGenerator";
 import { StrmMovie } from "@/models/StrmMovie";
 import { StrmSeries } from "@/models/StrmSeries";
-import { unauthorized, getItemCount } from "./shared";
+import { requireAdmin, forbidden, getItemCount } from "./shared";
 export const strmRoutes: ServerRoute[] = [
   {
     method: "POST",
     path: "/api/admin/strm/generate",
     handler: async (request, h) => {
-      if (!authCheck(request)) return unauthorized(h);
+      if (!requireAdmin(request)) return forbidden(h);
       const moviesPath = process.env.STRM_MOVIES_PATH;
       const seriesPath = process.env.STRM_SERIES_PATH;
       if (!moviesPath && !seriesPath) {
@@ -39,7 +38,7 @@ export const strmRoutes: ServerRoute[] = [
     method: "POST",
     path: "/api/admin/strm/reset",
     handler: async (request, h) => {
-      if (!authCheck(request)) return unauthorized(h);
+      if (!requireAdmin(request)) return forbidden(h);
 
       const movieCount  = await StrmMovie.count();
       const seriesCount = await StrmSeries.count();

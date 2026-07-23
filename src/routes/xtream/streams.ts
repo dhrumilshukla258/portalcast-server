@@ -44,8 +44,10 @@ async function handleStalkerVodStream(request: any, h: any) {
     const category = vodInfo?.info?.genre || undefined;
     return h.redirect(proxyUrlFor(url, `xtream:${request.params.username}`, { kind: "movie", label, category })).code(302);
   } catch (err: any) {
+    // Log the real error (a DNS/connection failure here often names the real portal
+    // host) but never forward err.message to the client.
     logger.error(`[VOD stream] ${err.message}`);
-    return h.response({ error: err.message }).code(500);
+    return h.response({ error: "Failed to resolve stream" }).code(500);
   }
 }
 
@@ -130,7 +132,7 @@ async function handleStalkerSeriesStream(request: any, h: any) {
     return h.redirect(proxyUrlFor(url, `xtream:${request.params.username}`, { kind: "series", label, category })).code(302);
   } catch (err: any) {
     logger.error(`[Series stream] ${err.message}`);
-    return h.response({ error: err.message }).code(500);
+    return h.response({ error: "Failed to resolve stream" }).code(500);
   }
 }
 
@@ -141,7 +143,7 @@ export const streamRoutes: ServerRoute[] = [
     method: "GET",
     path: "/movie/{username}/{password}/{streamId}.m3u8",
     handler: async (request, h) => {
-      const { username, password } = request.params;
+      const { username, password } = request.params as { username: string; password: string };
       if (!await resolveXtreamUser(username, password)) return h.response("Unauthorized").code(401);
       return handleStalkerVodStream(request, h);
     },
@@ -152,7 +154,7 @@ export const streamRoutes: ServerRoute[] = [
     method: "GET",
     path: "/series/{username}/{password}/{streamId}.m3u8",
     handler: async (request, h) => {
-      const { username, password } = request.params;
+      const { username, password } = request.params as { username: string; password: string };
       if (!await resolveXtreamUser(username, password)) return h.response("Unauthorized").code(401);
       return handleStalkerSeriesStream(request, h);
     },
@@ -163,7 +165,7 @@ export const streamRoutes: ServerRoute[] = [
     method: "GET",
     path: "/live/{username}/{password}/{streamId}.m3u8",
     handler: async (request, h) => {
-      const { username, password, streamId } = request.params;
+      const { username, password, streamId } = request.params as { username: string; password: string; streamId: string };
       if (!await resolveXtreamUser(username, password)) return h.response("Unauthorized").code(401);
       const { proxy: proxyParam } = request.query as { proxy?: string };
       const activeProfile = await ConfigProfile.findOne({
@@ -219,7 +221,7 @@ export const streamRoutes: ServerRoute[] = [
     method: "GET",
     path: "/live/{username}/{password}/{streamId}.ts",
     handler: async (request, h) => {
-      const { username, password, streamId } = request.params;
+      const { username, password, streamId } = request.params as { username: string; password: string; streamId: string };
       if (!await resolveXtreamUser(username, password)) return h.response("Unauthorized").code(401);
       const { proxy: proxyParam } = request.query as { proxy?: string };
       const activeProfile = await ConfigProfile.findOne({
@@ -301,7 +303,7 @@ export const streamRoutes: ServerRoute[] = [
     method: "GET",
     path: "/{username}/{password}/{streamId}",
     handler: async (request, h) => {
-      const { streamId, username, password } = request.params;
+      const { streamId, username, password } = request.params as { streamId: string; username: string; password: string };
       if (!await resolveXtreamUser(username, password)) return h.response("Unauthorized").code(401);
       return h.redirect(`/live/${username}/${password}/${streamId}.ts`).code(302);
     },
@@ -310,7 +312,7 @@ export const streamRoutes: ServerRoute[] = [
     method: "GET",
     path: "/movie/{username}/{password}/{streamId}.{extension}",
     handler: async (request, h) => {
-      const { username, password, streamId, extension } = request.params;
+      const { username, password, streamId, extension } = request.params as { username: string; password: string; streamId: string; extension: string };
       if (!await resolveXtreamUser(username, password)) return h.response("Unauthorized").code(401);
       if (initialConfig.providerType === "stalker") {
         return handleStalkerVodStream(request, h);
@@ -331,7 +333,7 @@ export const streamRoutes: ServerRoute[] = [
     method: "GET",
     path: "/series/{username}/{password}/{episodeId}.{extension}",
     handler: async (request, h) => {
-      const { username, password, episodeId, extension } = request.params;
+      const { username, password, episodeId, extension } = request.params as { username: string; password: string; episodeId: string; extension: string };
       if (!await resolveXtreamUser(username, password)) return h.response("Unauthorized").code(401);
       if (initialConfig.providerType === "stalker") {
         return handleStalkerSeriesStream(request, h);

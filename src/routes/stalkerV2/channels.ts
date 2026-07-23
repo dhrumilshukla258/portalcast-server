@@ -54,12 +54,12 @@ import {
 const channelsResponseCache = new Map<string, { data: any; expiresAt: number }>();
 const groupsResponseCache = new Map<string, { data: any; expiresAt: number }>();
 
-function invalidateChannelsCache(profileId: string) {
+function invalidateChannelsCache(profileId: number | undefined) {
   for (const key of channelsResponseCache.keys()) {
     if (key.startsWith(`${profileId}:`)) channelsResponseCache.delete(key);
   }
 }
-function invalidateGroupsCache(profileId: string) {
+function invalidateGroupsCache(profileId: number | undefined) {
   for (const key of groupsResponseCache.keys()) {
     if (key.startsWith(`${profileId}:`)) groupsResponseCache.delete(key);
   }

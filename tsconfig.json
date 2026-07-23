@@ -1,15 +1,14 @@
 {
   "compilerOptions": {
-    "baseUrl": ".",
     "paths": {
       "@/*": [
-        "src/*"
-      ] 
+        "./src/*"
+      ]
     },
-    "outDir": "dist", 
-    "module": "commonjs",
+    "outDir": "dist",
+    "module": "preserve",
     "target": "ES2022",
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "experimentalDecorators": true,

@@ -64,7 +64,7 @@ export const playlistRoutes: ServerRoute[] = [
       if (!await resolveXtreamUser(username, password)) {
         return h.response("Unauthorized").code(401);
       }
-      const epg = await getEPGV2();
+      const epg = await getEPGV2(getPublicOrigin(request));
       return h
         .response(epg)
         .type("application/xml")

@@ -14,14 +14,14 @@ import { Genre } from "@/models/Genre";
 import { EpgCache } from "@/models/EpgCache";
 import crypto from "crypto";
 import { socketService } from "@/services/SocketService";
-import { authCheck } from "@/auth/jwt";
+import { requireAdmin } from "@/auth/jwt";
 
 export const profileRoutes: ServerRoute[] = [
   {
     method: "GET",
     path: "/api/profiles",
     handler: async (request, h) => {
-      if (!authCheck(request)) return h.response({ error: "Unauthorized" }).code(401);
+      if (!requireAdmin(request)) return h.response({ error: "Forbidden" }).code(403);
       try {
         const profiles = await ConfigProfile.findAll({
           order: [["createdAt", "DESC"]],
@@ -38,9 +38,9 @@ export const profileRoutes: ServerRoute[] = [
     method: "GET",
     path: "/api/profiles/{id}",
     handler: async (request, h) => {
-      if (!authCheck(request)) return h.response({ error: "Unauthorized" }).code(401);
+      if (!requireAdmin(request)) return h.response({ error: "Forbidden" }).code(403);
       try {
-        const profileId = parseInt(request.params.id);
+        const profileId = parseInt(request.params.id as string);
         const profile = await ConfigProfile.findByPk(profileId);
 
         if (!profile) {
@@ -59,7 +59,7 @@ export const profileRoutes: ServerRoute[] = [
     method: "POST",
     path: "/api/profiles",
     handler: async (request, h) => {
-      if (!authCheck(request)) return h.response({ error: "Unauthorized" }).code(401);
+      if (!requireAdmin(request)) return h.response({ error: "Forbidden" }).code(403);
       try {
         const payload = request.payload as CreateProfileRequest;
         const safeName = payload.name?.trim();
@@ -99,9 +99,9 @@ export const profileRoutes: ServerRoute[] = [
     method: "PUT",
     path: "/api/profiles/{id}",
     handler: async (request, h) => {
-      if (!authCheck(request)) return h.response({ error: "Unauthorized" }).code(401);
+      if (!requireAdmin(request)) return h.response({ error: "Forbidden" }).code(403);
       try {
-        const profileId = parseInt(request.params.id);
+        const profileId = parseInt(request.params.id as string);
         const payload = request.payload as UpdateProfileRequest;
 
         const profile = await ConfigProfile.findByPk(profileId);
@@ -162,9 +162,9 @@ export const profileRoutes: ServerRoute[] = [
     method: "DELETE",
     path: "/api/profiles/{id}",
     handler: async (request, h) => {
-      if (!authCheck(request)) return h.response({ error: "Unauthorized" }).code(401);
+      if (!requireAdmin(request)) return h.response({ error: "Forbidden" }).code(403);
       try {
-        const profileId = parseInt(request.params.id);
+        const profileId = parseInt(request.params.id as string);
         const profile = await ConfigProfile.findByPk(profileId);
 
         if (!profile) {
@@ -200,9 +200,9 @@ export const profileRoutes: ServerRoute[] = [
     method: "POST",
     path: "/api/profiles/{id}/activate",
     handler: async (request, h) => {
-      if (!authCheck(request)) return h.response({ error: "Unauthorized" }).code(401);
+      if (!requireAdmin(request)) return h.response({ error: "Forbidden" }).code(403);
       try {
-        const profileId = parseInt(request.params.id);
+        const profileId = parseInt(request.params.id as string);
 
         const profile = await switchProfile(profileId);
 
@@ -231,9 +231,9 @@ export const profileRoutes: ServerRoute[] = [
     method: "POST",
     path: "/api/profiles/{id}/enable",
     handler: async (request, h) => {
-      if (!authCheck(request)) return h.response({ error: "Unauthorized" }).code(401);
+      if (!requireAdmin(request)) return h.response({ error: "Forbidden" }).code(403);
       try {
-        const profileId = parseInt(request.params.id);
+        const profileId = parseInt(request.params.id as string);
         const profile = await ConfigProfile.findByPk(profileId);
 
         if (!profile) {
@@ -255,9 +255,9 @@ export const profileRoutes: ServerRoute[] = [
     method: "POST",
     path: "/api/profiles/{id}/disable",
     handler: async (request, h) => {
-      if (!authCheck(request)) return h.response({ error: "Unauthorized" }).code(401);
+      if (!requireAdmin(request)) return h.response({ error: "Forbidden" }).code(403);
       try {
-        const profileId = parseInt(request.params.id);
+        const profileId = parseInt(request.params.id as string);
         const profile = await ConfigProfile.findByPk(profileId);
 
         if (!profile) {

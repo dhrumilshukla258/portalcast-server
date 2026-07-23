@@ -1,6 +1,7 @@
 import { Request } from "@hapi/hapi";
 import { serverProtocol } from "@/config/server";
 import { logger } from "@/infra/logger";
+import { proxiedImageUrl } from "@/providers/portalAssets";
 
 // Resolves the URL the client actually used so generated links work both when
 // the server is reached directly (ip:port) and through a reverse proxy (domain).
@@ -44,4 +45,31 @@ export function getPublicHost(request: Request): string {
 
 export function getPublicOrigin(request: Request): string {
   return `${getPublicProto(request)}://${getPublicHost(request)}`;
+}
+
+// Xtream player clients (TiviMate, IPTV Smarters, etc.) fetch image URLs directly
+// and unauthenticated — they parse whatever fully-qualified URL sits in the JSON
+// response, they don't prefix a relative path themselves the way the web UI does.
+// xtreamCache.ts's buildIconUrl() stores the REAL upstream URL in the persisted
+// cache (it's our own DB, never sent to a client) — the conversion to a
+// same-origin proxied URL happens only here, per-request, right before
+// responding. Same "store real, convert at serve time" pattern used everywhere
+// else this server proxies images (mapChannel, enrichArtworkFromTmdb, Discover),
+// so there's nothing to backfill if this logic ever changes: every row, old or
+// new, gets converted fresh on every read.
+const ICON_FIELDS = ["cover", "cover_big", "movie_image", "stream_icon"] as const;
+
+export function absolutizeIconFields<T extends Record<string, any>>(obj: T, origin: string): T {
+  const out: any = { ...obj };
+  for (const field of ICON_FIELDS) {
+    const value = out[field];
+    if (typeof value !== "string" || !value) continue;
+    const proxied = proxiedImageUrl(value);
+    out[field] = proxied.startsWith("/") ? `${origin}${proxied}` : proxied;
+  }
+  return out;
+}
+
+export function absolutizeIconFieldsList<T extends Record<string, any>>(items: T[], origin: string): T[] {
+  return items.map((item) => absolutizeIconFields(item, origin));
 }

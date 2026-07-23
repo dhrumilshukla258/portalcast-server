@@ -11,7 +11,7 @@ import {
 } from "@/content/overrides";
 import { xtreamCache } from "@/services/xtreamCache";
 import { ContentOverride } from "@/models/ContentOverride";
-import { proxiedLogoPath } from "@/providers/portalAssets";
+import { proxiedLogoPath, proxiedImageUrl } from "@/providers/portalAssets";
 import { logger } from "@/infra/logger";
 import { mintStreamToken } from "@/services/StreamTokens";
 
@@ -49,17 +49,25 @@ async function saveToCache(key: string, value: string): Promise<void> {
   }
 }
 
+// Resolves any logo/screenshot reference — a Stalker portal-relative path, an
+// already-absolute Stalker logo, or an Xtream stream_icon/cover URL — to a
+// fully-qualified same-origin URL. These plain-text M3U/XMLTV exports are
+// downloaded directly by external players, so (unlike JSON responses, where
+// the frontend prefixes relative paths itself) every embedded logo here must
+// already be absolute, and it must never be the real portal/CDN host.
+function resolvedLogoUrl(logo: string | undefined, serverUrl: string): string {
+  if (!logo) return "";
+  const proxied = proxiedImageUrl(proxiedLogoPath(logo));
+  return proxied.startsWith("/") ? decodeURI(`${serverUrl}${proxied}`) : proxied;
+}
+
 // serverUrl is a full origin, e.g. "https://stream.example.com" or "http://192.168.1.2:3010"
 // userLabel is the caller's already-validated identity (e.g. "xtream:name")
 // — this legacy plain-M3U export is consumed directly by external players, so
 // every embedded link gets its own opaque token minted under that identity
 // rather than exposing the real upstream URL.
 function channelToM3u(channel: Channel, group: string, serverUrl: string, userLabel?: string): M3ULine {
-  const logoUrl = channel.logo
-    ? channel.logo.startsWith("http")
-      ? channel.logo
-      : decodeURI(`${serverUrl}${proxiedLogoPath(channel.logo)}`)
-    : "";
+  const logoUrl = resolvedLogoUrl(channel.logo, serverUrl);
 
   const cleanName = channel.name.replaceAll(",", "").replaceAll(" - ", "-");
   const isPortalCmd = channel.cmd.includes(initialConfig.hostname);
@@ -148,7 +156,7 @@ export async function getM3uV2(serverUrl: string, userLabel?: string) {
   return result;
 }
 
-export async function getEPGV2() {
+export async function getEPGV2(serverUrl: string) {
   const activeProfile = await ConfigProfile.findOne({ where: { isActive: true } });
   const profileId = activeProfile?.id;
   const genres = await readGenres("channel", profileId);
@@ -172,17 +180,7 @@ export async function getEPGV2() {
   channels.forEach((channel) => {
     parts.push(`  <channel id="${channel.id}">\n`);
     parts.push(`    <display-name>${channel.name}</display-name>\n`);
-    parts.push(`    <icon src="${
-      channel.logo
-        ? decodeURI(
-            `http://${initialConfig.hostname}:${initialConfig.port}${
-              initialConfig.contextPath !== ""
-                ? "/" + initialConfig.contextPath
-                : ""
-            }/misc/logos/320/${channel.logo}`,
-          )
-        : ""
-    }"/>\n`);
+    parts.push(`    <icon src="${resolvedLogoUrl(channel.logo, serverUrl)}"/>\n`);
     parts.push(`  </channel>\n`);
   });
 
@@ -257,9 +255,11 @@ async function buildVodM3u(serverUrl: string, userLabel?: string): Promise<strin
   const buildLine = (item: any, isSeries: boolean, groupTitle: string, groupId: string | number) => {
     const rawLogo = (item as any).screenshot_uri || (item as any).stream_icon || (item as any).cover || "";
     const proto = initialConfig.https ? "https" : "http";
-    const logoUrl = rawLogo
-      ? rawLogo.startsWith("http") ? rawLogo : `${proto}://${initialConfig.hostname}:${initialConfig.port}${rawLogo}`
+    const absoluteLogo = rawLogo
+      ? (rawLogo.startsWith("http") ? rawLogo : `${proto}://${initialConfig.hostname}:${initialConfig.port}${rawLogo}`)
       : "";
+    const proxiedLogo = absoluteLogo ? proxiedImageUrl(absoluteLogo) : "";
+    const logoUrl = proxiedLogo.startsWith("/") ? decodeURI(`${serverUrl}${proxiedLogo}`) : proxiedLogo;
     const cleanName = item.name.replaceAll(",", "").replaceAll(" - ", "-");
     const label = isSeries ? `Series - ${groupTitle}` : `VOD - ${groupTitle}`;
     const command = userLabel
