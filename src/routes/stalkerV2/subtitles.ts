@@ -86,7 +86,7 @@ export const subtitleRoutes: ServerRoute[] = [
         // have one (see [[skill-user-system]] / opensubtitles.ts), falling
         // back to the shared API-key-only pool otherwise.
         const userPayload = authCheck(request);
-        const link = await resolveSubtitleDownloadUrl(Number(fileId), userPayload?.userId);
+        const link = await resolveSubtitleDownloadUrl(Number(fileId), userPayload ? userPayload.userId : undefined);
         if (!link) return h.response({ error: "Failed to resolve subtitle download link" }).code(502);
 
         const response = await axios({

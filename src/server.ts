@@ -33,7 +33,7 @@ import { DeviceCode } from "./models/DeviceCode";
 import { Op } from "sequelize";
 import { getVodRefreshStatus } from "./providers/getM3uUrls";
 import { logger } from "./infra/logger";
-import { authCheck } from "./auth/jwt";
+import { authCheck, type JWTPayload } from "./auth/jwt";
 
 const init = async () => {
   if (!process.env.ADMIN_PASSWORD) {
@@ -198,7 +198,7 @@ const init = async () => {
     }
 
     // Attach user metadata to plugins state so handlers can access it
-    (request.plugins as any).user = user;
+    (request.plugins as { user?: JWTPayload }).user = user;
 
     const isMutation = ["POST", "PUT", "DELETE", "PATCH"].includes(request.method.toUpperCase());
 
@@ -247,25 +247,27 @@ const init = async () => {
     path: "/{param*}",
     handler: (request, h) => {
       const param = (request.params.param as string) || "";
-      const filePath = path.join(
-        process.cwd(),
-        "public",
-        param,
-      );
+      const publicRoot = path.join(process.cwd(), "public");
+      const filePath = path.resolve(publicRoot, param);
+      const withinPublicRoot =
+        filePath === publicRoot ||
+        filePath.startsWith(publicRoot + path.sep);
 
-      if (
-        !param.startsWith("uploads/") &&
-        !filePath.endsWith(".js") &&
-        !filePath.endsWith(".css") &&
-        !filePath.endsWith(".png") &&
-        !filePath.endsWith(".jpg") &&
-        !filePath.endsWith(".jpeg") &&
-        !filePath.endsWith(".webp") &&
-        !filePath.endsWith(".gif") &&
-        !filePath.endsWith(".ico") &&
-        !filePath.endsWith(".svg") &&
-        !filePath.endsWith(".webmanifest")
-      ) {
+      const isServableAsset =
+        withinPublicRoot &&
+        (param.startsWith("uploads/") ||
+          filePath.endsWith(".js") ||
+          filePath.endsWith(".css") ||
+          filePath.endsWith(".png") ||
+          filePath.endsWith(".jpg") ||
+          filePath.endsWith(".jpeg") ||
+          filePath.endsWith(".webp") ||
+          filePath.endsWith(".gif") ||
+          filePath.endsWith(".ico") ||
+          filePath.endsWith(".svg") ||
+          filePath.endsWith(".webmanifest"));
+
+      if (!isServableAsset) {
         return h
           .file(path.join(process.cwd(), "public", "index.html"))
           .header(
