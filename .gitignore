@@ -41,3 +41,4 @@ database.db-wal
 database.db-shm
 temp
 uploads
+tsconfig.tsbuildinfo
