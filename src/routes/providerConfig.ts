@@ -8,7 +8,7 @@ import { stalkerApi } from "@/providers/stalker";
 import { ConfigProfile } from "@/models/ConfigProfile";
 import crypto from "crypto";
 import { socketService } from "@/services/SocketService";
-import { createJWT, requireAdmin } from "@/auth/jwt";
+import { createJWT, requireAdmin, secureCompare } from "@/auth/jwt";
 import { SystemConfig } from "../models/SystemConfig";
 import { Channel } from "@/models/Channel";
 import { Genre } from "@/models/Genre";
@@ -87,7 +87,7 @@ export const configRoutes: ServerRoute[] = [
             return h.response({ error: "Server misconfiguration: ADMIN_PASSWORD not set" }).code(503);
           }
 
-        if (providedPassword === expectedPassword) {
+        if (typeof providedPassword === "string" && secureCompare(providedPassword, expectedPassword)) {
           const token = createJWT({ role: "admin" });
           return { success: true, token };
         } else {

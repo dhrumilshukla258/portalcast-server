@@ -80,3 +80,22 @@ export function requireAdmin(request: Request): JWTPayload | false {
   if (!userPayload || userPayload.role !== "admin") return false;
   return userPayload;
 }
+
+// Plain `===` on secrets (admin password, etc.) leaks timing info an
+// attacker can use to recover the value byte-by-byte. Pad to equal length
+// before comparing so timingSafeEqual never throws on a length mismatch,
+// while still failing the comparison for mismatched lengths.
+export function secureCompare(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a);
+  const bBuf = Buffer.from(b);
+  const maxLen = Math.max(aBuf.length, bBuf.length, 1);
+  const aPadded = Buffer.alloc(maxLen);
+  const bPadded = Buffer.alloc(maxLen);
+  aBuf.copy(aPadded);
+  bBuf.copy(bPadded);
+  // Always run timingSafeEqual (unconditionally) so a length mismatch can't
+  // short-circuit before it — combining with the length check afterwards
+  // keeps total runtime independent of whether lengths match.
+  const bytesEqual = crypto.timingSafeEqual(aPadded, bPadded);
+  return aBuf.length === bBuf.length && bytesEqual;
+}

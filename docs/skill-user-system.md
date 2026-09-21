@@ -66,7 +66,7 @@ All routes require a valid JWT (any role).
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/user/profile` | Returns `{ id, email, name, role, avatarUrl, preferences }` |
-| `PUT` | `/api/user/preferences` | Merge-updates `user.preferences` (shallow merge). Pushes `preferences_changed` to the user's other sessions — see [[#Real-time preference sync]] |
+| `PUT` | `/api/user/preferences` | Merge-updates `user.preferences` (shallow merge, allowlisted keys only — see below). Pushes `preferences_changed` to the user's other sessions — see [[#Real-time preference sync]] |
 | `GET` | `/api/user/progress` | All progress records for active profile. Re-proxies `meta.screenshot_uri` through `proxiedImageUrl` on every read (see note below) |
 | `PUT` | `/api/user/progress` | Upsert progress: `{ mediaId, progress, completed, meta }` |
 | `DELETE` | `/api/user/progress/{mediaId}` | Remove one progress record |
@@ -123,6 +123,10 @@ When `PUT /api/admin/users/{id}` flips a user from `isActive: false` → `true`,
 ```
 
 `PUT /api/user/preferences` shallow-merges, so sending `{ "preferredContentType": "series" }` only updates that field. Sequelize requires `user.changed("preferences", true)` after mutating a JSON column — already handled in the route. New top-level keys need no migration — `preferences` is a plain JSON column, so any new field just appears the first time it's saved.
+
+**Key allowlist (defense-in-depth, added in an uncommitted hardening pass):** the route now filters incoming payload keys through `ALLOWED_PREF_KEYS` before merging, instead of spreading the raw client payload — keeps the JSON column limited to keys `User.preferences` actually declares rather than accepting arbitrary client-supplied junk. `ALLOWED_PREF_KEYS` is `preferredContentType`, `favorites`, `recentChannels`, `videoFitMode`, `lastSelectedCategory`, `lastSelectedCategoryTitle`, `lastSelectedTvGroup`, `lastSelectedTvChannel`, `recentCategories`, `pinnedCategories`, `categoryOrder`, `recentSearches` — kept in sync with the `preferences` type in `src/models/User.ts`.
+
+(Earlier draft of this allowlist copied only the first 8 keys from a stale `User.ts` type that had never been updated to match the 4 fields — `recentCategories`, `pinnedCategories`, `categoryOrder`, `recentSearches` — the webui added back in July; that gap was harmless while the route did a raw spread, but would have silently broken sync for those fields once the allowlist went live. Fixed 2026-08-05 by adding the missing keys to both the model type and the allowlist — see [[project_security_hardening]].)
 
 `lastSelectedTvGroup`/`lastSelectedTvChannel` are keyed by `providerKey` (mirrors `lastSelectedCategory`'s keying) and record which TV group/channel the user last had focused in the live-TV grid (`useChannelListNav.ts` in `portalcast-webui`) — added so switching devices restores TV-grid position, not just the browse category, across sessions.
 

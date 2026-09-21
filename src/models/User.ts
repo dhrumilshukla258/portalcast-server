@@ -35,6 +35,10 @@ export class User extends Model {
         lastSelectedCategoryTitle?: Record<string, string>;
         lastSelectedTvGroup?: Record<string, string>;
         lastSelectedTvChannel?: Record<string, string>;
+        recentCategories?: Record<string, string[]>;
+        pinnedCategories?: Record<string, string[]>;
+        categoryOrder?: Record<string, string[]>;
+        recentSearches?: string[];
     };
 
     @Column(DataType.STRING)

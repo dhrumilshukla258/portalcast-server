@@ -72,11 +72,39 @@ export const userRoutes: ServerRoute[] = [
 
         const payload = request.payload as any;
 
+        // Allowlist rather than spreading the raw client payload wholesale —
+        // keeps this JSON column limited to the shape User.preferences
+        // actually declares instead of accepting/persisting arbitrary
+        // client-supplied keys (defense-in-depth; plain object-literal
+        // spread doesn't trigger real __proto__ pollution since it uses
+        // CopyDataProperties rather than [[Set]], but there's no reason to
+        // accept unbounded junk into the DB either).
+        const ALLOWED_PREF_KEYS = [
+          "preferredContentType",
+          "favorites",
+          "recentChannels",
+          "videoFitMode",
+          "lastSelectedCategory",
+          "lastSelectedCategoryTitle",
+          "lastSelectedTvGroup",
+          "lastSelectedTvChannel",
+          "recentCategories",
+          "pinnedCategories",
+          "categoryOrder",
+          "recentSearches",
+        ] as const;
+        const filteredPayload: Record<string, unknown> = {};
+        if (payload && typeof payload === "object") {
+          for (const key of ALLOWED_PREF_KEYS) {
+            if (key in payload) filteredPayload[key] = payload[key];
+          }
+        }
+
         // Merge incoming preferences with current preferences
         const currentPrefs = user.preferences || {};
         user.preferences = {
           ...currentPrefs,
-          ...payload
+          ...filteredPayload
         };
 
         // Sequelize requires us to set changed flag for JSON columns

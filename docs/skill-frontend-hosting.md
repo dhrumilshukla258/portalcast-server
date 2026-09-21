@@ -33,7 +33,7 @@ Every frontend rebuild produces new content-hashed filenames (e.g. `index-BCg-C-
 ## How the Server Serves It (`src/server.ts`)
 
 ### Root route
-`GET /` → always serves `public/index.html` with a permissive CSP header (`default-src * 'unsafe-inline' 'unsafe-eval' data: blob:;`) needed for the SPA's inline scripts and dynamic media URLs.
+`GET /` → always serves `public/index.html` with a permissive CSP header (`default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; frame-ancestors 'self';`) needed for the SPA's inline scripts and dynamic media URLs. `frame-ancestors 'self'` plus an `X-Frame-Options: SAMEORIGIN` header (added in an uncommitted hardening pass, alongside the same header on `/contentmanager` — see [[skill-content-manager]]) were added on top of the otherwise-permissive policy to stop the app being framed cross-origin (clickjacking), since `default-src *` alone doesn't restrict framing.
 
 ### Catch-all route (SPA fallback)
 `GET /{param*}` — registered **after** all API routes:

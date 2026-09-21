@@ -1,6 +1,6 @@
 # Content Manager — Skill Reference
 
-The Content Manager is the admin UI and API for customizing how content appears to players — without touching the portal or cache. Access at `http://your-server:3000/contentmanager` (password: `ADMIN_PASSWORD`).
+The Content Manager is the admin UI and API for customizing how content appears to players — without touching the portal or cache. Access at `http://your-server:3000/contentmanager` (password: `ADMIN_PASSWORD`). The page response carries `X-Frame-Options: SAMEORIGIN` (clickjacking guard, added alongside the same header on the root SPA route — see [[skill-frontend-hosting]]).
 
 Related: [[skill-database]], [[skill-xtream-provider]], [[skill-m3u-playlist]], [[skill-admin-dashboard]], [[skill-stream-tokens]]
 
@@ -111,6 +111,12 @@ Variant patterns detected: 4K/UHD/FHD/HD, Dual Audio/Dubbed/Multi, Hindi/Tamil/T
 - **Concurrency guard**: a module-level `isGenerating` flag makes a second `generateStrmFiles()` call while one is in flight a no-op (logged warning), instead of two runs racing on the same rows/files. `POST /api/admin/strm/generate` is fire-and-forget, so without this a double-click could trigger two concurrent generations.
 
 **Known residual gap, not fixed**: STRM URLs embed the admin's shared credential in plaintext on disk (see "Design decision" above) — anyone with filesystem read access to the STRM directory (e.g. the Jellyfin host) can read it. Accepted as a deliberate tradeoff, not an oversight.
+
+---
+
+## Admin Page Template — `escId()` (`src/routes/contentmanager/adminPage.template.ts`)
+
+Category/item IDs come from the upstream portal, not from us, and get interpolated into `renderCategories`/`renderItems` twice per row: once as a `data-id="..."` HTML attribute, once inside single-quoted `onclick="fn('...')"` JS-string literals. The pre-existing `esc()` helper only HTML-escapes, which doesn't stop a `'` or `\` in an ID from breaking out of the JS-string context. An uncommitted hardening pass added `escId()` — escapes backslash/quote/newlines for the JS-string context *and* HTML-entity-escapes for the attribute context in one pass — and swapped every `${cat.id}`/`${item.id}` call-site interpolation in those two render functions over to it (`esc()` is unchanged, still used for display text).
 
 ---
 

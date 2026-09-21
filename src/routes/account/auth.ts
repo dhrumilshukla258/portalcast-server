@@ -4,7 +4,7 @@ import { OAuth2Client } from "google-auth-library";
 import crypto from "crypto";
 import { User } from "../../models/User";
 import { DeviceCode } from "../../models/DeviceCode";
-import { createJWT, verifyJWT, authCheck } from "../../auth/jwt";
+import { createJWT, verifyJWT, authCheck, secureCompare } from "../../auth/jwt";
 import { v4 as uuidv4 } from "uuid";
 import { verifyPassword, hashPassword } from "../../auth/password";
 import { sendAdminApprovalRequest, sendPasswordResetEmail } from "../../auth/email";
@@ -187,7 +187,7 @@ export const authRoutes: ServerRoute[] = [
         const isAdminEmail = email === adminEmail || adminEmailsList.includes(email) || noAdminEmailConfigured;
         const envAdminPassword = process.env.ADMIN_PASSWORD;
 
-        if (isAdminEmail && envAdminPassword && password === envAdminPassword) {
+        if (isAdminEmail && envAdminPassword && typeof password === "string" && secureCompare(password, envAdminPassword)) {
           let adminUser = await User.findOne({ where: { email } });
           if (!adminUser) {
             adminUser = await User.create({

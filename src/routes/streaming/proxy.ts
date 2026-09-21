@@ -110,7 +110,8 @@ export const proxy: ServerRoute[] = [
 
       try {
         assertHttpUrl(entry.resource);
-        logger.info(`[/proxy/stream] ${request.info.remoteAddress} → ${entry.resource}`);
+        const logUrl = entry.resource.replace(/\?.*$/, "");
+        logger.info(`[/proxy/stream] ${request.info.remoteAddress} → ${logUrl}`);
         return await handleProxyStream(request, h, entry.resource, entry.referer, entry.userLabel, entry);
       } catch (error: any) {
         logger.error("[/proxy/stream] error: " + (error?.message ?? error));
@@ -147,7 +148,8 @@ export const proxy: ServerRoute[] = [
         }
 
         const playlistUrl = assertHttpUrl(decodedUrl).href;
-        logger.info(`[/proxy] ${request.info.remoteAddress} → ${playlistUrl}`);
+        const logUrl = playlistUrl.replace(/\?.*$/, "");
+        logger.info(`[/proxy] ${request.info.remoteAddress} → ${logUrl}`);
 
         const u = new URL(playlistUrl);
         const pathLower = u.pathname.toLowerCase();

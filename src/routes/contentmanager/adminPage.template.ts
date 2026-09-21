@@ -319,9 +319,9 @@ function renderCategories(search = "") {
     const draggable = !isFiltering;
     return \`
       <div class="row\${isSelected ? " selected" : ""}\${isHidden ? " hidden-item" : ""}"
-        data-id="\${cat.id}"
-        \${draggable ? \`draggable="true" ondragstart="dragStart(event,'\${cat.id}')" ondragend="dragEnd(event)" ondragover="dragOver(event,'\${cat.id}')" ondragleave="dragLeave(event)" ondrop="dragDrop(event,'\${cat.id}')"\` : ""}
-        onclick="selectCategory('\${cat.id}')">
+        data-id="\${esc(cat.id)}"
+        \${draggable ? \`draggable="true" ondragstart="dragStart(event,'\${escId(cat.id)}')" ondragend="dragEnd(event)" ondragover="dragOver(event,'\${escId(cat.id)}')" ondragleave="dragLeave(event)" ondrop="dragDrop(event,'\${escId(cat.id)}')"\` : ""}
+        onclick="selectCategory('\${escId(cat.id)}')">
         \${draggable ? \`<div class="drag-handle" onclick="event.stopPropagation()">&#8942;&#8942;</div>\` : \`<div style="width:18px;flex-shrink:0"></div>\`}
         <div class="dot \${isHidden ? "hidden" : "visible"}"></div>
         <div class="row-name">
@@ -330,15 +330,15 @@ function renderCategories(search = "") {
         </div>
         <span class="row-count">\${cat.count ?? ""}</span>
         <div class="row-actions" draggable="false" onclick="event.stopPropagation()">
-          \${!isVirtual ? \`<button class="btn-icon" title="\${isHidden ? "Show" : "Hide"}" onclick="toggleCatHidden('\${cat.id}', \${!isHidden})">\${isHidden ? "👁" : "🙈"}</button>\` : ""}
-          <button class="btn-icon" title="Edit" onclick="openCatEdit('\${cat.id}')" id="cat-edit-btn-\${cat.id}">✏</button>
+          \${!isVirtual ? \`<button class="btn-icon" title="\${isHidden ? "Show" : "Hide"}" onclick="toggleCatHidden('\${escId(cat.id)}', \${!isHidden})">\${isHidden ? "👁" : "🙈"}</button>\` : ""}
+          <button class="btn-icon" title="Edit" onclick="openCatEdit('\${escId(cat.id)}')" id="cat-edit-btn-\${esc(cat.id)}">✏</button>
         </div>
       </div>
-      <div class="edit-row" id="cat-edit-\${cat.id}">
-        <input type="text" placeholder="\${isVirtual ? "Category name" : "Display name (leave blank to restore original)"}" value="\${esc(cat.display_name || cat.title || "")}" id="cat-name-input-\${cat.id}" onkeydown="if(event.key==='Enter') saveCatEdit('\${cat.id}')"/>
-        <button class="btn-save" onclick="saveCatEdit('\${cat.id}')">Save</button>
-        \${isVirtual ? \`<button class="btn-reset" style="color:var(--red);border-color:var(--red)" onclick="resetCat('\${cat.id}')" title="Delete this category">Delete</button>\` : hasOverride ? \`<button class="btn-reset" onclick="resetCat('\${cat.id}')" title="Restore original">Reset</button>\` : ""}
-        <button class="btn-cancel" onclick="closeCatEdit('\${cat.id}')">Cancel</button>
+      <div class="edit-row" id="cat-edit-\${esc(cat.id)}">
+        <input type="text" placeholder="\${isVirtual ? "Category name" : "Display name (leave blank to restore original)"}" value="\${esc(cat.display_name || cat.title || "")}" id="cat-name-input-\${esc(cat.id)}" onkeydown="if(event.key==='Enter') saveCatEdit('\${escId(cat.id)}')"/>
+        <button class="btn-save" onclick="saveCatEdit('\${escId(cat.id)}')">Save</button>
+        \${isVirtual ? \`<button class="btn-reset" style="color:var(--red);border-color:var(--red)" onclick="resetCat('\${escId(cat.id)}')" title="Delete this category">Delete</button>\` : hasOverride ? \`<button class="btn-reset" onclick="resetCat('\${escId(cat.id)}')" title="Restore original">Reset</button>\` : ""}
+        <button class="btn-cancel" onclick="closeCatEdit('\${escId(cat.id)}')">Cancel</button>
       </div>
     \`;
   }).join("");
@@ -630,9 +630,9 @@ function renderItems(search = "") {
     const isSel = selectedItemIds.has(String(item.id));
     return \`
       <div class="row\${isHidden ? " hidden-item" : ""}\${isSel ? " item-sel" : ""}"
-        data-id="\${item.id}"
-        \${draggable ? \`draggable="true" ondragstart="dragItemStart(event,'\${item.id}')" ondragend="dragItemEnd(event)" ondragover="dragItemOver(event,'\${item.id}')" ondragleave="dragItemLeave(event)" ondrop="dragItemDrop(event,'\${item.id}')"\` : ""}
-        onclick="toggleItemSelect(event,'\${item.id}')">
+        data-id="\${esc(item.id)}"
+        \${draggable ? \`draggable="true" ondragstart="dragItemStart(event,'\${escId(item.id)}')" ondragend="dragItemEnd(event)" ondragover="dragItemOver(event,'\${escId(item.id)}')" ondragleave="dragItemLeave(event)" ondrop="dragItemDrop(event,'\${escId(item.id)}')"\` : ""}
+        onclick="toggleItemSelect(event,'\${escId(item.id)}')">
         \${draggable ? \`<div class="drag-handle" onclick="event.stopPropagation()">&#8942;&#8942;</div>\` : \`<div style="width:18px;flex-shrink:0"></div>\`}
         <div class="dot \${isHidden ? "hidden" : "visible"}"></div>
         <div class="row-name">
@@ -641,16 +641,16 @@ function renderItems(search = "") {
           \${showMoved ? \`<div class="secondary">→ \${esc(targetCat?.display_name || targetCat?.title || item.target_category_id)}</div>\` : ""}
         </div>
         <div class="row-actions" draggable="false" onclick="event.stopPropagation()">
-          <button class="btn-icon" title="\${isHidden ? "Show" : "Hide"}" onclick="toggleItemHidden('\${item.id}', \${!isHidden})">\${isHidden ? "👁" : "🙈"}</button>
-          <button class="btn-icon" title="Edit" onclick="openItemEdit('\${item.id}')">✏</button>
+          <button class="btn-icon" title="\${isHidden ? "Show" : "Hide"}" onclick="toggleItemHidden('\${escId(item.id)}', \${!isHidden})">\${isHidden ? "👁" : "🙈"}</button>
+          <button class="btn-icon" title="Edit" onclick="openItemEdit('\${escId(item.id)}')">✏</button>
         </div>
       </div>
-      <div class="edit-row" id="item-edit-\${item.id}">
-        <input type="text" placeholder="Display name (blank = original)" value="\${esc(item.display_name || "")}" id="item-name-input-\${item.id}" onkeydown="if(event.key==='Enter') saveItemEdit('\${item.id}')"/>
-        \${isVodOrSeries ? \`<select id="item-cat-select-\${item.id}"><option value="">— Keep in current category —</option>\${catOptions}</select>\` : ""}
-        <button class="btn-save" onclick="saveItemEdit('\${item.id}')">Save</button>
-        \${hasOverride ? \`<button class="btn-reset" onclick="resetItem('\${item.id}')" title="Restore original">Reset</button>\` : ""}
-        <button class="btn-cancel" onclick="closeItemEdit('\${item.id}')">Cancel</button>
+      <div class="edit-row" id="item-edit-\${esc(item.id)}">
+        <input type="text" placeholder="Display name (blank = original)" value="\${esc(item.display_name || "")}" id="item-name-input-\${esc(item.id)}" onkeydown="if(event.key==='Enter') saveItemEdit('\${escId(item.id)}')"/>
+        \${isVodOrSeries ? \`<select id="item-cat-select-\${esc(item.id)}"><option value="">— Keep in current category —</option>\${catOptions}</select>\` : ""}
+        <button class="btn-save" onclick="saveItemEdit('\${escId(item.id)}')">Save</button>
+        \${hasOverride ? \`<button class="btn-reset" onclick="resetItem('\${escId(item.id)}')" title="Restore original">Reset</button>\` : ""}
+        <button class="btn-cancel" onclick="closeItemEdit('\${escId(item.id)}')">Cancel</button>
       </div>
     \`;
   }).join("");
@@ -702,6 +702,23 @@ async function resetItem(id) {
 
 function esc(str) {
   return String(str ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+// IDs come from the upstream IPTV portal, not from us — used both as raw
+// text inside single-quoted onclick="...('id')" JS-string literals AND as
+// double-quoted HTML attribute values, so a plain '\'' or '"' in an id can
+// break out of either context. Escape for both simultaneously rather than
+// relying on esc() (HTML-only) at each of the many call sites below.
+function escId(str) {
+  return String(str ?? "")
+    .replace(/\\/g, "\\\\")
+    .replace(/'/g, "\\'")
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 </script>
 </body>

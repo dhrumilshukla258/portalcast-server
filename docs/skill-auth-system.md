@@ -34,7 +34,7 @@ Two login methods: **Google OAuth** and **email/password**. Both share the same 
 6. Existing active user → issues tokens
 
 ### Email/Password Login (`POST /api/auth/login`)
-- Admin check: if email is in admin list AND password matches `ADMIN_PASSWORD` → auto-bootstrap admin and issue tokens (no DB password needed)
+- Admin check: if email is in admin list AND password matches `ADMIN_PASSWORD` (compared via `secureCompare`, see below) → auto-bootstrap admin and issue tokens (no DB password needed)
 - Regular users: `verifyPassword(password, user.passwordHash, user.salt)` using PBKDF2
 - Users without `passwordHash` are Google-only → returns hint to use Google Sign-In
 
@@ -57,6 +57,11 @@ All three successful-login paths above (Google, admin-bootstrap, email/password)
 - **Refresh token:** 30 days (web) or 6 months (TV), contains `{ userId, type: "refresh", clientType }`
 - **Stream token:** 30-day TTL, contains `{ sub: userId, scope: "stream" }` — returned as `user_info.password` in Xtream `player_api.php` responses so IPTV players never carry the real password in stream URLs. See [[skill-xtream-provider]] for details.
 - All protected routes call `authCheck(request)` from `src/auth/jwt.ts` which reads `Authorization: Bearer <token>`
+- `requireAdmin(request)` wraps `authCheck` + `role === "admin"` into one call — every route in `userManagement.ts` now goes through it instead of hand-rolling the role check inline (was previously a mix of both).
+
+### `secureCompare` (`src/auth/jwt.ts`)
+
+Generic timing-safe string comparison, used anywhere a secret (currently: `ADMIN_PASSWORD`) is compared against user input — `src/routes/account/auth.ts`'s login and `src/routes/providerConfig.ts`'s legacy `/api/auth/admin`. Pads both buffers to equal length before calling `crypto.timingSafeEqual` (which throws on length mismatch), then separately checks true length equality — so unequal-length inputs fail without an early-return timing tell. Same technique `verifyJWT`/`verifyPassword` already used for signature/hash comparison; this factors it out for secret-vs-input comparisons generally.
 
 ---
 
@@ -96,6 +101,23 @@ Admin self-protection guards prevent: disabling own account, downgrading own rol
 
 ---
 
+## Password Hashing (`src/auth/password.ts`)
+
+PBKDF2-HMAC-SHA512, iteration count stored in the hash string itself as `"{iterations}${hex}"` (e.g. `210000$a3f...`). Current default is `210000` (`PBKDF2_ITERATIONS`), bumped from an original `1000` — the old value was ~100x too cheap and made offline brute-force of a leaked `passwordHash`/`salt` pair impractical to defend. `verifyPassword` parses the iteration count out of the stored hash (falling back to the legacy `1000` — `LEGACY_PBKDF2_ITERATIONS` — when there's no `$` separator, i.e. a hash minted before this change) so old rows keep verifying without a migration step. **There is no rehash-on-login** — a user who set their password before this change stays at 1000 iterations until they next reset it; this is an accepted tradeoff over invalidating every existing password.
+
+---
+
+## Auth Endpoint Rate Limiting
+
+`src/server.ts`'s `onRequest` hook throttles brute-force/spam-prone auth endpoints, keyed by `${path}:${ip}` (not just IP, so hammering one endpoint doesn't burn another user's budget on a shared IP):
+
+- `POST /api/auth/admin`, `/api/auth/login`, `/api/auth/forgot-password`, `/api/auth/reset-password`
+- Default: `ADMIN_LOGIN_RATE_LIMIT_MAX=5` requests per `ADMIN_LOGIN_RATE_LIMIT_WINDOW_MS=300000` (5 min) window; returns `429` past the limit. Stale entries are swept periodically off `adminLoginRlMap`.
+- Separate from the streaming rate limiter (`RATE_LIMIT_MAX`/`RATE_LIMIT_WINDOW_MS` for `/live/*`, `/movie/*`, etc. — see `docs/features.md`'s Rate Limiting section) — different buckets, different purpose (credential-guessing vs. stream-hammering).
+- `/api/auth/login` and the two password-reset endpoints were previously unthrottled — only `/api/auth/admin` was covered before this pass.
+
+---
+
 ## API Endpoints Summary
 
 | Method | Path | Description |
@@ -113,8 +135,8 @@ Admin self-protection guards prevent: disabling own account, downgrading own rol
 ## Key Files
 
 - `src/routes/account/auth.ts` — all auth endpoints
-- `src/auth/jwt.ts` — `createJWT`, `verifyJWT`, `authCheck`
-- `src/auth/password.ts` — `hashPassword`, `verifyPassword` (PBKDF2)
+- `src/auth/jwt.ts` — `createJWT`, `verifyJWT`, `authCheck`, `requireAdmin`, `secureCompare`
+- `src/auth/password.ts` — `hashPassword`, `verifyPassword` (PBKDF2, per-hash iteration count)
 - `src/auth/email.ts` — `sendAdminApprovalRequest`, `sendUserApprovedEmail` (nodemailer)
 - `src/models/User.ts` — User Sequelize model
 - `src/models/DeviceCode.ts` — DeviceCode Sequelize model

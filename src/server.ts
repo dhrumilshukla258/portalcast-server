@@ -73,8 +73,9 @@ const init = async () => {
         .file(path.join(process.cwd(), "public", "index.html"))
         .header(
           "Content-Security-Policy",
-          "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:;",
-        );
+          "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; frame-ancestors 'self';",
+        )
+        .header("X-Frame-Options", "SAMEORIGIN");
     },
   });
 
@@ -131,12 +132,23 @@ const init = async () => {
   server.ext("onRequest", (request, h) => {
     const p = request.path;
 
-    if (p === "/api/auth/admin" && request.method.toUpperCase() === "POST") {
+    // Same tight bucket for every credential-guessing/spam-prone auth
+    // endpoint, not just /api/auth/admin — /api/auth/login is brute-forceable
+    // against real user passwords, and forgot-password can be used to spam
+    // the outbound mail sender, both previously unthrottled.
+    const isThrottledAuthEndpoint =
+      request.method.toUpperCase() === "POST" &&
+      (p === "/api/auth/admin" ||
+        p === "/api/auth/login" ||
+        p === "/api/auth/forgot-password" ||
+        p === "/api/auth/reset-password");
+    if (isThrottledAuthEndpoint) {
       const ip = request.info.remoteAddress;
+      const key = `${p}:${ip}`;
       const now = Date.now();
-      const entry = adminLoginRlMap.get(ip);
+      const entry = adminLoginRlMap.get(key);
       if (!entry || now - entry.windowStart > ADMIN_LOGIN_RL_WINDOW) {
-        adminLoginRlMap.set(ip, { count: 1, windowStart: now });
+        adminLoginRlMap.set(key, { count: 1, windowStart: now });
       } else {
         entry.count++;
         if (entry.count > ADMIN_LOGIN_RL_MAX) {
@@ -272,8 +284,9 @@ const init = async () => {
           .file(path.join(process.cwd(), "public", "index.html"))
           .header(
             "Content-Security-Policy",
-            "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:;",
-          );
+            "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; frame-ancestors 'self';",
+          )
+          .header("X-Frame-Options", "SAMEORIGIN");
       }
 
       return h.file(filePath);
@@ -282,13 +295,32 @@ const init = async () => {
 
   server.events.on("response", function (request) {
     const qs = request.url.search || "";
+    let logPath = request.path;
+    let logQs = qs;
+
+    // Redact Xtream-style password path segments: /live|movie|series/{user}/{pass}/...
+    logPath = logPath.replace(
+      /^(\/(?:live|movie|series)\/)[^/]+\/[^/]+(\/|$)/,
+      "$1<user>/***$2",
+    );
+
+    // Redact password query param
+    if (logQs) {
+      try {
+        const params = new URLSearchParams(logQs);
+        if (params.has("password")) params.set("password", "***");
+        logQs = params.toString();
+        if (logQs) logQs = "?" + logQs;
+      } catch { /* leave malformed query strings as-is */ }
+    }
+
     logger.info(
       request.info.remoteAddress +
         ": " +
         request.method.toUpperCase() +
         " " +
-        request.path +
-        qs +
+        logPath +
+        logQs +
         " --> " +
         (request.response &&
         typeof (request.response as any).statusCode === "number"

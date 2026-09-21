@@ -5,7 +5,7 @@ export const pageRoutes: ServerRoute[] = [
     method: "GET",
     path: "/contentmanager",
     handler: (_request, h) =>
-      h.response(ADMIN_HTML).type("text/html"),
+      h.response(ADMIN_HTML).type("text/html").header("X-Frame-Options", "SAMEORIGIN"),
   },
 
   // ── Genres ─────────────────────────────────────────────────────────────────

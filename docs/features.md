@@ -90,6 +90,8 @@ Two independent per-IP buckets, not one shared bucket — `RATE_LIMIT_MAX`/`RATE
 
 Split this way (`src/server.ts`'s `onRequest` limiter) so a client hammering one (e.g. an hls.js retry loop with no backoff spamming `/live.m3u8`) exhausts only its own bucket and can't 429 the other content type for that same IP. Returns `429 Too Many Requests` when a bucket's limit is exceeded.
 
+A separate, stricter limiter in the same `onRequest` hook throttles credential-guessing/spam-prone auth endpoints (`/api/auth/admin`, `/api/auth/login`, `/api/auth/forgot-password`, `/api/auth/reset-password`) — `ADMIN_LOGIN_RATE_LIMIT_MAX`/`ADMIN_LOGIN_RATE_LIMIT_WINDOW_MS`, default 5 per 5 min, keyed by `path:ip`. See [[skill-auth-system]].
+
 ### Circuit Breaker
 
 | Variable | Default | Description |

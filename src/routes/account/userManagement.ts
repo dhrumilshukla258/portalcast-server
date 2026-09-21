@@ -2,7 +2,7 @@ import { ServerRoute } from "@hapi/hapi";
 import { Op } from "sequelize";
 import { logger } from "@/infra/logger";
 import { User } from "../../models/User";
-import { authCheck } from "../../auth/jwt";
+import { requireAdmin } from "../../auth/jwt";
 import { hashPassword } from "../../auth/password";
 import { sendUserApprovedEmail } from "@/auth/email";
 import { socketService } from "@/services/SocketService";
@@ -16,8 +16,8 @@ export const userManagementRoutes: ServerRoute[] = [
     method: "GET",
     path: "/api/admin/streams",
     handler: (request, h) => {
-      const userPayload = authCheck(request);
-      if (!userPayload || userPayload.role !== "admin") {
+      const userPayload = requireAdmin(request);
+      if (!userPayload) {
         return h.response({ error: "Forbidden" }).code(403);
       }
       return { count: streamTracker.count(), sessions: streamTracker.list() };
@@ -27,8 +27,8 @@ export const userManagementRoutes: ServerRoute[] = [
     method: "GET",
     path: "/api/admin/portal-metrics",
     handler: (request, h) => {
-      const userPayload = authCheck(request);
-      if (!userPayload || userPayload.role !== "admin") {
+      const userPayload = requireAdmin(request);
+      if (!userPayload) {
         return h.response({ error: "Forbidden" }).code(403);
       }
       return requestMetrics.snapshot();
@@ -38,8 +38,8 @@ export const userManagementRoutes: ServerRoute[] = [
     method: "GET",
     path: "/api/admin/stats",
     handler: async (request, h) => {
-      const userPayload = authCheck(request);
-      if (!userPayload || userPayload.role !== "admin") {
+      const userPayload = requireAdmin(request);
+      if (!userPayload) {
         return h.response({ error: "Forbidden" }).code(403);
       }
 
@@ -101,8 +101,8 @@ export const userManagementRoutes: ServerRoute[] = [
     method: "GET",
     path: "/api/admin/users",
     handler: async (request, h) => {
-      const userPayload = authCheck(request);
-      if (!userPayload || userPayload.role !== "admin") {
+      const userPayload = requireAdmin(request);
+      if (!userPayload) {
         return h.response({ error: "Forbidden" }).code(403);
       }
 
@@ -133,8 +133,8 @@ export const userManagementRoutes: ServerRoute[] = [
     method: "POST",
     path: "/api/admin/users",
     handler: async (request, h) => {
-      const userPayload = authCheck(request);
-      if (!userPayload || userPayload.role !== "admin") {
+      const userPayload = requireAdmin(request);
+      if (!userPayload) {
         return h.response({ error: "Forbidden" }).code(403);
       }
 
@@ -189,8 +189,8 @@ export const userManagementRoutes: ServerRoute[] = [
     method: "PUT",
     path: "/api/admin/users/{id}",
     handler: async (request, h) => {
-      const userPayload = authCheck(request);
-      if (!userPayload || userPayload.role !== "admin") {
+      const userPayload = requireAdmin(request);
+      if (!userPayload) {
         return h.response({ error: "Forbidden" }).code(403);
       }
 
@@ -254,8 +254,8 @@ export const userManagementRoutes: ServerRoute[] = [
     method: "DELETE",
     path: "/api/admin/users/{id}",
     handler: async (request, h) => {
-      const userPayload = authCheck(request);
-      if (!userPayload || userPayload.role !== "admin") {
+      const userPayload = requireAdmin(request);
+      if (!userPayload) {
         return h.response({ error: "Forbidden" }).code(403);
       }
 
