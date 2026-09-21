@@ -191,10 +191,12 @@ export const playlistDomainRoutes: ServerRoute[] = [
         }
 
         if (!response.ok || !response.body) {
+          logger.warn(`[images/proxy] upstream ${parsed.hostname} returned ${response.status}`);
           return h.response({ success: false, message: "Image not found" }).code(404);
         }
         const contentType = response.headers.get("content-type") || "";
         if (!contentType.startsWith("image/")) {
+          logger.warn(`[images/proxy] ${parsed.hostname} sent non-image content-type "${contentType}" for ${parsed.pathname}`);
           return h.response({ success: false, message: "Not an image" }).code(400);
         }
         const nodeStream = Readable.fromWeb(response.body as any);
@@ -204,6 +206,7 @@ export const playlistDomainRoutes: ServerRoute[] = [
           .header("cache-control", "max-age=3600");
       } catch (err) {
         if (err instanceof ForbiddenHostError) {
+          logger.warn(`[images/proxy] ${err.message} (resolves to a private/loopback address)`);
           return h.response({ success: false, message: "Forbidden host" }).code(403);
         }
         logger.error({ err }, "Image proxy fetch error");

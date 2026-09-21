@@ -23,6 +23,21 @@ const uploadDir = path.join(dataDir, "uploads");
 
 export const configRoutes: ServerRoute[] = [
   {
+    // Any logged-in user (not admin-gated — deliberately outside the /api/config
+    // prefix the global onPreHandler treats as admin-only). The web UI needs an
+    // identifier for the active provider to key per-provider preferences
+    // (last-selected category etc.) and to decide when to run its initial load;
+    // it used to read this from GET /api/config, which now 403s for non-admins
+    // and would return the full config (credentials included) if it didn't.
+    // Same `${type}_${host}` shape as before so already-saved preference keys
+    // still match.
+    method: "GET",
+    path: "/api/v2/provider-key",
+    handler: async () => ({
+      providerKey: `${initialConfig.providerType || "stalker"}_${initialConfig.hostname || "default_host"}`,
+    }),
+  },
+  {
     method: "GET",
     path: "/api/config",
     handler: async (request, h) => {

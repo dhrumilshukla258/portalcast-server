@@ -4,6 +4,7 @@ import { logger } from "@/infra/logger";
 import { initialConfig, seriesFlag } from "@/config/server";
 import { getPublicProto, getPublicHost, getPublicOrigin, absolutizeIconFields, absolutizeIconFieldsList } from "@/infra/publicUrl";
 import { proxiedLogoPath } from "@/providers/portalAssets";
+import { preferTmdbPosters } from "@/content/metaPosters";
 import { readGenres, readChannels } from "@/infra/storage";
 import {
   applyXtreamCatOverrides,
@@ -264,7 +265,11 @@ export const protocolRoutes: ServerRoute[] = [
           const vv = await getVodVersion();
           const origin = getPublicOrigin(request);
           const finalResult = absolutizeIconFieldsList(
-            vodOverridden.map((item: any) => ({ ...item, category_id: addVer(item.category_id, vv) })),
+            await preferTmdbPosters(
+              vodOverridden.map((item: any) => ({ ...item, category_id: addVer(item.category_id, vv) })),
+              "movie",
+              "stream_icon",
+            ),
             origin,
           );
           return h.response(finalResult);
@@ -378,7 +383,11 @@ export const protocolRoutes: ServerRoute[] = [
           const vs = await getVodVersion();
           return h.response(
             absolutizeIconFieldsList(
-              seriesOverridden.map((item: any) => ({ ...item, category_id: addVer(item.category_id, vs) })),
+              await preferTmdbPosters(
+                seriesOverridden.map((item: any) => ({ ...item, category_id: addVer(item.category_id, vs) })),
+                "series",
+                "cover",
+              ),
               getPublicOrigin(request),
             ),
           );
@@ -389,6 +398,42 @@ export const protocolRoutes: ServerRoute[] = [
           if (!series_id) return h.response({ info: {}, episodes: {}, seasons: [] });
 
           const seriesInfoOrigin = getPublicOrigin(request);
+
+          // TMDB poster/backdrop first, portal's own image as the fallback — must run on
+          // EVERY return path. The cached `series_info_*` row is the un-enriched portal
+          // result (warmSeriesInfoCache pre-populates it for the whole catalog), so
+          // merging only after a fresh fetch meant nearly every request (cache hit) got
+          // the portal cover and an empty backdrop_path. Lookup is cached per series
+          // (`tmdb_tv_*`); a TMDB failure falls back to portal data, never breaks the response.
+          const withSeriesTmdb = async (payload: any) => {
+            const info = payload.info ?? {};
+            let tmdb: TmdbMeta | { _not_found: true } | undefined;
+            try {
+              const tmdbKey = `tmdb_tv_${series_id}`;
+              tmdb = await xtreamCache.get<TmdbMeta | { _not_found: true }>(tmdbKey);
+              if (!tmdb) {
+                const meta = await fetchTVMeta(info.name || "", info.releaseDate || "");
+                tmdb = meta ?? { _not_found: true };
+                await xtreamCache.set(tmdbKey, tmdb);
+              }
+            } catch (err) {
+              logger.warn({ err }, `[player_api] get_series_info TMDB lookup failed for ${series_id}; serving portal data`);
+              tmdb = undefined;
+            }
+            if (tmdb && !("_not_found" in tmdb)) {
+              return {
+                ...payload,
+                info: absolutizeIconFields({
+                  ...info,
+                  cover:         tmdb.poster   ?? info.cover,
+                  backdrop_path: tmdb.backdrop ? [tmdb.backdrop] : (info.backdrop_path ?? []),
+                  plot:          tmdb.overview ?? info.plot,
+                }, seriesInfoOrigin),
+              };
+            }
+            return { ...payload, info: absolutizeIconFields(info, seriesInfoOrigin) };
+          };
+
           const cacheKey = `series_info_${series_id}`;
           const { value: cached, isStale } = await xtreamCache.getWithStaleness<any>(cacheKey);
           if (cached) {
@@ -406,7 +451,7 @@ export const protocolRoutes: ServerRoute[] = [
                 });
               }
             }
-            if (!isStale) return h.response({ ...cached, info: absolutizeIconFields(c.info ?? {}, seriesInfoOrigin) });
+            if (!isStale) return h.response(await withSeriesTmdb(cached));
             // Stale — fall through to re-fetch
           }
 
@@ -421,7 +466,7 @@ export const protocolRoutes: ServerRoute[] = [
           if (allItems.length === 0) {
             if (cached) {
               await xtreamCache.set(cacheKey, cached);
-              return h.response({ ...cached, info: absolutizeIconFields((cached as any).info ?? {}, seriesInfoOrigin) });
+              return h.response(await withSeriesTmdb(cached));
             }
             return h.response({ info: {}, episodes: {}, seasons: [] });
           }
@@ -514,27 +559,7 @@ export const protocolRoutes: ServerRoute[] = [
 
           await xtreamCache.set(cacheKey, result);
 
-          const tmdbKey = `tmdb_tv_${series_id}`;
-          let tmdb = await xtreamCache.get<TmdbMeta | { _not_found: true }>(tmdbKey);
-          if (!tmdb) {
-            const meta = await fetchTVMeta(result.info.name, result.info.releaseDate);
-            tmdb = meta ?? { _not_found: true };
-            await xtreamCache.set(tmdbKey, tmdb);
-          }
-
-          if (tmdb && !("_not_found" in tmdb)) {
-            const enriched = {
-              ...result,
-              info: absolutizeIconFields({
-                ...result.info,
-                cover:         tmdb.poster   ?? result.info.cover,
-                backdrop_path: tmdb.backdrop ? [tmdb.backdrop] : (result.info.backdrop_path ?? []),
-                plot:          tmdb.overview ?? result.info.plot,
-              }, seriesInfoOrigin),
-            };
-            return h.response(enriched);
-          }
-          return h.response({ ...result, info: absolutizeIconFields(result.info, seriesInfoOrigin) });
+          return h.response(await withSeriesTmdb(result));
         }
 
         if (action === "get_short_epg" || action === "get_simple_data_table") {

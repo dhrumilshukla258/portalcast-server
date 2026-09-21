@@ -196,3 +196,15 @@ Originally manual-only (`POST /api/v2/catchup-scan`, `src/routes/stalkerV2/maint
 - `src/services/xtreamAuth.ts` — stream token generation, resolveXtreamUser
 - `src/models/XtreamCache.ts` — Sequelize model
 - `src/streaming/circuitBreaker.ts` — Reusable `CircuitBreaker` class (configurable via `CB_*` env vars)
+
+---
+
+## Poster / logo URLs for Xtream players
+
+**TMDB first, portal second** — same preference as the web UI (`enrichArtworkFromTmdb`) and Discover: TMDB posters are sharper and consistent, and some portal entries have none. `get_vod_streams` / `get_series` list responses run through `preferTmdbPosters()` (`src/content/metaPosters.ts`), which swaps `stream_icon` (movies) / `cover` (series) for the `ContentMeta.poster` of `movie_{stream_id}` / `series_{series_id}` when that row is TMDB-sourced. Items with no TMDB match keep the portal image. `get_vod_info` / `get_series_info` already merged TMDB (`tmdb.poster`) before this. The id→poster map is loaded with one query and held in memory for 10 min — never a per-item lookup (a full-catalog list is >100k items). Coverage depends on Discover enrichment having run (`enrichContentMeta`, manual-only — see [[skill-discover]]); un-enriched titles simply fall back.
+
+**Detail responses (`get_vod_info`, `get_series_info`)** use the same rule — TMDB poster + backdrop if TMDB has the title, else the portal's. For series, the merge lives in `withSeriesTmdb()` and must run on **every** return path: the cached `series_info_*` row (pre-populated for the whole catalog by `warmSeriesInfoCache`) is the *un-enriched* portal result, so merging only after a fresh fetch made nearly every request (cache hit) return the portal cover and an empty `backdrop_path`. TMDB lookups are cached per series (`tmdb_tv_*`) and a failed lookup falls back to portal data.
+
+TMDB URLs are on `image.tmdb.org`, which `proxiedImageUrl()` deliberately doesn't proxy, so players fetch them straight from TMDB — no dependence on this server's public origin (`PUBLIC_BASE_URL` / `X-Forwarded-*`) or `/api/images/proxy`.
+
+Everything else absolute (portal `stream_icon`/`cover` fallbacks) goes through `absolutizeIconFields()` (`src/infra/publicUrl.ts`) → `{origin}/api/images/proxy?u=…` (`proxiedImageUrl`, `src/providers/portalAssets.ts`); live-channel logos use the portal-relative `/api/images/{slug*}` relay. That proxy conversion and the SSRF-guarded `/api/images/proxy` route (`src/routes/stalkerV2/playlist.ts`) were introduced in `93f9ef7` — before it, players got the raw upstream URL. Failures on that route log `[images/proxy]` warnings (private-host block, non-`image/*` content-type, upstream non-2xx).
