@@ -560,6 +560,7 @@ When a player authenticates via `GET /player_api.php`, the `user_info.password` 
 | Endpoint | Description |
 |----------|-------------|
 | `GET /api/config` | Get server config |
+| `GET /api/v2/provider-key` | Active provider key (`{type}_{host}`) — any logged-in user. Non-admin code (the web UI) uses this instead of `GET /api/config`, which is admin-only and returns the full provider config incl. credentials |
 | `POST /api/config` | Update server config |
 | `POST /api/auth/admin` | Admin login — `{ password }` → JWT (Content Manager) |
 | `POST /api/auth/signup` | Register new user — starts as pending |

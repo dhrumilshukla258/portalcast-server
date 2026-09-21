@@ -115,6 +115,11 @@ PBKDF2-HMAC-SHA512, iteration count stored in the hash string itself as `"{itera
 - Default: `ADMIN_LOGIN_RATE_LIMIT_MAX=5` requests per `ADMIN_LOGIN_RATE_LIMIT_WINDOW_MS=300000` (5 min) window; returns `429` past the limit. Stale entries are swept periodically off `adminLoginRlMap`.
 - Separate from the streaming rate limiter (`RATE_LIMIT_MAX`/`RATE_LIMIT_WINDOW_MS` for `/live/*`, `/movie/*`, etc. — see `docs/features.md`'s Rate Limiting section) — different buckets, different purpose (credential-guessing vs. stream-hammering).
 - `/api/auth/login` and the two password-reset endpoints were previously unthrottled — only `/api/auth/admin` was covered before this pass.
+- **Known limitation — shared bucket behind a reverse proxy**: the key uses `request.info.remoteAddress`, which behind a proxy is the *proxy's* address (e.g. `192.168.1.1`) for every user, not the real client. So the "per IP" limit becomes 5 logins per 5 minutes for **all** users combined, and one person's attempts (or a health probe / manual test) count against everyone. Fix, if needed: key on the first `X-Forwarded-For` hop when behind a trusted proxy — `infra/publicUrl.ts` already trusts `X-Forwarded-*` for URL building, so the trust assumption exists. Not yet done.
+
+### Provider key for non-admin clients — `GET /api/v2/provider-key`
+
+`/api/config` (any method) is admin-only in `server.ts`'s `onPreHandler` and its GET returns the whole provider config, credentials included. The web UI only needs an identifier for the active provider (it keys per-user preferences like `lastSelectedCategory` on it and gates its initial content load on it), so `providerConfig.ts` exposes `GET /api/v2/provider-key` → `{ providerKey: "{providerType}_{hostname}" }` for any valid JWT. Same string shape the client used to build from `/config`, so already-saved preference keys still match. Before this existed, regular (non-admin) users got a 403 from `/config`, the client's `providerKey` stayed empty, and their home page never loaded until a tab switch — see `portalcast-webui`'s `skill-video-playback.md` bug #5. Don't point non-admin client code at `/api/config`.
 
 ---
 
