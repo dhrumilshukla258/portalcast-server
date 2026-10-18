@@ -347,7 +347,10 @@ export const seriesRoutes: ServerRoute[] = [
           isPortal: initialConfig.providerType === "stalker",
         };
 
-        if (!search && res?.js) {
+        // Never cache an empty page: right after a profile switch or restart the per-category
+        // warm hasn't run yet, and caching that empty "All" page hid the whole catalog from
+        // every client for CACHE_DURATION_MS (found 2026-10-18).
+        if (!search && res?.js && firstPageData.length > 0) {
           await ContentCache.upsert({
             profileId,
             cacheKey,
