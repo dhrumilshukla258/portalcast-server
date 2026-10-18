@@ -1,4 +1,4 @@
-# Stalker M3U Server — Full Feature Reference
+# Portalcast Server — Full Feature Reference
 
 ---
 

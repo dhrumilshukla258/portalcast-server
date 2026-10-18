@@ -1,6 +1,6 @@
 # Frontend Hosting — Skill Reference
 
-**Important:** This repo (`stalker-m3u-server`) does not contain frontend source code. There is no `src/components`, no `.tsx` files, no Vite/React config — only the **compiled build output** lives here, in `public/`. The frontend source is maintained in a separate project/build pipeline and its output is copied into `public/assets/` as part of the release process.
+**Important:** This repo (`portalcast-server`) does not contain frontend source code. There is no `src/components`, no `.tsx` files, no Vite/React config — only the **compiled build output** lives here, in `public/`. The frontend source is maintained in a separate project/build pipeline and its output is copied into `public/assets/` as part of the release process.
 
 Related: [[skill-database]], [[skill-auth-system]], [[skill-stream-tokens]], [[skill-admin-dashboard]]
 
