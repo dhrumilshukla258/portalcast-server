@@ -8,17 +8,17 @@
 2. [Provider Types](#provider-types)
 3. [Portal Type Auto-Detection](#portal-type-auto-detection)
 4. [Cache Warming](#cache-warming)
-5. [VOD Category Versioning](#vod-category-versioning)
-6. [Content Manager](#content-manager)
-7. [Override System](#override-system)
-8. [Jellyfin / .strm Integration](#jellyfin--strm-integration)
-9. [EPG Handling](#epg-handling)
-10. [Profiles](#profiles)
-11. [Live Stream Proxy](#live-stream-proxy)
-12. [Reverse Proxy & Public URLs](#reverse-proxy--public-urls)
-13. [TMDB Integration](#tmdb-integration)
-14. [Authentication](#authentication)
-15. [API Reference](#api-reference)
+5. [Content Manager](#content-manager)
+6. [Override System](#override-system)
+7. [EPG Handling](#epg-handling)
+8. [Profiles](#profiles)
+9. [Live Stream Proxy](#live-stream-proxy)
+10. [Reverse Proxy & Public URLs](#reverse-proxy--public-urls)
+11. [TMDB Integration](#tmdb-integration)
+12. [Authentication](#authentication)
+13. [API Reference](#api-reference)
+
+> **Clients.** Every client — the web UI in `public/` and the TV apps (device-code pairing) — logs in through the server's own user system and talks to `/api/v2/*`. The third-party-player compatibility layer (Xtream Codes API emulation, M3U/XMLTV playlist export, Jellyfin `.strm` generation, VOD category versioning) was removed on 2026-10-18; IPTV players such as TiviMate or Smarters are no longer supported.
 
 ---
 
@@ -60,12 +60,6 @@ The `STALKER_*` env vars below only pre-fill the *default* values shown when cre
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SERIES_FLAG` | `is_series` | Only matters for **mixed-content portals** — a single VOD endpoint returning both movies and series, split by this boolean-ish field (value `1` = series). Portals with a genuinely separate series endpoint are auto-detected (`portal_series_source` cache row) and don't use this at all — see [Provider Support](#provider-support) |
-| `VOD_CATEGORY_VERSIONING` | `false` | Set `true` to append version suffix to category IDs in Xtream responses |
-| `STRM_MOVIES_PATH` | — | Directory to write movie `.strm` files for Jellyfin/Emby |
-| `STRM_SERIES_PATH` | — | Directory to write series `.strm` files for Jellyfin/Emby |
-| `STRM_BASE_URL` | — | Base URL written into `.strm` files (e.g. `http://192.168.1.100:3000`). Xtream provider defaults to the upstream server; Stalker defaults to `http://localhost:PORT` |
-| `STRM_XTREAM_USERNAME` | `ADMIN_EMAIL` | Username embedded in `.strm` stream URLs. Defaults to `ADMIN_EMAIL` so STRM files share the same credential as web UI and Xtream API. |
-| `STRM_XTREAM_PASSWORD` | `ADMIN_PASSWORD` | Password embedded in `.strm` stream URLs. Defaults to `ADMIN_PASSWORD`. |
 | `TMDB_API_READ_TOKEN` | — | TMDB read token for metadata enrichment |
 | `OPENSUBTITLES_API_KEY` | — | Enables `/api/v2/subtitles/search` and `/download` (online subtitle search in the player). `searchSubtitles()` (`src/content/opensubtitles.ts`) checks this first and returns `[]` immediately if unset — logs a warning rather than failing loudly, so a missing key looks like "no subtitles found," not an error |
 
@@ -85,8 +79,8 @@ The `STALKER_*` env vars below only pre-fill the *default* values shown when cre
 | `RATE_LIMIT_WINDOW_MS` | `60000` | Sliding window size (ms) for rate limiting |
 
 Two independent per-IP buckets, not one shared bucket — `RATE_LIMIT_MAX`/`RATE_LIMIT_WINDOW_MS` apply separately to each:
-- **live**: `/live/*`, `/live.m3u8`, `/player/*`
-- **vod**: `/movie/*`, `/series/*`, `/api/media/*`, `/api/vod/play`
+- **live**: `/live.m3u8`, `/player/*`
+- **vod**: `/api/media/*`
 
 Split this way (`src/server.ts`'s `onRequest` limiter) so a client hammering one (e.g. an hls.js retry loop with no backoff spamming `/live.m3u8`) exhausts only its own bucket and can't 429 the other content type for that same IP. Returns `429 Too Many Requests` when a bucket's limit is exceeded.
 
@@ -157,9 +151,8 @@ Content is cached in SQLite (`XtreamCache` table, 24-hour TTL) so the server nev
 
 1. Fetch portal pages until a known item is encountered
 2. Only new items are inserted — no full reload
-3. If new content is found, `bumpVodVersion()` is called to signal players
-4. Genres are upserted based on actual content found
-5. `cleanupGenres()` removes any genre entries with no cached content
+3. Genres are upserted based on actual content found
+4. `cleanupGenres()` removes any genre entries with no cached content
 
 `warmSeriesInfoCache()` runs independently after the series warm:
 - Iterates every cached series and pre-fetches all seasons/episodes
@@ -195,30 +188,6 @@ Use after a long offline period to fill gaps the incremental warm misses (it sto
 
 ---
 
-## VOD Category Versioning
-
-**The problem:** Free IPTV players (TiviMate free, etc.) cache category contents and only refresh when they see a new category ID. After a force-update they won't pick up new movies unless the category ID has changed.
-
-**The trick:** When `VOD_CATEGORY_VERSIONING=true`, a Unix timestamp version is appended to every VOD and series category ID in Xtream responses:
-
-```
-category_id: "42"  →  category_id: "42_v1719234567890"
-```
-
-When new content arrives or you reorder/move items in the Content Manager, `bumpVodVersion()` writes a new timestamp. The player sees new category IDs on the next force-refresh and re-fetches the stream lists automatically.
-
-**Internally**, `stripVer()` removes the suffix before any cache lookup, so the bare ID is always used server-side.
-
-Version bumps are triggered by:
-- New content found during a warm cycle
-- Category reorder (genres/reorder endpoint)
-- Item moved to a different category (items/reorder endpoint)
-- Server startup
-
-**When NOT to use this:** If your player has a premium APK that bypasses Xtream category endpoints entirely, leave `VOD_CATEGORY_VERSIONING` unset.
-
----
-
 ## Content Manager
 
 Access at `http://your-server:3000/contentmanager`. Password protected via `ADMIN_PASSWORD`.
@@ -246,7 +215,7 @@ Three tabs: **Live**, **VOD**, **Series**.
 | Reorder | Drag within category; persists `sort_order` |
 | Multi-select | Shift+click for range selection; all selected items get the same operation |
 
-All changes are stored in `GenreOverride` and `ContentOverride` tables and applied transparently to every Xtream, M3U, and browse API response — the portal cache is never modified.
+All changes are stored in `GenreOverride` and `ContentOverride` tables and applied transparently to every `/api/v2` browse response — the portal cache is never modified.
 
 ---
 
@@ -283,57 +252,13 @@ When an item is moved, `target_category_id` is set and `original_category_id` is
 
 ### Virtual categories
 
-Virtual categories have IDs prefixed `vcat_`. The Xtream response normalizes `vcat_*` → `*` before any portal API call, so the portal never sees the virtual ID. Items can be moved into virtual categories freely — they appear under that category in all API responses and are excluded from their original category.
-
----
-
-## Jellyfin / .strm Integration
-
-Set `STRM_MOVIES_PATH` and/or `STRM_SERIES_PATH` to a directory Jellyfin/Emby can scan. Generation is **manual only** — `POST /api/admin/strm/generate` (also reachable from the Admin Dashboard's Stats tab). It is not triggered by cache warming or on any schedule; re-run it yourself when content changes. Files are only rewritten when the URL/name actually changed, and removed/renamed content is pruned on each run — see [[skill-content-manager]] for the full hardening detail.
-
-STRM generation reads from `XtreamCache` (global) and genres from all profiles, so it works even when the **active provider is Stalker** — as long as XtreamCache was previously populated by an Xtream profile. When the active provider is not Xtream, `STRM_XTREAM_USERNAME` and `STRM_XTREAM_PASSWORD` **must** be set explicitly, otherwise stream URLs will contain Stalker credentials (a `logger.warn` is emitted if missing).
-
-### Folder layout
-
-**Movies:**
-```
-<STRM_MOVIES_PATH>/
-  Movie Title (2023)/
-    Movie Title (2023).strm
-    Movie Title (2023) [4K].strm
-    Movie Title (2023) [Hindi Dubbed].strm
-```
-
-**Series:**
-```
-<STRM_SERIES_PATH>/
-  Show Name (2021)/
-    Season 01/
-      Show Name (2021) S01E01 - Episode Title.strm
-```
-
-### Duplicate merging
-
-Portals commonly list the same movie multiple times with variant tags (language, quality, source). The server automatically:
-
-1. Groups by canonical title (stripped of variant tags)
-2. Picks the cleanest name as the primary folder
-3. Renames duplicates as `Title [Tag].strm` inside the same folder
-4. Removes now-empty secondary folders on regeneration
-
-Variant tag patterns detected:
-- **Quality:** 4K, UHD, FHD, HD, SD, 720p, 1080p, 2160p
-- **Audio:** Dual Audio, Dubbed, Multi, TriAudio
-- **Language:** Hindi, Tamil, Telugu, Malayalam, Kannada, Bengali, and more
-- **Format:** BluRay, WEBRip, WEB-DL, DVDRip, HDRip, HDCAM, CAM, TS
-
-Trigger manual regeneration: `POST /api/admin/strm/generate` or via the Content Manager UI.
+Virtual categories have IDs prefixed `vcat_`. A virtual ID never reaches the portal — its items are read from `ContentOverride` + `XtreamCache` directly. Items can be moved into virtual categories freely — they appear under that category in all API responses and are excluded from their original category.
 
 ---
 
 ## EPG Handling
 
-EPG data is fetched from the portal, cached in SQLite (`EpgCache` table, compressed with gzip), and served as XMLTV at `/epg.xml`.
+EPG data is fetched from the portal, cached in SQLite (`EpgCache` table, compressed with gzip), and served to the web UI via `GET /api/v2/epg`.
 
 ### Fetch strategy
 
@@ -418,15 +343,13 @@ The server can be reached simultaneously via LAN `ip:port` and an HTTPS domain b
 2. `X-Forwarded-Proto` / `X-Forwarded-Host` headers set by the reverse proxy
 3. The `Host` header of the incoming request
 
-When the request arrives with no explicit port through an HTTPS proxy, the Xtream handshake reports port `443`/`https` (not the internal listen port), so players configured with the bare domain build correct stream URLs.
-
-**Affected URLs:** Xtream `server_info` (player handshake), M3U playlist entries (`/playlist.m3u`, `/vod/playlist.m3u`), and TV device-pairing verification links.
+**Affected URLs:** stream URLs handed to the web UI (`/live.m3u8`, `/api/proxy`), proxied image URLs, password-reset links, and TV device-pairing verification links.
 
 **Proxy configuration:**
 - **Caddy** — a plain `reverse_proxy` block is enough (it preserves `Host` and sets `X-Forwarded-Proto` by default)
 - **nginx** — add `proxy_set_header Host $host;` and `proxy_set_header X-Forwarded-Proto $scheme;`
 
-**PWA note:** the web app's service worker (active only on HTTPS origins) serves the SPA shell for page navigations. Server-rendered paths (`/contentmanager`, playlists, EPG, stream endpoints) are on its denylist so they always reach the server. If you add new server-rendered pages, add them to the denylist in `public/sw.js`.
+**PWA note:** the web app's service worker (active only on HTTPS origins) serves the SPA shell for page navigations. Server-rendered paths (`/contentmanager`, stream endpoints) are on its denylist so they always reach the server. If you add new server-rendered pages, add them to the denylist in `public/sw.js`.
 
 ---
 
@@ -439,7 +362,7 @@ The server strips quality/format tags from titles before searching TMDB:
 Avatar 4K BluRay  →  search "Avatar"
 ```
 
-Returns `poster`, `backdrop`, and `overview`. Enriched metadata is merged into Xtream `get_vod_info` and `get_series_info` responses. If TMDB is unavailable or the token is not set, the fields are silently omitted — nothing breaks.
+Returns `poster`, `backdrop`, and `overview`. Enriched metadata is merged into the `/api/v2` movie/series responses (`enrichArtworkFromTmdb`) and powers Discover's `ContentMeta` cache. If TMDB is unavailable or the token is not set, the fields are silently omitted — nothing breaks.
 
 ---
 
@@ -478,46 +401,20 @@ The web UI's `/verify` page (step 3) auto-redirects the user back into the app a
 ### JWT scope & role gating
 
 All `/api/` and `/v2/` endpoints require `Authorization: Bearer <token>` unless explicitly exempted:
-- Stream proxies (`/api/proxy`, `/api/vod/`, `/api/v2/download`)
+- Stream proxies (`/api/proxy`, `/api/media/`, `/api/v2/download`)
 - Auth endpoints (`/api/auth/`), image proxy (`/api/images/`)
-- Player paths (`/live.m3u8`, `/player/`, `/live/`, `/movie/`, `/series/`, `/player_api.php`, `/xmltv.php`)
+- Token-gated stream paths (`/live.m3u8`, `/player/`)
 - Portal proxy (`/portal/proxy`)
 
 On top of the JWT requirement, a role check applies:
 - **Admin-only paths** (any method): `/api/admin/`, `/api/profiles`, `/api/config`, `/api/upload`, refresh/debug endpoints, `/api/v2/get-token`
 - **All mutations** (POST/PUT/DELETE/PATCH) require the admin role, except user-owned data (`/api/user/*`) and device authorization
 
-### Xtream player credentials
-
-Xtream player paths use URL-embedded credentials (`{username}/{password}`), validated on every request against:
-1. Any **active user** in the `Users` table (email + password — the same account as web login)
-2. The **admin env credentials** (`ADMIN_EMAIL` + `ADMIN_PASSWORD`; email check skipped in bootstrap mode)
-
-There is no shared playlist password — the legacy profile `username`/`password` fallback was removed because its defaults were guessable.
-
-### Stream token substitution
-
-When a player authenticates via `GET /player_api.php`, the `user_info.password` in the JSON response is a **30-day JWT stream token** (`{ sub: userId, scope: "stream" }`) instead of the real password. IPTV players cache this value and reuse it in all subsequent stream URLs — the real password never appears in `/live/{u}/{token}/...` paths.
-
-`resolveXtreamUser()` validates either a real password or a valid stream token. Env-var-only admin (no DB record) keeps the real password as fallback.
-
 ---
 
 ## API Reference
 
-### Xtream Codes
-
-| Endpoint | Actions |
-|----------|---------|
-| `GET /player_api.php` | `get_live_categories`, `get_live_streams`, `get_vod_categories`, `get_vod_streams`, `get_vod_info`, `get_series_categories`, `get_series`, `get_series_info`, `get_short_epg` |
-| `GET /live/{user}/{pass}/{id}.m3u8` | Live stream (HLS proxy or redirect) |
-| `GET /live/{user}/{pass}/{id}.ts` | Live stream (TS segment proxy or redirect) |
-| `GET /movie/{user}/{pass}/{id}.{ext}` | VOD stream (proxy) |
-| `GET /series/{user}/{pass}/{id}.{ext}` | Episode stream (proxy) |
-| `GET /xmltv.php` | EPG (XMLTV) |
-| `GET /{user}/{pass}/{id}` | Legacy redirect (for players omitting `/live/`) |
-
-### Browse (internal UI / custom players)
+### Browse (`/api/v2`, used by the web UI and TV apps)
 
 | Endpoint | Description |
 |----------|-------------|
@@ -541,8 +438,6 @@ When a player authenticates via `GET /player_api.php`, the `user_info.password` 
 | `GET /api/v2/refresh-movie-groups` | Sync VOD categories + trigger warm |
 | `GET /api/v2/refresh-series-groups` | Sync series categories + auto-detect portal type |
 | `POST /api/v2/refresh-epg` | Refresh EPG |
-| `POST /api/refresh/vod` | Refresh VOD playlist |
-| `GET /api/refresh/vod/status` | VOD refresh status |
 
 ### Cache
 
@@ -626,7 +521,6 @@ Preferences (favorites, recent channels, last-selected category/TV group/channel
 | `PUT /api/admin/items/{type}/{id}` | Update item (rename / hide / move) |
 | `PUT /api/admin/items/{type}/{category_id}/reorder` | Bulk-set item sort order |
 | `DELETE /api/admin/items/{type}/{id}` | Remove item override |
-| `POST /api/admin/strm/generate` | Trigger `.strm` generation |
 
 ### Content Enrichment (admin only)
 

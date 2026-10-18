@@ -1,8 +1,8 @@
 # Content Manager — Skill Reference
 
-The Content Manager is the admin UI and API for customizing how content appears to players — without touching the portal or cache. Access at `http://your-server:3000/contentmanager` (password: `ADMIN_PASSWORD`). The page response carries `X-Frame-Options: SAMEORIGIN` (clickjacking guard, added alongside the same header on the root SPA route — see [[skill-frontend-hosting]]).
+The Content Manager is the admin UI and API for customizing how content appears to clients — without touching the portal or cache. Access at `http://your-server:3000/contentmanager` (password: `ADMIN_PASSWORD`). The page response carries `X-Frame-Options: SAMEORIGIN` (clickjacking guard, added alongside the same header on the root SPA route — see [[skill-frontend-hosting]]).
 
-Related: [[skill-database]], [[skill-xtream-provider]], [[skill-m3u-playlist]], [[skill-admin-dashboard]], [[skill-stream-tokens]]
+Related: [[skill-database]], [[skill-xtream-provider]], [[skill-admin-dashboard]], [[skill-stream-tokens]]
 
 Note: this doc covers **manual admin overrides** (rename/hide/move/reorder). For **automatic** removal of content the portal itself no longer has (no admin action involved), see [[skill-content-lifecycle]] instead.
 
@@ -10,7 +10,7 @@ Note: this doc covers **manual admin overrides** (rename/hide/move/reorder). For
 
 ## What It Does
 
-All changes are stored in `GenreOverride` and `ContentOverride` tables. The override layer is applied transparently to every Xtream, M3U, and browse API response — the portal cache is never modified.
+All changes are stored in `GenreOverride` and `ContentOverride` tables. The override layer is applied transparently to every `/api/v2` browse response — the portal cache is never modified.
 
 Three tabs: **Live**, **VOD**, **Series**.
 
@@ -59,8 +59,7 @@ Deleting a virtual category: all `ContentOverride` records pointing to it have `
 ## Virtual Categories
 
 - IDs prefixed `vcat_` (e.g. `vcat_1234`)
-- The Xtream response strips `vcat_` prefix before any portal API call — portal never sees virtual IDs
-- VOD M3U builder handles `vcat_*` groups by reading from `ContentOverride` + `XtreamCache` directly (no portal call)
+- A virtual ID never reaches the portal — `/api/admin/items` and the `/api/v2` browse routes resolve `vcat_*` groups from `ContentOverride` + `XtreamCache` directly (no portal call)
 - Items from any regular category can be moved into virtual categories freely
 
 ---
@@ -71,46 +70,12 @@ Deleting a virtual category: all `ContentOverride` records pointing to it have `
 
 | Function | Used by |
 |----------|---------|
-| `applyGenreOverrides(genres, type)` | M3U live, Xtream category endpoints |
-| `applyChannelOverrides(channels)` | M3U live, browse API |
-| `applyXtreamCatOverrides(categories, type)` | Xtream `get_vod_categories`, `get_series_categories`, `get_live_categories` |
-| `applyXtreamChannelOverrides(channels)` | Xtream `get_live_streams` |
-| `applyVodOverrides(movies, categoryId)` | Xtream `get_vod_streams` |
-| `applySeriesOverrides(series, categoryId)` | Xtream `get_series` |
-| `applyPortalItemOverrides(items, type, categoryId, getCached)` | VOD M3U builder |
+| `applyGenreOverrides(genres, type)` | `/api/v2` group/category lists (channels, movies, series) |
+| `applyChannelOverrides(channels)` | `/api/v2/channels` |
+| `applyPortalItemOverrides(items, type, categoryId, getCached)` | `/api/v2/movies`, `/api/v2/series` (hide, rename, move-in/move-out, sort) |
 | `getHiddenGenreIds(type)` | Used to filter search results |
 
----
-
-## STRM Generation (Jellyfin Integration)
-
-Triggered from Content Manager UI or `POST /api/admin/strm/generate`.
-
-**Works across providers.** `generateStrmFiles()` reads from `XtreamCache` (global, not profile-scoped) and `readGenres()` without a profileId (returns genres from all profiles). So STRM generation works even when the active provider is Stalker, as long as XtreamCache was previously populated by an Xtream profile.
-
-**Credential fallback:** `STRM_XTREAM_USERNAME` → `ADMIN_EMAIL` → `"admin"` (same for password). By default STRM files use the admin credential — the same one used for web UI and Xtream API. A `logger.warn` is emitted when the active provider is not Xtream and neither `STRM_XTREAM_USERNAME` nor `ADMIN_EMAIL` is set.
-
-**Design decision — STRM is always a shared credential:** `.strm` files are static on disk; the credential is baked into the URL. Any media player (Jellyfin) fetching the file sends those baked-in credentials regardless of which Jellyfin user is watching. Per-user STRM directories are impractical (files multiply per user, Jellyfin library setup per user). Admin credential is the right default — everyone in Jellyfin uses it transparently.
-
-Set `STRM_MOVIES_PATH` and/or `STRM_SERIES_PATH` to a Jellyfin-scannable directory. **Generation is manual only** — nothing calls `generateStrmFiles()` automatically (not on cache warm, not on a schedule) — trigger via `POST /api/admin/strm/generate` or the Admin Dashboard. Files are only rewritten if the URL/title changed.
-
-### Duplicate merging
-Portals often list the same movie multiple times with variant tags (language, quality). The generator:
-1. Groups by canonical title (stripped of variant tags)
-2. Primary copy keeps clean name; duplicates become `Title [Tag].strm` in same folder
-3. Empty secondary folders are removed on regeneration
-
-Variant patterns detected: 4K/UHD/FHD/HD, Dual Audio/Dubbed/Multi, Hindi/Tamil/Telugu/Malayalam/Kannada/Bengali/etc., BluRay/WEBRip/WEB-DL/DVDRip/HDRip.
-
-### Hardening (pruning, renames, concurrency)
-
-`generateStrmFiles()` originally only ever added/updated `.strm` files — content removed upstream, or renamed, left orphan rows/files forever. Fixed:
-
-- **Pruning removed content**: after enumerating current provider data, DB rows/files whose ID wasn't seen in this run are deleted (both file and DB row). **Guarded against partial cache**: if any genre/series wasn't in `xtreamCache` yet (still warming), pruning is skipped entirely for that run — otherwise a not-yet-cached genre would look "removed" and get wrongly deleted. Look for `cacheIncomplete` in `strmGenerator.ts`.
-- **Rename cleanup**: when a title changes upstream (detected via `raw_folder` mismatch, the *pre-merge* own name — not the post-merge `folder_path`, which would false-positive on entries already merged into a duplicate group) or a merge reassigns a secondary's folder, the *old* physical file is deleted via `removeStaleFile()` (also cleans up now-empty parent directories) before the new one is written.
-- **Concurrency guard**: a module-level `isGenerating` flag makes a second `generateStrmFiles()` call while one is in flight a no-op (logged warning), instead of two runs racing on the same rows/files. `POST /api/admin/strm/generate` is fire-and-forget, so without this a double-click could trigger two concurrent generations.
-
-**Known residual gap, not fixed**: STRM URLs embed the admin's shared credential in plaintext on disk (see "Design decision" above) — anyone with filesystem read access to the STRM directory (e.g. the Jellyfin host) can read it. Accepted as a deliberate tradeoff, not an oversight.
+The Xtream-shaped variants (`applyXtreamCatOverrides`, `applyVodOverrides`, `applySeriesOverrides`, `applyXtreamChannelOverrides`) were deleted with the player emulation layer on 2026-10-18, along with the Jellyfin `.strm` generator that used to live next to this feature — see the note at the top of [[skill-xtream-provider]].
 
 ---
 
@@ -134,7 +99,6 @@ Category/item IDs come from the upstream portal, not from us, and get interpolat
 | `PUT` | `/api/admin/items/{type}/{id}` | Update item (rename/hide/move) |
 | `PUT` | `/api/admin/items/{type}/{category_id}/reorder` | Bulk-set item sort order |
 | `DELETE` | `/api/admin/items/{type}/{id}` | Remove item override |
-| `POST` | `/api/admin/strm/generate` | Trigger .strm file generation |
 
 `type` param values: `channel`, `movie`, `series`.
 
@@ -144,4 +108,4 @@ Category/item IDs come from the upstream portal, not from us, and get interpolat
 
 - `src/content/overrides.ts` — all override application functions
 - `src/models/GenreOverride.ts`, `src/models/ContentOverride.ts`
-- `src/routes/providerConfig.ts` — content manager admin API routes
+- `src/routes/contentmanager/` — `page.ts` (the standalone HTML page), `genres.ts`, `items.ts`, `metaEnrichment.ts`, `shared.ts`

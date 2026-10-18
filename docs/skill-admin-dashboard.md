@@ -26,9 +26,10 @@ Admin-only (`authCheck` + `role === "admin"`). Returns:
   recentLogins: { id, name, email, role, lastLogin }[],  // top 10, newest first
   connectedDevices: number,      // socketService.getActiveDeviceCount()
   activeStreams: number,         // streamTracker.count()
-  strm: { movies: number, episodes: number },  // StrmMovie/StrmSeries row counts
 }
 ```
+
+(The `strm: { movies, episodes }` block was dropped on 2026-10-18 together with the Jellyfin `.strm` generator — the webui's `useAdminStats.ts` type and `AdminStats.tsx` still expect it until the webui catches up.)
 
 `loggedInLast24h`/`loggedInLast7d` and `recentLogins` depend on `User.lastLogin`, set on every successful login path (Google, admin-bootstrap, email/password — see `src/routes/account/auth.ts`). This is a plain additive column, picked up automatically by the existing `sequelize.sync({ alter: true })` migration — no manual `ALTER TABLE` needed.
 
@@ -67,15 +68,9 @@ Admin-only CRUD over the `Users` table — this is what backs the Admin Dashboar
 - `PUT /api/admin/users/{id}` — update name/role/isActive/password. Flipping `isActive` false→true (approving a pending signup) fires `sendUserApprovedEmail()`. **Self-protection guardrails**: an admin cannot deactivate their own account or demote their own role via this endpoint.
 - `DELETE /api/admin/users/{id}` — also blocked against self-deletion.
 
-### `POST /api/admin/strm/generate` / `POST /api/admin/strm/reset` (`src/routes/contentmanager/strm.ts`)
-
-`generate` — fire-and-forget trigger for `.strm` regeneration. Has a **concurrency guard** at the `strmGenerator.ts` level — a second call while one is already running is a no-op with a log warning, rather than two generations racing on the same DB rows/files. See [[skill-content-manager]] for the generation logic itself.
-
-`reset` — clears the `StrmMovie`/`StrmSeries` tracking tables so the next `generate` call treats every title as brand-new and rewrites the whole output library from scratch. **Destructive-adjacent, gated behind a confirmation step**: calling without `?confirm=true` returns 400 with a warning (row counts + an explicit reminder to manually delete the on-disk `.strm` folders first, or the old files become orphaned with no tracking row). Only actually clears DB rows — never touches the filesystem itself.
-
 ### Content metadata enrichment — `POST /api/admin/content-meta/enrich`, `GET /api/admin/content-meta/status` (`src/routes/contentmanager/metaEnrichment.ts`)
 
-Part of the Discover feature ([[skill-discover]]), surfaced here because it's the same kind of manual-trigger-only admin action as STRM generation. `enrich` fire-and-forget triggers a full TMDB catalog backfill (`enrichContentMeta()` — hours-long at the throttled rate, hence manual-only, never automatic). `status` returns `{ total, byType, bySource }` counts from `ContentMeta` so the dashboard can show enrichment progress without polling the (potentially hours-long) enrich call itself.
+Part of the Discover feature ([[skill-discover]]), surfaced here because it's a manual-trigger-only admin action. `enrich` fire-and-forget triggers a full TMDB catalog backfill (`enrichContentMeta()` — hours-long at the throttled rate, hence manual-only, never automatic). `status` returns `{ total, byType, bySource }` counts from `ContentMeta` so the dashboard can show enrichment progress without polling the (potentially hours-long) enrich call itself.
 
 ---
 
@@ -101,6 +96,4 @@ Small public getter added on top of the existing (pre-existing) `devices` Map, w
 - `src/infra/logger.ts` — wraps `logger.*` calls to also broadcast over the `"logging"` socket room
 - `src/models/User.ts` — `lastLogin` column
 - `src/routes/account/auth.ts` — where `lastLogin` gets set
-- `src/routes/contentmanager/strm.ts` — `/api/admin/strm/generate`, `/api/admin/strm/reset`
-- `src/content/strmGenerator.ts` — generation logic + concurrency guard (see [[skill-content-manager]])
 - `src/routes/contentmanager/metaEnrichment.ts` — `/api/admin/content-meta/enrich`, `/api/admin/content-meta/status` (see [[skill-discover]])

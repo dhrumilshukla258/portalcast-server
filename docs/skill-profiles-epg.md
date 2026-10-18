@@ -45,7 +45,7 @@ Multiple portal configurations stored in `ConfigProfile`. Only one is active at 
 
 ## EPG Handling
 
-EPG data for Stalker portals is fetched per-channel, compressed with gzip, and stored in the `EpgCache` table (SQLite). Served as XMLTV at `/epg.xml`.
+EPG data for Stalker portals is fetched per-channel, compressed with gzip, and stored in the `EpgCache` table (SQLite). Served to the web UI via `GET /api/v2/epg`.
 
 ### Fetch strategy
 - **Startup:** fetch immediately if cache is missing or stale (> 12 hours old)
@@ -67,7 +67,7 @@ EpgCache.destroy({ where: { updatedAt: { [Op.lt]: cutoff } } })
 Channels are fetched 5 at a time with a yield between batches to avoid memory spikes on large channel lists.
 
 ### Xtream EPG
-For Xtream providers, EPG is served via `GET /xmltv.php` using `get_short_epg` from the portal (limit: 24 entries per channel). EPG titles are Base64-decoded automatically.
+For Xtream providers, `XtreamClient.getEPG()` uses the portal's `get_short_epg` action (limit: 24 entries per channel). EPG titles are Base64-decoded automatically.
 
 ### Title decoding (Xtream)
 Xtream portals Base64-encode EPG titles. `decodeBase64Safe` in `xtream-client.ts` handles:
@@ -89,8 +89,6 @@ Xtream portals Base64-encode EPG titles. `decodeBase64Safe` in `xtream-client.ts
 | `GET /api/v2/refresh-movie-groups` | Sync VOD categories + trigger cache warm |
 | `GET /api/v2/refresh-series-groups` | Sync series categories + auto-detect portal type |
 | `POST /api/v2/refresh-epg` | Refresh EPG |
-| `POST /api/refresh/vod` | Refresh VOD M3U playlist |
-| `GET /api/refresh/vod/status` | VOD refresh status |
 
 ---
 

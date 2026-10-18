@@ -23,7 +23,7 @@ Export: `databasePath` (used by pull-db.sh and diagnostics).
 | Model | Table | Purpose |
 |-------|-------|---------|
 | `Token` | `tokens` | Stalker auth tokens (restored on startup) |
-| `SystemConfig` | `system_config` | Key-value store (playlist cache, vod cache, vod_cat_version) |
+| `SystemConfig` | `system_config` | Key-value store (stale-content sweep cursor; a few legacy keys, see below) |
 | `ConfigProfile` | `config_profiles` | Multi-portal configs (one active at a time) |
 | `Channel` | `channels` | Live channels (profile-scoped) |
 | `Genre` | `genres` | Channel/VOD/series categories (profile-scoped) |
@@ -31,8 +31,6 @@ Export: `databasePath` (used by pull-db.sh and diagnostics).
 | `XtreamCache` | `xtream_cache` | Persistent content cache (24h TTL). **Never purged by age** — managed exclusively by the warm cycle's diff logic. (A time-based purge was tried and reverted this session — it deleted write-once per-item rows like `series_info_*` that are never rewritten once complete, forcing a full catalog re-fetch. See `src/server.ts`'s comment on `runDbCleanup`.) |
 | `GenreOverride` | `genre_overrides` | Category renames, hides, sort order, virtual categories |
 | `ContentOverride` | `content_overrides` | Item renames, hides, moves, sort order |
-| `StrmMovie` | `strm_movies` | Tracked .strm file paths for Jellyfin |
-| `StrmSeries` | `strm_series` | Tracked .strm series paths |
 | `User` | `users` | Auth users (added in `54846ea`) |
 | `DeviceCode` | `device_codes` | TV device auth codes (added in `54846ea`). Rows are only deleted on successful pairing — expired/abandoned rows are purged by the daily cleanup job, see [[#Scheduled Cleanup]] |
 | `UserProgress` | `user_progress` | Per-user watch progress (added in `54846ea`) |
@@ -48,9 +46,9 @@ Export: `databasePath` (used by pull-db.sh and diagnostics).
 
 | Key | Value |
 |-----|-------|
-| `playlist_cache` | Last-built live M3U string |
-| `vod_cache` | Last-built VOD M3U string |
-| `vod_cat_version` | Unix timestamp — bumped when new VOD content found |
+| (sweep cursor) | Rotating-category cursor for the automatic stale-content sweep — see [[skill-content-lifecycle]] |
+
+**Legacy rows left in existing databases** (no code reads or writes them since the third-party-player layer was removed on 2026-10-18; harmless, not migrated away): `SystemConfig` keys `playlist_cache`, `vod_cache`, `vod_cat_version`, and the `strm_movies` / `strm_series` tables (their `StrmMovie`/`StrmSeries` models are gone, so `sync()` simply ignores them).
 
 ---
 

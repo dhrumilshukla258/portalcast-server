@@ -55,7 +55,7 @@ All three successful-login paths above (Google, admin-bootstrap, email/password)
 
 - **Access token:** 1 hour TTL, contains `{ userId, email, role }`
 - **Refresh token:** 30 days (web) or 6 months (TV), contains `{ userId, type: "refresh", clientType }`
-- **Stream token:** 30-day TTL, contains `{ sub: userId, scope: "stream" }` — returned as `user_info.password` in Xtream `player_api.php` responses so IPTV players never carry the real password in stream URLs. See [[skill-xtream-provider]] for details.
+- (The `sub`/`scope` fields still on `JWTPayload` are leftovers of the 30-day "stream token" the Xtream player emulation used to hand out as the player's password; nothing mints or checks them since that layer was removed on 2026-10-18.)
 - All protected routes call `authCheck(request)` from `src/auth/jwt.ts` which reads `Authorization: Bearer <token>`
 - `requireAdmin(request)` wraps `authCheck` + `role === "admin"` into one call — every route in `userManagement.ts` now goes through it instead of hand-rolling the role check inline (was previously a mix of both).
 
@@ -113,7 +113,7 @@ PBKDF2-HMAC-SHA512, iteration count stored in the hash string itself as `"{itera
 
 - `POST /api/auth/admin`, `/api/auth/login`, `/api/auth/forgot-password`, `/api/auth/reset-password`
 - Default: `ADMIN_LOGIN_RATE_LIMIT_MAX=5` requests per `ADMIN_LOGIN_RATE_LIMIT_WINDOW_MS=300000` (5 min) window; returns `429` past the limit. Stale entries are swept periodically off `adminLoginRlMap`.
-- Separate from the streaming rate limiter (`RATE_LIMIT_MAX`/`RATE_LIMIT_WINDOW_MS` for `/live/*`, `/movie/*`, etc. — see `docs/features.md`'s Rate Limiting section) — different buckets, different purpose (credential-guessing vs. stream-hammering).
+- Separate from the streaming rate limiter (`RATE_LIMIT_MAX`/`RATE_LIMIT_WINDOW_MS` for `/live.m3u8`, `/player/*`, `/api/media/*` — see `docs/features.md`'s Rate Limiting section) — different buckets, different purpose (credential-guessing vs. stream-hammering).
 - `/api/auth/login` and the two password-reset endpoints were previously unthrottled — only `/api/auth/admin` was covered before this pass.
 - **Known limitation — shared bucket behind a reverse proxy**: the key uses `request.info.remoteAddress`, which behind a proxy is the *proxy's* address (e.g. `192.168.1.1`) for every user, not the real client. So the "per IP" limit becomes 5 logins per 5 minutes for **all** users combined, and one person's attempts (or a health probe / manual test) count against everyone. Fix, if needed: key on the first `X-Forwarded-For` hop when behind a trusted proxy — `infra/publicUrl.ts` already trusts `X-Forwarded-*` for URL building, so the trust assumption exists. Not yet done.
 

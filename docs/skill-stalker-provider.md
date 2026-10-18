@@ -2,7 +2,7 @@
 
 Covers `StalkerAPI`, token management, watchdog keep-alive, caching strategy, and Stalker-specific routes. Key commits: `3dda72c`, `0d5cfbe`, `79f33b5`.
 
-Related: [[skill-xtream-provider]], [[skill-m3u-playlist]], [[skill-stream-tokens]]
+Related: [[skill-xtream-provider]], [[skill-stream-tokens]]
 
 ---
 
@@ -68,7 +68,7 @@ PHP URL:  /server/load.php  (or /portal.php if no contextPath)
 
 ## StalkerV2 Route (`src/routes/stalkerV2/`)
 
-Internal browse API consumed by the web UI and M3U generation. Not Stalker-protocol — uses `/api/v2/*` paths.
+Internal browse API consumed by the web UI and TV apps. Not Stalker-protocol — uses `/api/v2/*` paths.
 
 Key features added in this branch:
 - **Portal URL parameter support** (commit `79f33b5`): `?portal=` param overrides the active portal temporarily, allowing multi-portal requests without switching profiles
@@ -98,9 +98,7 @@ Resolves a Stalker `cmd` string (e.g. `ffmpeg http://...`) to a real stream URL 
 
 ---
 
-## Live Playlist & Stream
-
-`GET /m3u` — returns the live M3U playlist (Stalker channels only).
+## Live Stream
 
 Live stream via `GET /live.m3u8?t={token}&id=...` — **`cmd` is never a client-visible query param** — the real cmd is resolved server-side from the opaque token (`mapChannel()` mints it when building the channel list; see [[skill-stream-tokens]]):
 1. Token resolves to the real `cmd`, verified server-side

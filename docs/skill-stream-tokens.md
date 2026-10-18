@@ -1,6 +1,6 @@
 # Stream Tokens & Proxy Gating — Skill Reference
 
-Covers the opaque-token system that gates and tracks every stream URL (`/api/proxy`, `/api/proxy/stream`, `/portal/proxy`, `/live.m3u8`, `/player/{token}`, `/api/vod/play`) and the live "who's watching what" admin view built on top of it. This replaced an earlier base64 `url=`/`cmd=` query-param scheme and a separate HMAC uid-signing scheme — both are gone now.
+Covers the opaque-token system that gates and tracks every stream URL (`/api/proxy`, `/api/proxy/stream`, `/portal/proxy`, `/live.m3u8`, `/player/{token}`, `/api/media/*`, `/api/v2/download`) and the live "who's watching what" admin view built on top of it. This replaced an earlier base64 `url=`/`cmd=` query-param scheme and a separate HMAC uid-signing scheme — both are gone now.
 
 Related: [[skill-stalker-provider]], [[skill-xtream-provider]], [[skill-content-manager]], [[skill-subtitles]]
 
@@ -9,7 +9,7 @@ Related: [[skill-stalker-provider]], [[skill-xtream-provider]], [[skill-content-
 ## Why this exists
 
 Before this system, stream URLs embedded the real upstream address directly — either in plaintext (`?cmd=...`) or base64-encoded (`?url=...`, trivially reversible by anyone who copied the link). That meant:
-- Anyone who copied a "play" link could extract the real portal/CDN URL (for Xtream, sometimes including the admin's real upstream credentials in plaintext).
+- Anyone who copied a "play" link could extract the real portal/CDN URL (for an Xtream upstream provider, sometimes including the admin's real upstream credentials in plaintext).
 - Nothing prevented an unauthenticated request from streaming through the server for free — `url=` wasn't signed, just encoded.
 - There was no way to know which user was watching what.
 
@@ -39,9 +39,7 @@ The frontend picks its player type (`application/x-mpegurl` vs `video/mp4`) by c
 
 ## Identity resolution (`userLabel`)
 
-- **Web UI**: JWT via `authCheck(request)` → `payload.email || "user:" + payload.userId`. See `streamUserLabel()` in `src/routes/stalkerV2/`.
-- **Xtream players** (TiviMate etc.): already-verified username from `resolveXtreamUser(username, password)` → label is `xtream:${username}`.
-- **Legacy plain-M3U export** (`/playlist.m3u`, `/vod/playlist.m3u` in `src/routes/streaming/playlist.ts`): same `xtream:${username}` label, since these routes already validate credentials via `resolveXtreamUser` before generating the playlist.
+- **Web UI / TV apps**: JWT via `authCheck(request)` → `payload.email || "user:" + payload.userId`. See `streamUserLabel()` in `src/routes/stalkerV2/`. This is the only identity source left — the `xtream:{username}` label that third-party players used to get was removed with the player emulation layer on 2026-10-18 (the webui's `AdminStats.tsx` still special-cases that prefix; harmless, just dead).
 
 ### Fail-closed rule
 
@@ -63,12 +61,9 @@ if (!userLabel) {
 | `mapChannel()` | `stalkerV2.ts` | `channel.cmd` (real upstream cmd, both provider types) | `live` |
 | `/api/v2/movie-link` | `stalkerV2.ts` | `movieLink.js.cmd` from `getMovieLink`/`getSeriesLink` | `movie` / `series` |
 | `/api/v2/channel-link` | `stalkerV2.ts` | `channelLink.js.cmd` | `live` |
-| Xtream `/live/{u}/{p}/{id}.m3u8`/`.ts` | `xtream.ts` | `channel.cmd` | `live` |
-| Xtream `/movie/{u}/{p}/{id}.{ext}`, `/series/{u}/{p}/{id}.{ext}` (stalker-backed) | `xtream.ts` (`handleStalkerVodStream`/`handleStalkerSeriesStream`) | resolved item URL | `movie` / `series` |
 | `/api/proxy`'s own m3u8 rewriter | `proxy.ts` | every segment/sub-playlist URL found in a rewritten playlist | inherited from parent (see below) |
 | `LiveStreamService.generateSignedUrl` | `LiveStreamService.ts` | `"cmd<_>seq"` segment resourceId | inherited |
 | `live.ts`'s own `generateSignedUrl` | `live.ts` | `"cmd<_>seq"` segment resourceId | inherited |
-| Legacy M3U export | `getM3uUrls.ts` (`channelToM3u`, `buildLine`) | `channel.cmd` / provider item id | `live` / movie via `/api/vod/play` |
 
 **Segment/sub-playlist tokens must inherit `{kind, label, category}` from the *parent* token, not the whole parent object** — extract just those three fields (see Lessons).
 
@@ -82,7 +77,6 @@ All of these call `streamTokenFromRequest(request)` (or `resolveStreamToken(toke
 - `GET /portal/proxy` (`portalProxy.ts`) — a second, independent proxy surface found during the security audit, same base64 leak, same fix
 - `GET /live.m3u8` (`live.ts`) — token replaces the old `cmd=` query param entirely
 - `GET /player/{token}` (`live.ts`) — token replaces the old `resourceId` (plaintext `cmd<_>seq` in the URL path!) + separate HMAC `sig` query param. The token *is* the sole credential now; no separate signature.
-- `GET /api/vod/play` (`vod.ts`) — token resource is the provider's own movie/item **id** (not a URL); the real URL is resolved fresh via `getMovieLink` inside the handler
 - `GET /api/media/info`, `GET /api/media/subtitle` (`subtitles.ts`) — embedded-subtitle probe/extract for progressive video files; token here is identity proof only (same reasoning as the old `master.m3u8`), the actual `url=` stays caller-supplied because ffprobe/ffmpeg need real bytes to inspect, not a title
 - `GET /api/v2/download` (`stalkerV2.ts`) — resource is a JSON-encoded `{id, series, isSeries, cmd, path, title}` payload (`mintDownloadToken`), resolved server-side instead of trusting client `id=`/`cmd=`/`path=` query params directly. Previously **not gated at all** — a real open-proxy/SSRF gap (arbitrary `cmd=`/`path=` fetched and streamed back, zero auth) found and closed during a later audit pass. `GET /api/v2/download-link` mints the token — it's a normal JWT-gated `/api/v2/*` route (the download itself is a `window.open` plain navigation, which can't carry a Bearer header, hence the two-step mint-then-navigate flow)
 
@@ -137,8 +131,5 @@ keyed by `${type}:${ip}:${resource}`, refreshing `lastSeen`. A session is swept 
 - `src/routes/streaming/portalProxy.ts` — `/portal/proxy`
 - `src/routes/streaming/live.ts` — `/live.m3u8`, `/player/{token}`
 - `src/services/LiveStreamService.ts` — Xtream-provider live HLS proxying
-- `src/routes/streaming/vod.ts` — `/api/vod/play`
 - `src/routes/streaming/subtitles.ts` — `/api/media/info`, `/api/media/subtitle` (embedded-subtitle extraction for progressive files)
 - `src/routes/stalkerV2/` — `mapChannel`, `/api/v2/movie-link`, `/api/v2/channel-link`, `mintDownloadToken`, `/api/v2/download`, `/api/v2/download-link`, `/api/images/{slug*}` (unauthenticated but extension/path-restricted)
-- `src/routes/xtream/` — Xtream player stream endpoints
-- `src/providers/getM3uUrls.ts` — legacy plain-M3U export tokenization

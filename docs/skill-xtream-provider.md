@@ -1,14 +1,16 @@
 # Xtream Provider — Skill Reference
 
-Covers `XtreamClient`, `XtreamCache`, dual-portal detection, category versioning, stream token substitution, and the Xtream Codes API routes. Key commits: `0d5cfbe`, `1bf9fe8`, `3dda72c`, `584ae8c`.
+Covers `XtreamClient` (the server connecting to an Xtream Codes source as its content origin), `XtreamCache` (the SQLite catalog cache every `/api/v2` movie/series route reads), dual-portal detection, and the warm/catchup/sweep cycle. Key commits: `0d5cfbe`, `1bf9fe8`, `3dda72c`, `584ae8c`.
 
-Related: [[skill-stalker-provider]], [[skill-m3u-playlist]], [[skill-auth-system]], [[skill-stream-tokens]]
+Related: [[skill-stalker-provider]], [[skill-content-lifecycle]], [[skill-content-manager]], [[skill-discover]], [[skill-stream-tokens]]
+
+> **Scope note (2026-10-18).** This server used to *also* emulate the Xtream Codes API towards third-party IPTV players (TiviMate, Smarters), export M3U/XMLTV playlists, generate Jellyfin `.strm` files and append a version suffix to category IDs so free players would re-fetch. All of that was removed: `src/routes/xtream/`, `src/services/xtreamAuth.ts`, `src/providers/getM3uUrls.ts`, `src/content/strmGenerator.ts`, the `Strm*` models, and the `bumpVodVersion`/`addVer`/`stripVer` helpers in `src/services/xtreamCache.ts` no longer exist. Every client now logs in through the server's own user system and uses `/api/v2/*`. What's left — and what this doc covers — is only the **upstream provider** and its **cache**. If you need the old player-facing behaviour for reference, `ddf99fa` is the last commit that still has it.
 
 ---
 
 ## XtreamClient (`src/providers/xtream-client.ts`)
 
-Implements `IProvider`. Connects to any Xtream Codes-compatible portal via `player_api.php`.
+Implements `IProvider`. Connects to any Xtream Codes-compatible portal via its `player_api.php` endpoint (this is the *upstream* portal's API — the server is the client here).
 
 ### Constructor
 Reads from `initialConfig`: `hostname`, `port`, `https`, `username`, `password`. Credentials come from the active `ConfigProfile` in DB, not from env vars.
@@ -18,7 +20,7 @@ Reads from `initialConfig`: `hostname`, `port`, `https`, `username`, `password`.
 2. Check `NodeCache` (in-memory, 6h TTL) — return immediately on hit
 3. Deduplicate in-flight: if same request is pending, return the existing promise (`inFlight` Map)
 4. Circuit breaker check — if OPEN, immediately throws (avoids hammering a failing portal)
-5. Fire `axios.get` to `player_api.php` with `VLC/3.0.16` User-Agent (maximizes portal compatibility)
+5. Fire `axios.get` to the portal's `player_api.php` with `VLC/3.0.16` User-Agent (maximizes portal compatibility)
 6. On success: `breaker.recordSuccess()` + cache result; on failure: `breaker.recordFailure()` + clean up `inFlight`
 
 ### Key methods
@@ -26,8 +28,8 @@ Reads from `initialConfig`: `hostname`, `port`, `https`, `username`, `password`.
 | Method | Portal action | Notes |
 |--------|--------------|-------|
 | `getChannelGroups()` | `get_live_categories` | Maps to `Genre[]` |
-| `getChannels()` | `get_live_streams` | Maps to `Channel[]`; cmd = `/live/{u}/{p}/{id}.m3u8` |
-| `getChannelLink(cmd)` | — | Returns cmd as-is (redirect handled by live route) |
+| `getChannels()` | `get_live_streams` | Maps to `Channel[]`; `cmd` is the portal's own live URL, tokenized by `mapChannel()` before it reaches a client |
+| `getChannelLink(cmd)` | — | Returns cmd as-is (the `/live.m3u8` route resolves/proxies it) |
 | `getEPG(channelId)` | `get_short_epg` | Decodes Base64 titles |
 | `getMovies({ category, page })` | `get_vod_streams` | Paginated |
 | `getMovieInfo(id)` | `get_vod_info` | Returns metadata + stream URL |
@@ -40,14 +42,15 @@ Xtream portals Base64-encode EPG titles. `decodeBase64Safe` and `decodeBase64Tit
 
 ---
 
-## XtreamCache (`src/models/XtreamCache.ts` + `src/routes/xtream/`)
+## XtreamCache (`src/models/XtreamCache.ts` + `src/services/xtreamCache.ts`)
 
-SQLite-backed persistent cache. TTL = **24 hours** (`TTL_MS`).
+SQLite-backed persistent cache. TTL = **24 hours** (`TTL_MS`). Despite the name it is the catalog cache for *both* provider types' `/api/v2/movies`, `/api/v2/series`, the Content Manager item lists and Discover enrichment — do not treat it as Xtream-player-only leftovers.
 
-### Cache object (exported from `src/routes/xtream/`)
+### Cache object (exported from `src/services/xtreamCache.ts`)
 
 ```ts
 xtreamCache.get<T>(key)           // Returns value or undefined
+xtreamCache.getMany<T>(keys)      // Batched read
 xtreamCache.getWithStaleness<T>(key)  // Returns { value, isStale }
 xtreamCache.set(key, value)       // Upserts with 24h TTL
 xtreamCache.delete(key)
@@ -64,15 +67,16 @@ xtreamCache.delete(key)
 | `vod_cmd_{stream_id}` | Movie playback command |
 | `ep_info_{episode_id}` | Episode metadata |
 | `ep_cmd_{episode_id}` | Episode playback command |
+| `tmdb_movie_{id}` / `tmdb_tv_{id}` | Cached TMDB lookups (shared with Discover enrichment, see [[skill-discover]]) |
 | `portal_series_source` | `"native"` or `"mixed"` |
 
 Wipe all entries via `DELETE /api/v2/clear-xtream-cache` — forces re-detection of portal type.
 
 ### `getOrRefreshVodStreams(categoryId)` / `getOrRefreshSeriesList(categoryId)`
 
-Shared by both the Xtream player API (`get_vod_streams`/`get_series`) and the web UI (`/api/v2/movies`/`/api/v2/series`) so both surfaces see identical staleness/refresh behavior. On a cache miss or stale entry, fetches from the portal, merges with the cached rows, and writes back.
+Used by `/api/v2/movies` and `/api/v2/series` (`src/routes/stalkerV2/movies.ts`, `series.ts`). On a cache miss or stale entry, fetches from the portal, merges with the cached rows, and writes back.
 
-**In-flight deduplication**: both functions are wrapped so only one refresh per `categoryId` is ever running at a time (`vodRefreshInFlight`/`seriesRefreshInFlight` maps in `src/routes/xtream/`, mirroring `StalkerAPI.makeRequest`'s own `inFlight` pattern). Without this, two concurrent calls for the same category — e.g. a double-fired category click on the frontend — each independently read the same stale snapshot, fetch, merge, and write back; whichever write lands last silently wins, discarding whatever the other one computed. Added after a user report of wrong content appearing under a category (network trace showed the same category request firing twice) — this closes the race, though the specific report turned out inconclusive as to root cause (portal-side data issue was the likelier explanation in that case).
+**In-flight deduplication**: both functions are wrapped so only one refresh per `categoryId` is ever running at a time (`vodRefreshInFlight`/`seriesRefreshInFlight` maps, mirroring `StalkerAPI.makeRequest`'s own `inFlight` pattern). Without this, two concurrent calls for the same category — e.g. a double-fired category click on the frontend — each independently read the same stale snapshot, fetch, merge, and write back; whichever write lands last silently wins, discarding whatever the other one computed. Added after a user report of wrong content appearing under a category (network trace showed the same category request firing twice) — this closes the race, though the specific report turned out inconclusive as to root cause (portal-side data issue was the likelier explanation in that case).
 
 ---
 
@@ -90,79 +94,18 @@ Not "dual portal support" in the sense of running two portals — this is about 
 - `get_vod_streams` returns movies only; `SERIES_FLAG` is irrelevant here since there's nothing to split
 - `portal_series_source` cached as `"native"`
 
-Detection is triggered by `warmSeriesCache()` and written to `XtreamCache`. Clearing the cache forces re-detection.
-
----
-
-## Category Versioning
-
-**Problem:** Free IPTV players (TiviMate free, etc.) cache category contents and only re-fetch when they see a new category ID.
-
-**Solution:** When `VOD_CATEGORY_VERSIONING=true`, a Unix timestamp is appended to every VOD/series category ID in Xtream API responses:
-```
-"42"  →  "42_v1719234567890"
-```
-
-`bumpVodVersion()` writes a new timestamp to `SystemConfig` key `vod_cat_version`. The `addVer(id, v)` helper appends it; `stripVer(id)` removes it before cache lookups.
-
-Version bumps are triggered by:
-- New content found during warm cycles
-- Category reorder
-- Item moved to different category
-- Server startup
-
----
-
-## Xtream API Route (`src/routes/xtream/`)
-
-Exposes Xtream Codes-compatible endpoints so any player expecting Xtream format works:
-
-| Endpoint | Action params supported |
-|----------|------------------------|
-| `GET /player_api.php` | `get_live_categories`, `get_live_streams`, `get_vod_categories`, `get_vod_streams`, `get_vod_info`, `get_series_categories`, `get_series`, `get_series_info`, `get_short_epg` |
-| `GET /live/{u}/{p}/{id}.m3u8` | Live stream (HLS proxy or redirect) |
-| `GET /live/{u}/{p}/{id}.ts` | Live TS segment |
-| `GET /movie/{u}/{p}/{id}.{ext}` | VOD stream proxy |
-| `GET /series/{u}/{p}/{id}.{ext}` | Episode stream proxy |
-| `GET /xmltv.php` | EPG (XMLTV format) |
-
-Override layer (`applyXtreamCatOverrides`, `applyVodOverrides`, `applySeriesOverrides`) is applied transparently to every Xtream response before returning to the player.
-
-### Stream endpoints are gated and tracked, not just proxied
-
-Every stream endpoint above resolves the player's identity via `resolveXtreamUser(username, password)` (already required to reach the handler at all) and:
-- **Live** (`.m3u8`/`.ts`): calls `streamTracker.touch("live", ip, channel.cmd, "xtream:{username}", { kind: "live", label: channel.name })` — this is what powers the Admin Dashboard's live "who's watching" view (see [[skill-stream-tokens]], [[skill-admin-dashboard]])
-- **VOD/series** (stalker-backed, via `handleStalkerVodStream`/`handleStalkerSeriesStream`): redirects through `proxyUrlFor(url, "xtream:{username}", { kind, label })` — i.e. `/api/proxy?t={token}`, never a raw upstream URL, even to the player itself
-- **VOD/series** (native Xtream provider): `handleProxyStream(..., explicitUser: "xtream:{username}")` — same tokenization, in-process rather than via redirect
-
-None of this changes what the player sees on the wire (still standard Xtream URLs) — it changes what the *server* does internally before fetching from upstream.
-
----
-
-## Stream Token Substitution
-
-**Not the same "token" as [[skill-stream-tokens]]** — that's an opaque, server-side-only mapping to a real upstream URL, generated fresh per request. This section covers a JWT the *player itself* stores and reuses, replacing the account password in the URL path. Different mechanism, different purpose, unfortunate name collision.
-
-Xtream stream URLs carry `{username}/{password}` in the path. Sending the real password in every URL is a security risk (logs, proxies, player analytics).
-
-**Fix:** When a player authenticates via `GET /player_api.php?action=player_api.php`, the `user_info.password` in the response is a **30-day JWT stream token** (`{ sub: userId, scope: "stream" }`) instead of the real password. Players cache this value and use it in all subsequent `/live/{user}/{token}/...` URLs.
-
-`resolveXtreamUser()` accepts either:
-- Real password (existing DB hash check)
-- Valid stream token (JWT starting with `eyJ`, verified `scope === "stream"`, `sub` → userId lookup)
-
-Env-var-only admin (no numeric DB id) still uses the real password as fallback. Implementation: `generateStreamToken(userId)` in `src/routes/xtream/`.
+Detection is triggered by `warmSeriesCache()` and written to `XtreamCache`. Clearing the cache forces re-detection. `isNativeSeriesSource()` memoizes the row for 5 s so request bursts share one DB read.
 
 ---
 
 ## Cache Warming
 
-`warmVodCache()` and `warmSeriesCache()` run in parallel on startup and every 24 hours:
+`warmVodCache()` and `warmSeriesCache()` run in parallel on startup and every 24 hours (`src/server.ts`):
 1. Fetch portal pages until a known item is found (incremental — stops early)
-2. Insert only new items; bump `vod_cat_version` if new content found
+2. Insert only new items; both functions return `true` when they found something new
 3. Upsert genres from actual content; `cleanupGenres()` removes empty genres
 
-`warmSeriesInfoCache()` pre-fetches all seasons/episodes for every cached series (500ms throttle between series to avoid portal hammering).
+`warmSeriesInfoCache()` pre-fetches all seasons/episodes for every cached series (500ms throttle between series to avoid portal hammering). `enrichContentMeta()` then runs for whatever is new ([[skill-discover]]).
 
 ### Catchup scan (`POST /api/v2/catchup-scan`)
 
@@ -176,35 +119,28 @@ Use after a long offline period. The incremental warm stops at the first known i
 
 ### XtreamCache is never purged by age
 
-Despite genuinely accumulating unbounded per-item rows over time (no scheduled job ever deletes an expired `vod_info_*`/`ep_info_*`/etc. row), `XtreamCache` is **deliberately excluded** from `runDbCleanup()` in `src/server.ts`. A 7-day-stale purge was tried this session and reverted after it broke production: even scoped to only `vod_streams_*`/`series_list_*` keys, an earlier unscoped version of it also deleted write-once rows like `series_info_*` — populated once by `warmSeriesInfoCache()` and never rewritten again once complete, so their `expiresAt` freezes at creation time and eventually crosses any age threshold regardless of the row still being actively read by real `get_series_info` requests. Deleting them forced a full catalog rebuild on the next warm cycle. See [[skill-database#Scheduled Cleanup]] for the full incident writeup.
+Despite genuinely accumulating unbounded per-item rows over time (no scheduled job ever deletes an expired `vod_info_*`/`ep_info_*`/etc. row), `XtreamCache` is **deliberately excluded** from `runDbCleanup()` in `src/server.ts`. A 7-day-stale purge was tried and reverted after it broke production: even scoped to only `vod_streams_*`/`series_list_*` keys, an earlier unscoped version of it also deleted write-once rows like `series_info_*` — populated once by `warmSeriesInfoCache()` and never rewritten again once complete, so their `expiresAt` freezes at creation time and eventually crosses any age threshold regardless of the row still being actively read. Deleting them forced a full catalog rebuild on the next warm cycle. See [[skill-database#Scheduled Cleanup]] for the full incident writeup.
 
-`runDbCleanup()` does still purge expired `device_codes` rows — a much simpler, unrelated table with no stale-serve/write-once pattern to worry about.
+`runDbCleanup()` does still purge expired `device_codes` rows and stale `EpgCache` rows — simpler tables with no stale-serve/write-once pattern to worry about.
 
-### `catchupScan()` — now also used by the automatic stale-content sweep
+### `catchupScan()` — also used by the automatic stale-content sweep
 
-Originally manual-only (`POST /api/v2/catchup-scan`, `src/routes/stalkerV2/maintenance.ts`): compares the portal's own reported `total_items` against the locally cached count per category, doing a cheap bounded incremental scan when the portal has more, and only paying for a full-page scan when the total has dropped (the only way to know exactly which ids are gone). It now accepts an optional `CatchupScanOptions` (`genreIds`, `onRemoved`, `throttleMs`) so [[skill-content-lifecycle]]'s automatic sweep can reuse this same detection logic, scoped to a small rotating slice of categories and with the actually-removed ids fed to `pruneContentMeta()` — something `catchupScan()` itself still never does; called with no options (the manual endpoint's usage), its behavior is unchanged: full catalog, no throttle, updates only the `XtreamCache` list cache.
+Originally manual-only (`POST /api/v2/catchup-scan`, `src/routes/stalkerV2/maintenance.ts`): compares the portal's own reported `total_items` against the locally cached count per category, doing a cheap bounded incremental scan when the portal has more, and only paying for a full-page scan when the total has dropped (the only way to know exactly which ids are gone). It accepts an optional `CatchupScanOptions` (`genreIds`, `onRemoved`, `throttleMs`) so [[skill-content-lifecycle]]'s automatic sweep can reuse this same detection logic, scoped to a small rotating slice of categories and with the actually-removed ids fed to `pruneContentMeta()` — something `catchupScan()` itself still never does; called with no options (the manual endpoint's usage), its behavior is unchanged: full catalog, no throttle, updates only the `XtreamCache` list cache.
 
 `catchupScan()` returns `Promise<boolean>` — `true` if it actually ran, `false` if it was skipped because another scan (manual or automatic) already held its single global in-progress mutex. The manual endpoint ignores this; the automatic sweep does not — see [[skill-content-lifecycle]] for why that distinction matters there.
+
+---
+
+## Artwork
+
+`buildIconUrl()` stores the portal's **real** `stream_icon`/`cover` URL in the cache (our own DB, never sent to a client as-is). Conversion to a same-origin proxied URL (`/api/images/proxy?u=…`, `proxiedImageUrl` in `src/providers/portalAssets.ts`) happens at serve time in `mapChannel` / `enrichArtworkFromTmdb` (`src/routes/stalkerV2/shared.ts`), which also prefer the TMDB poster when `ContentMeta` has one — see [[skill-discover]]. TMDB URLs are on `image.tmdb.org`, which `proxiedImageUrl()` deliberately doesn't proxy.
 
 ---
 
 ## Key Files
 
 - `src/providers/xtream-client.ts` — XtreamClient implementation (includes circuit breaker)
-- `src/routes/xtream/` — API routes (`protocol.ts`, `streams.ts`)
-- `src/services/xtreamCache.ts` — XtreamCache object, versioning, warm functions, `catchupScan()` (see above)
-- `src/services/xtreamAuth.ts` — stream token generation, resolveXtreamUser
+- `src/services/xtreamCache.ts` — XtreamCache object, `getOrRefresh*`, warm functions, `catchupScan()`, `cleanupGenres()`
 - `src/models/XtreamCache.ts` — Sequelize model
+- `src/routes/stalkerV2/movies.ts`, `series.ts`, `maintenance.ts` — the `/api/v2` consumers of the cache (browse, warm/catchup/clear endpoints)
 - `src/streaming/circuitBreaker.ts` — Reusable `CircuitBreaker` class (configurable via `CB_*` env vars)
-
----
-
-## Poster / logo URLs for Xtream players
-
-**TMDB first, portal second** — same preference as the web UI (`enrichArtworkFromTmdb`) and Discover: TMDB posters are sharper and consistent, and some portal entries have none. `get_vod_streams` / `get_series` list responses run through `preferTmdbPosters()` (`src/content/metaPosters.ts`), which swaps `stream_icon` (movies) / `cover` (series) for the `ContentMeta.poster` of `movie_{stream_id}` / `series_{series_id}` when that row is TMDB-sourced. Items with no TMDB match keep the portal image. `get_vod_info` / `get_series_info` already merged TMDB (`tmdb.poster`) before this. The id→poster map is loaded with one query and held in memory for 10 min — never a per-item lookup (a full-catalog list is >100k items). Coverage depends on Discover enrichment having run (`enrichContentMeta`, manual-only — see [[skill-discover]]); un-enriched titles simply fall back.
-
-**Detail responses (`get_vod_info`, `get_series_info`)** use the same rule — TMDB poster + backdrop if TMDB has the title, else the portal's. For series, the merge lives in `withSeriesTmdb()` and must run on **every** return path: the cached `series_info_*` row (pre-populated for the whole catalog by `warmSeriesInfoCache`) is the *un-enriched* portal result, so merging only after a fresh fetch made nearly every request (cache hit) return the portal cover and an empty `backdrop_path`. TMDB lookups are cached per series (`tmdb_tv_*`) and a failed lookup falls back to portal data.
-
-TMDB URLs are on `image.tmdb.org`, which `proxiedImageUrl()` deliberately doesn't proxy, so players fetch them straight from TMDB — no dependence on this server's public origin (`PUBLIC_BASE_URL` / `X-Forwarded-*`) or `/api/images/proxy`.
-
-Everything else absolute (portal `stream_icon`/`cover` fallbacks) goes through `absolutizeIconFields()` (`src/infra/publicUrl.ts`) → `{origin}/api/images/proxy?u=…` (`proxiedImageUrl`, `src/providers/portalAssets.ts`); live-channel logos use the portal-relative `/api/images/{slug*}` relay. That proxy conversion and the SSRF-guarded `/api/images/proxy` route (`src/routes/stalkerV2/playlist.ts`) were introduced in `93f9ef7` — before it, players got the raw upstream URL. Failures on that route log `[images/proxy]` warnings (private-host block, non-`image/*` content-type, upstream non-2xx).

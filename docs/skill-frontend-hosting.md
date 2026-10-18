@@ -52,8 +52,8 @@ Uses `@hapi/inert` (`Inert` plugin) registered once in `init()`.
 A global `onPreHandler` hook in `server.ts` enforces JWT auth on `/api/*` and `/v2/*` paths, with exceptions for:
 - Static pages (anything not under `/api/` or `/v2/`)
 - `/api/auth/*` (login/signup must be reachable unauthenticated)
-- `/api/images/*`, `/api/proxy*`, `/api/vod/*` (stream/image proxies — can't require a Bearer header since `<video src>`/IPTV players can't attach custom headers)
-- `/live.m3u8`, `/player/*`, `/live/*`, `/movie/*`, `/series/*`, `/portal/proxy` (player-facing stream URLs, secured by an opaque per-request token instead of JWT — see [[skill-stream-tokens]])
+- `/api/images/*`, `/api/proxy*`, `/api/media/*`, `/api/v2/download` (stream/image proxies — can't require a Bearer header since `<video src>` can't attach custom headers)
+- `/live.m3u8`, `/player/*`, `/portal/proxy` (stream URLs, secured by an opaque per-request token instead of JWT — see [[skill-stream-tokens]])
 
 The frontend SPA itself (served via the catch-all) is never gated — only its API calls are.
 
