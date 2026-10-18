@@ -182,12 +182,11 @@ export function stripVer(id: string): string {
 }
 
 // Stores the REAL upstream URL — this is our own persisted cache, never sent
-// to a client directly. Every place that serves this back out in an Xtream
-// API response converts it to a same-origin proxied URL per-request via
-// absolutizeIconFields (infra/publicUrl.ts), the same way mapChannel/
-// enrichArtworkFromTmdb/Discover all convert at serve time rather than at
-// write time — so there's nothing to backfill/migrate if this logic ever
-// changes again, and no legacy-shaped rows to worry about.
+// to a client directly. Every place that serves this back out converts it to
+// a same-origin proxied URL per-request (mapChannel/enrichArtworkFromTmdb/
+// Discover all convert at serve time rather than at write time), so there's
+// nothing to backfill/migrate if this logic ever changes again, and no
+// legacy-shaped rows to worry about.
 export function buildIconUrl(uri: string | undefined): string {
   if (!uri) return "";
   if (uri.startsWith("http")) return uri;

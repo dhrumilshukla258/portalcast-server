@@ -87,7 +87,7 @@ async function resolveMeta(
   let tmdb = await xtreamCache.get<TmdbMeta | { _not_found: true }>(cacheKey);
 
   // tmdb_movie_*/tmdb_tv_* cache keys are shared with the pre-existing on-demand detail-page
-  // lookups (routes/xtream/protocol.ts, routes/stalkerV2/shared.ts), which have populated
+  // lookups (routes/stalkerV2/shared.ts), which have populated
   // this cache since long before genres/countries/keywordIds/originalLanguage existed on
   // TmdbMeta. A cache hit can be one of those older entries missing every field this session
   // added. Since genre/language/theme IS the entire point of enrichment, silently accepting

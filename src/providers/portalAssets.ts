@@ -44,8 +44,7 @@ const SAFE_ABSOLUTE_IMAGE_HOSTS = new Set(["image.tmdb.org"]);
 // frontend to prefix it a second time (`/api/images/api/images/proxy?...`,
 // a 400). Returning it already-absolute sidesteps that rule entirely, the
 // same way an absolute TMDB URL already does. Callers with no request
-// context (M3U/XMLTV export, Xtream protocol responses) don't pass origin
-// and continue absolutizing the relative result themselves afterward.
+// context don't pass origin and get the relative result back.
 export function proxiedImageUrl(url?: string, origin?: string): string {
   if (!url) return "";
   if (!url.startsWith("http")) return url;

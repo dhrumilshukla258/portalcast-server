@@ -12,7 +12,6 @@ import path from "path";
 import { proxy } from "./routes/streaming/proxy";
 import { stalkerApi } from "./providers/stalker";
 import { portalProxy } from "./routes/streaming/portalProxy";
-import { xtreamRoutes } from "./routes/xtream";
 import { vodRoutes } from "./routes/streaming/vod";
 import { subtitleRoutes } from "./routes/streaming/subtitles";
 import { adminRoutes } from "./routes/contentmanager";
@@ -89,7 +88,6 @@ const init = async () => {
   server.route(stalkerV2);
   server.route(proxy);
   server.route(portalProxy);
-  server.route(xtreamRoutes);
   server.route(vodRoutes);
   server.route(subtitleRoutes);
   server.route(adminRoutes);
@@ -161,8 +159,8 @@ const init = async () => {
     // route — a runaway client-side retry loop against live TV (e.g. hls.js
     // hammering /live.m3u8 with no backoff on error) must only exhaust its own
     // bucket, never lock the same IP out of movie/series/VOD playback too.
-    const isLiveStream = p.startsWith("/live/") || p.startsWith("/live.m3u8") || p.startsWith("/player/");
-    const isVodStream = p.startsWith("/movie/") || p.startsWith("/series/") || p.startsWith("/api/media/") || p.startsWith("/api/vod/play");
+    const isLiveStream = p.startsWith("/live.m3u8") || p.startsWith("/player/");
+    const isVodStream = p.startsWith("/api/media/") || p.startsWith("/api/vod/play");
 
     if (isLiveStream || isVodStream) {
       const ip = request.info.remoteAddress;
@@ -196,9 +194,6 @@ const init = async () => {
       path.startsWith("/api/v2/download") ||
       path.startsWith("/live.m3u8") ||
       path.startsWith("/player/") ||
-      path.startsWith("/live/") ||
-      path.startsWith("/movie/") ||
-      path.startsWith("/series/") ||
       path.startsWith("/portal/proxy")
     ) {
       return h.continue;
@@ -295,14 +290,8 @@ const init = async () => {
 
   server.events.on("response", function (request) {
     const qs = request.url.search || "";
-    let logPath = request.path;
+    const logPath = request.path;
     let logQs = qs;
-
-    // Redact Xtream-style password path segments: /live|movie|series/{user}/{pass}/...
-    logPath = logPath.replace(
-      /^(\/(?:live|movie|series)\/)[^/]+\/[^/]+(\/|$)/,
-      "$1<user>/***$2",
-    );
 
     // Redact password query param
     if (logQs) {
