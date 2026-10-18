@@ -6,7 +6,7 @@ import { countryLabel } from "@/content/countryNames";
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const IMG_BASE  = "https://image.tmdb.org/t/p";
 
-// Same channel-prefix/quality/language stripping strmGenerator uses to group duplicate
+// Same channel-prefix/quality/language stripping normalizeTitleKey uses to group duplicate
 // portal listings — searching TMDB with that same cleaned title gets much better matches
 // than the portal's raw (often noisy) name.
 function cleanTitle(name: string): string {

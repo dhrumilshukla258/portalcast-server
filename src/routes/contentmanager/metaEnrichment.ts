@@ -6,7 +6,7 @@ import { requireAdmin, forbidden } from "./shared";
 
 export const metaEnrichmentRoutes: ServerRoute[] = [
   {
-    // Manual trigger only — same reasoning as /api/admin/strm/generate: a full-catalog
+    // Manual trigger only: a full-catalog
     // TMDB backfill takes hours at the throttled rate, so this must never run automatically
     // on cache warm. Safe to call repeatedly — enrichContentMeta() skips any ContentMeta
     // row that already has enrichedAt set, so re-triggering only picks up newly-discovered

@@ -21,7 +21,7 @@ import { socketService } from "./services/SocketService";
 
 import { initDB } from "./db";
 import { migrateToProfiles, loadActiveProfileFromDB } from "./config/server";
-import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres, bumpVodVersion } from "./services/xtreamCache";
+import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres } from "./services/xtreamCache";
 import { enrichContentMeta, sweepStaleContent } from "./content/metaEnrichment";
 import { fetchAndCacheEpg, getEpgCache } from "./content/epg";
 import { EpgCache } from "./models/EpgCache";
@@ -303,9 +303,8 @@ const init = async () => {
 
   logger.info(`Server running at: ${server.info.uri}`);
 
-  await bumpVodVersion().catch((e) => logger.error(`[bumpVodVersion] ${e}`));
-
-  // Warm xtream caches in background on startup, then cleanup stale genres
+  // Warm the XtreamCache catalog in the background on startup (every /api/v2
+  // movie/series route reads from it), then cleanup stale genres.
   (async () => {
     await Promise.all([
       warmVodCache().catch((e) => { logger.error(`[warmVodCache] ${e}`); return false; }),
@@ -331,7 +330,7 @@ const init = async () => {
     }
   }).catch((e) => logger.error(`[EPG startup check] ${e}`));
 
-  // Re-warm all xtream caches every 24 hours
+  // Re-warm the XtreamCache catalog every 24 hours
   setInterval(() => {
     (async () => {
       await Promise.all([

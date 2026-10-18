@@ -10,8 +10,6 @@ import { EpgCache } from "../models/EpgCache";
 import { XtreamCache } from "../models/XtreamCache";
 import { GenreOverride } from "../models/GenreOverride";
 import { ContentOverride } from "../models/ContentOverride";
-import { StrmMovie } from "../models/StrmMovie";
-import { StrmSeries } from "../models/StrmSeries";
 import { User } from "../models/User";
 import { DeviceCode } from "../models/DeviceCode";
 import { UserProgress } from "../models/UserProgress";
@@ -54,7 +52,7 @@ export const sequelize = new Sequelize({
   storage: databasePath,
   models: [
     Token, SystemConfig, ConfigProfile, Channel, Genre, EpgCache,
-    XtreamCache, GenreOverride, ContentOverride, StrmMovie, StrmSeries,
+    XtreamCache, GenreOverride, ContentOverride,
     User, DeviceCode, UserProgress, ContentCache,
     ContentMeta, ContentGenre, ContentCountry, ContentTheme,
   ],

@@ -6,8 +6,6 @@ import { requireAdmin } from "../../auth/jwt";
 import { hashPassword } from "../../auth/password";
 import { sendUserApprovedEmail } from "@/auth/email";
 import { socketService } from "@/services/SocketService";
-import { StrmMovie } from "@/models/StrmMovie";
-import { StrmSeries } from "@/models/StrmSeries";
 import { streamTracker } from "@/services/StreamTracker";
 import { requestMetrics } from "@/services/RequestMetrics";
 
@@ -55,8 +53,6 @@ export const userManagementRoutes: ServerRoute[] = [
           loggedInLast24h,
           loggedInLast7d,
           recentLogins,
-          strmMovieCount,
-          strmSeriesCount,
         ] = await Promise.all([
           User.count(),
           User.count({ where: { isActive: true } }),
@@ -70,8 +66,6 @@ export const userManagementRoutes: ServerRoute[] = [
             limit: 10,
             attributes: ["id", "name", "email", "role", "lastLogin"],
           }),
-          StrmMovie.count(),
-          StrmSeries.count(),
         ]);
 
         return {
@@ -86,10 +80,6 @@ export const userManagementRoutes: ServerRoute[] = [
           recentLogins,
           connectedDevices: socketService.getActiveDeviceCount(),
           activeStreams: streamTracker.count(),
-          strm: {
-            movies: strmMovieCount,
-            episodes: strmSeriesCount,
-          },
         };
       } catch (error) {
         logger.error({ err: error }, "Error loading admin stats");

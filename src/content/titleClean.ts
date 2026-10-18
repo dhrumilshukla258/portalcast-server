@@ -1,6 +1,6 @@
 // Shared title-cleaning patterns for stripping portal noise (channel prefixes, quality tags,
-// dub/language tags) before using a title for grouping (strmGenerator) or external lookups
-// (TMDB search) — one source of truth so both stay in sync.
+// dub/language tags) before using a title for grouping (ContentMeta groupKey) or external
+// lookups (TMDB search) — one source of truth so both stay in sync.
 
 // Portal-supplied names use inconsistent abbreviations/misspellings for the same language
 // ("ben", "bangla", "bengali" are all Bengali). Map every known variant to its canonical
@@ -162,21 +162,10 @@ export function normalizeTitleKey(name: string): string {
   return collapsed || name.trim().toLowerCase();
 }
 
-export function extractVariantTags(name: string): string[] {
-  const tags: string[] = [];
-  const ch = name.match(CHANNEL_PREFIX_RE);
-  if (ch) tags.push(ch[0].trim());
-  name.replace(VARIANT_RE, (m) => {
-    tags.push(ALIAS_TO_CANONICAL.get(m.trim().toLowerCase()) || m.trim());
-    return "";
-  });
-  return tags;
-}
-
 // Reuses LANGUAGE_ALTERNATION (declared above, feeding LANGUAGE_SUB_PATTERN)
 // to tell an "X Sub" tag apart from an "X Dub"/bare "X" tag — needs looking
 // at the word(s) AROUND a language match, not just matching the language
-// token in isolation the way extractVariantTags()/VARIANT_RE do.
+// token in isolation the way VARIANT_RE does.
 const LANGUAGE_TOKEN_RE = new RegExp(`\\b(${LANGUAGE_ALTERNATION})\\b`, "i");
 const SUB_TAG_RE = new RegExp(`\\b(${LANGUAGE_ALTERNATION})\\s+Sub(?:bed|titled)?\\b`, "i");
 

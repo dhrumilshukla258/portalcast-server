@@ -3,10 +3,9 @@ import { logger } from "@/infra/logger";
 import { GenreOverride } from "@/models/GenreOverride";
 import { ContentOverride } from "@/models/ContentOverride";
 import { readGenres, readChannels } from "@/infra/storage";
-import { xtreamCache, bumpVodVersion } from "@/services/xtreamCache";
+import { xtreamCache } from "@/services/xtreamCache";
 import { genreKey, contentKey } from "@/content/overrides";
 import { GenreType } from "@/models/Genre";
-import { generateStrmFiles } from "@/content/strmGenerator";
 import { requireAdmin, forbidden, getItemCount } from "./shared";
 export const genreRoutes: ServerRoute[] = [
   {
@@ -106,7 +105,6 @@ export const genreRoutes: ServerRoute[] = [
           await GenreOverride.create({ genre_key: key, display_name: null, hidden: false, sort_order });
         }
       }
-      if (type !== "channel") await bumpVodVersion();
       return h.response({ success: true });
     },
   },

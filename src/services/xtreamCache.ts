@@ -1,6 +1,5 @@
 import { Op } from "sequelize";
 import { XtreamCache } from "@/models/XtreamCache";
-import { SystemConfig } from "@/models/SystemConfig";
 import { logger } from "@/infra/logger";
 import { initialConfig, seriesFlag } from "@/config/server";
 import { serverManager } from "@/serverManager";
@@ -127,33 +126,6 @@ export const xtreamCache = {
   },
 };
 
-// ── Category versioning ────────────────────────────────────────────────────────
-// Each warm cycle that finds new content writes a fresh Unix timestamp as the
-// version. The timestamp is appended to every VOD/series category ID in Xtream
-// API responses. The player sees new category IDs and re-fetches stream lists.
-// Internally all cache lookups always use the bare (unversioned) genre ID, so
-// a single vod_cat_version row in SystemConfig is the only moving part.
-
-export async function getVodVersion(): Promise<number> {
-  try {
-    const row = await SystemConfig.findByPk("vod_cat_version");
-    return row ? (Number(row.value) || 1) : 1;
-  } catch { return 1; }
-}
-
-let bumpInProgress = false;
-export async function bumpVodVersion(): Promise<void> {
-  if (bumpInProgress) return;
-  bumpInProgress = true;
-  try {
-    const ts = Date.now();
-    await SystemConfig.upsert({ key: "vod_cat_version", value: ts });
-    logger.info(`[Xtream] VOD category version set to ${ts}`);
-  } finally {
-    bumpInProgress = false;
-  }
-}
-
 // `portal_series_source` almost never changes at runtime (it's set once when the provider's
 // series mode is detected) but was being re-fetched from SQLite + JSON.parse'd on every single
 // VOD/series request. Memoize it for a short window so bursts of requests share one DB read,
@@ -169,16 +141,6 @@ async function isNativeSeriesSource(): Promise<boolean> {
   const value = sourceRow ? JSON.parse(sourceRow.value) === "native" : false;
   seriesSourceCache = { value, expiresAt: Date.now() + SERIES_SOURCE_TTL_MS };
   return value;
-}
-
-export const vodVersioningEnabled = process.env.VOD_CATEGORY_VERSIONING === "true";
-
-export function addVer(id: string | number, v: number): string {
-  return vodVersioningEnabled ? `${id}_v${v}` : String(id);
-}
-
-export function stripVer(id: string): string {
-  return id.replace(/_v\d+$/, "");
 }
 
 // Stores the REAL upstream URL — this is our own persisted cache, never sent
@@ -559,9 +521,6 @@ export async function warmSeriesCache(): Promise<boolean> {
     }
 
   } finally {
-    if (newContentFound) {
-      try { await bumpVodVersion(); } catch (e: any) { logger.error(`[XtreamSeries] Failed to bump version: ${e.message}`); }
-    }
     seriesWarmRunning = false;
   }
   return newContentFound;
@@ -979,7 +938,6 @@ export async function catchupScan(options: CatchupScanOptions = {}): Promise<boo
       }
     }
 
-    await bumpVodVersion();
     logger.info("[Catchup] Scan complete");
     return true;
   } finally {
@@ -1118,9 +1076,6 @@ export async function warmVodCache(): Promise<boolean> {
     }
 
   } finally {
-    if (newContentFound) {
-      try { await bumpVodVersion(); } catch (e: any) { logger.error(`[XtreamVod] Failed to bump version: ${e.message}`); }
-    }
     vodWarmRunning = false;
   }
   return newContentFound;
