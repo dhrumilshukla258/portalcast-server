@@ -278,13 +278,27 @@ const init = async () => {
   });
 
   server.events.on("response", function (request) {
+    // No route reads a `password` query param any more, but players still
+    // configured with the old Xtream-emulation URL keep polling
+    // /player_api.php?username=…&password=… (now served by the SPA fallback)
+    // — don't let those credentials land in the log.
+    let logQs = request.url.search || "";
+    if (logQs) {
+      try {
+        const params = new URLSearchParams(logQs);
+        if (params.has("password")) params.set("password", "***");
+        logQs = params.toString();
+        if (logQs) logQs = "?" + logQs;
+      } catch { /* leave malformed query strings as-is */ }
+    }
+
     logger.info(
       request.info.remoteAddress +
         ": " +
         request.method.toUpperCase() +
         " " +
         request.path +
-        (request.url.search || "") +
+        logQs +
         " --> " +
         (request.response &&
         typeof (request.response as any).statusCode === "number"
