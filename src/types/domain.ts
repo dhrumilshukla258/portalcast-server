@@ -15,7 +15,6 @@ export interface Config extends BaseConfig {
   tvgIdPreFill?: boolean;
   tokenCacheDuration?: number;
   delayBetweenUrlGeneration?: number;
-  computeUrlLink?: boolean;
   maxNumberOfChannelsToTest?: number;
   vodMaxPagePerGenre?: number;
   vodIncludeRating?: boolean;
@@ -115,35 +114,6 @@ export interface Programs<T extends Program> {
   total_items: number;
   max_page_items: number;
   data: T[];
-}
-
-export interface M3ULine {
-  header: string;
-  title: string;
-  name: string;
-  command?: string;
-  url?: string;
-  testResult?: boolean;
-  episode?: number;
-  data?: any;
-}
-
-export class M3U {
-  private readonly _m3uLines: M3ULine[];
-
-  constructor(m3uLines: M3ULine[] = []) {
-    this._m3uLines = m3uLines;
-  }
-
-  print(config: Config): string {
-    const ret: string[] = ["#EXTM3U"];
-    this._m3uLines.forEach((m3uLine) => {
-      if (!config.computeUrlLink || !!m3uLine.url) {
-        ret.push(...[m3uLine.header, (m3uLine.url ?? m3uLine.command)!]);
-      }
-    });
-    return ret.join("\r\n");
-  }
 }
 
 export class GenreSerie {

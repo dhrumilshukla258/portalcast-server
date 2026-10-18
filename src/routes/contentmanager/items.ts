@@ -5,7 +5,6 @@ import { ContentOverride } from "@/models/ContentOverride";
 import { readGenres, readChannels } from "@/infra/storage";
 import { xtreamCache, bumpVodVersion } from "@/services/xtreamCache";
 import { genreKey, contentKey } from "@/content/overrides";
-import { invalidateVodCache } from "@/providers/getM3uUrls";
 import { GenreType } from "@/models/Genre";
 import { generateStrmFiles } from "@/content/strmGenerator";
 import { requireAdmin, forbidden, getItemCount } from "./shared";
@@ -186,7 +185,6 @@ export const itemRoutes: ServerRoute[] = [
         target_category_id: target_category_id ?? null,
         original_category_id: original_category_id ?? null,
       });
-      invalidateVodCache();
       return h.response({ success: true });
     },
   },
@@ -200,7 +198,6 @@ export const itemRoutes: ServerRoute[] = [
         return h.response({ error: "Invalid type" }).code(400);
       }
       await ContentOverride.destroy({ where: { item_key: contentKey(type, id) } });
-      invalidateVodCache();
       return h.response({ success: true });
     },
   },

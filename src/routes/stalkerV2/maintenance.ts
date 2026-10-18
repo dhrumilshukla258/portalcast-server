@@ -29,7 +29,6 @@ import { mintDownloadToken, DownloadPayload } from "@/services/downloadTokens";
 import crypto from "crypto";
 import { getEpgCache, fetchAndCacheEpg } from "@/content/epg";
 import { getPublicOrigin } from "@/infra/publicUrl";
-import { getM3uV2, getVodM3uV2 } from "@/providers/getM3uUrls";
 import { channelLogoPath, proxiedLogoPath } from "@/providers/portalAssets";
 import { fetchMovieMeta, fetchTVMeta } from "@/content/tmdb";
 import { searchSubtitles, resolveSubtitleDownloadUrl } from "@/content/opensubtitles";

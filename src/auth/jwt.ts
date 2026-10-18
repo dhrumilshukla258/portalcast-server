@@ -10,7 +10,6 @@ const JWT_SECRET: string = process.env.JWT_SECRET;
 // - access token:  { userId, email, role }
 // - refresh token: { userId, type: "refresh", clientType }
 // - admin bootstrap: { role: "admin" } (routes/providerConfig.ts — no userId/email)
-// - stream token:  { sub, scope: "stream" } (services/xtreamAuth.ts)
 // All fields are optional here since no single token carries all of them.
 export interface JWTPayload {
   userId?: number;

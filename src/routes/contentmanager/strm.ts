@@ -5,7 +5,6 @@ import { ContentOverride } from "@/models/ContentOverride";
 import { readGenres, readChannels } from "@/infra/storage";
 import { xtreamCache, bumpVodVersion } from "@/services/xtreamCache";
 import { genreKey, contentKey } from "@/content/overrides";
-import { invalidateVodCache } from "@/providers/getM3uUrls";
 import { GenreType } from "@/models/Genre";
 import { generateStrmFiles } from "@/content/strmGenerator";
 import { StrmMovie } from "@/models/StrmMovie";

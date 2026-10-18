@@ -1,6 +1,5 @@
 import "dotenv/config";
 import { initialConfig, serverConfig } from "@/config/server";
-import { playlistRoutes } from "./routes/streaming/playlist";
 import { liveRoutes } from "./routes/streaming/live";
 import { configRoutes } from "./routes/providerConfig";
 import { profileRoutes } from "./routes/account/profiles";
@@ -12,7 +11,6 @@ import path from "path";
 import { proxy } from "./routes/streaming/proxy";
 import { stalkerApi } from "./providers/stalker";
 import { portalProxy } from "./routes/streaming/portalProxy";
-import { vodRoutes } from "./routes/streaming/vod";
 import { subtitleRoutes } from "./routes/streaming/subtitles";
 import { adminRoutes } from "./routes/contentmanager";
 import { authRoutes } from "./routes/account/auth";
@@ -23,14 +21,12 @@ import { socketService } from "./services/SocketService";
 
 import { initDB } from "./db";
 import { migrateToProfiles, loadActiveProfileFromDB } from "./config/server";
-import { loadPlaylistCache } from "./providers/getM3uUrls";
 import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres, bumpVodVersion } from "./services/xtreamCache";
 import { enrichContentMeta, sweepStaleContent } from "./content/metaEnrichment";
 import { fetchAndCacheEpg, getEpgCache } from "./content/epg";
 import { EpgCache } from "./models/EpgCache";
 import { DeviceCode } from "./models/DeviceCode";
 import { Op } from "sequelize";
-import { getVodRefreshStatus } from "./providers/getM3uUrls";
 import { logger } from "./infra/logger";
 import { authCheck, type JWTPayload } from "./auth/jwt";
 
@@ -56,7 +52,6 @@ const init = async () => {
   // Explicitly initialize provider after loading the active profile from DB,
   // since serverManager initialized itself with default config at import time.
   serverManager.initProvider();
-  await loadPlaylistCache();
 
   const server = Hapi.server({
     ...serverConfig,
@@ -81,14 +76,12 @@ const init = async () => {
   socketService.init(server.listener);
 
   await server.register(Inert);
-  server.route(playlistRoutes);
   server.route(liveRoutes);
   server.route(configRoutes);
   server.route(profileRoutes);
   server.route(stalkerV2);
   server.route(proxy);
   server.route(portalProxy);
-  server.route(vodRoutes);
   server.route(subtitleRoutes);
   server.route(adminRoutes);
   server.route(authRoutes);
@@ -158,9 +151,9 @@ const init = async () => {
     // Bucketed by stream family, not one shared bucket for every public stream
     // route — a runaway client-side retry loop against live TV (e.g. hls.js
     // hammering /live.m3u8 with no backoff on error) must only exhaust its own
-    // bucket, never lock the same IP out of movie/series/VOD playback too.
+    // bucket, never lock the same IP out of movie/series playback too.
     const isLiveStream = p.startsWith("/live.m3u8") || p.startsWith("/player/");
-    const isVodStream = p.startsWith("/api/media/") || p.startsWith("/api/vod/play");
+    const isVodStream = p.startsWith("/api/media/");
 
     if (isLiveStream || isVodStream) {
       const ip = request.info.remoteAddress;
@@ -190,7 +183,6 @@ const init = async () => {
       path.startsWith("/api/images/") ||
       path.startsWith("/api/proxy") ||
       path.startsWith("/api/media/") ||
-      path.startsWith("/api/vod/") ||
       path.startsWith("/api/v2/download") ||
       path.startsWith("/live.m3u8") ||
       path.startsWith("/player/") ||
@@ -214,7 +206,6 @@ const init = async () => {
       path.startsWith("/api/admin/") ||
       path.startsWith("/api/v2/debug") ||
       path.startsWith("/api/v2/refresh-") ||
-      path.startsWith("/api/refresh/") ||
       path.startsWith("/api/profiles") ||
       path.startsWith("/api/config") ||
       path.startsWith("/api/upload") ||
@@ -239,11 +230,9 @@ const init = async () => {
     path: "/api/health",
     options: { auth: false },
     handler: (_request, h) => {
-      const { inProgress, status } = getVodRefreshStatus();
       return h.response({
         status: "ok",
         uptimeSeconds: Math.floor((Date.now() - startTime) / 1000),
-        vodCache: { refreshing: inProgress, status },
         provider: initialConfig.providerType ?? "unknown",
       }).code(200);
     },
@@ -289,27 +278,13 @@ const init = async () => {
   });
 
   server.events.on("response", function (request) {
-    const qs = request.url.search || "";
-    const logPath = request.path;
-    let logQs = qs;
-
-    // Redact password query param
-    if (logQs) {
-      try {
-        const params = new URLSearchParams(logQs);
-        if (params.has("password")) params.set("password", "***");
-        logQs = params.toString();
-        if (logQs) logQs = "?" + logQs;
-      } catch { /* leave malformed query strings as-is */ }
-    }
-
     logger.info(
       request.info.remoteAddress +
         ": " +
         request.method.toUpperCase() +
         " " +
-        logPath +
-        logQs +
+        request.path +
+        (request.url.search || "") +
         " --> " +
         (request.response &&
         typeof (request.response as any).statusCode === "number"

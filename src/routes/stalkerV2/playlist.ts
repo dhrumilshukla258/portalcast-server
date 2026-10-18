@@ -32,7 +32,6 @@ import { mintDownloadToken, DownloadPayload } from "@/services/downloadTokens";
 import crypto from "crypto";
 import { getEpgCache, fetchAndCacheEpg } from "@/content/epg";
 import { getPublicOrigin } from "@/infra/publicUrl";
-import { getM3uV2, getVodM3uV2 } from "@/providers/getM3uUrls";
 import { channelLogoPath, proxiedLogoPath } from "@/providers/portalAssets";
 import { fetchMovieMeta, fetchTVMeta } from "@/content/tmdb";
 import { searchSubtitles, resolveSubtitleDownloadUrl } from "@/content/opensubtitles";
@@ -214,25 +213,4 @@ export const playlistDomainRoutes: ServerRoute[] = [
       }
     },
   },
-  {
-    method: "GET",
-    path: "/api/v2/playlist-download",
-    handler: async (request, h) => {
-      const { type } = request.query as { type?: string };
-      const origin = getPublicOrigin(request);
-
-      if (type === "vod") {
-        const m3u = await getVodM3uV2(origin);
-        return h.response(m3u)
-          .type("application/vnd.apple.mpegurl")
-          .header("Content-Disposition", 'attachment; filename="vod.m3u"');
-      } else {
-        const m3u = await getM3uV2(origin);
-        return h.response(m3u)
-          .type("application/vnd.apple.mpegurl")
-          .header("Content-Disposition", 'attachment; filename="iptv.m3u"');
-      }
-    },
-  },
-
 ];

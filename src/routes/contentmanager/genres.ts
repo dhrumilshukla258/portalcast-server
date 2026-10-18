@@ -5,7 +5,6 @@ import { ContentOverride } from "@/models/ContentOverride";
 import { readGenres, readChannels } from "@/infra/storage";
 import { xtreamCache, bumpVodVersion } from "@/services/xtreamCache";
 import { genreKey, contentKey } from "@/content/overrides";
-import { invalidateVodCache } from "@/providers/getM3uUrls";
 import { GenreType } from "@/models/Genre";
 import { generateStrmFiles } from "@/content/strmGenerator";
 import { requireAdmin, forbidden, getItemCount } from "./shared";
@@ -85,7 +84,6 @@ export const genreRoutes: ServerRoute[] = [
       const id = `vcat_${Date.now()}`;
       const key = genreKey(type as GenreType, id);
       await GenreOverride.create({ genre_key: key, display_name: null, hidden: false, sort_order: null, virtual: true, virtual_title: title.trim() });
-      invalidateVodCache();
       return h.response({ id, key });
     },
   },
@@ -108,7 +106,6 @@ export const genreRoutes: ServerRoute[] = [
           await GenreOverride.create({ genre_key: key, display_name: null, hidden: false, sort_order });
         }
       }
-      invalidateVodCache();
       if (type !== "channel") await bumpVodVersion();
       return h.response({ success: true });
     },
@@ -132,7 +129,6 @@ export const genreRoutes: ServerRoute[] = [
       } else {
         await GenreOverride.create({ genre_key: key, display_name: display_name ?? null, hidden: hidden ?? false, sort_order: null, virtual: false, virtual_title: null });
       }
-      invalidateVodCache();
       return h.response({ success: true });
     },
   },
@@ -159,7 +155,6 @@ export const genreRoutes: ServerRoute[] = [
           await instance.update({ sort_order: null });
         }
       }
-      invalidateVodCache();
       return h.response({ success: true });
     },
   },
@@ -185,7 +180,6 @@ export const genreRoutes: ServerRoute[] = [
         }
       }
       await GenreOverride.destroy({ where: { genre_key: genreKey(type as GenreType, id) } });
-      invalidateVodCache();
       return h.response({ success: true });
     },
   },
