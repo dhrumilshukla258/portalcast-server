@@ -72,6 +72,8 @@ export const seriesFlag = process.env.SERIES_FLAG || "is_series";
 export const tmdbApiToken = process.env.TMDB_API_READ_TOKEN || "";
 
 export const openSubtitlesApiKey = process.env.OPENSUBTITLES_API_KEY || "";
+/** Free key from subdl.com: second subtitle source (content/subdl.ts). */
+export const subdlApiKey = process.env.SUBDL_API_KEY || "";
 
 export function getInitialConfig() {
   return initialConfig;

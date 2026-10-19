@@ -113,6 +113,7 @@ Set provider type to **Xtream** in the profile form, then enter host, username, 
 | `SERIES_FLAG` | `is_series` | Only relevant for **mixed-content portals** — ones that return series and movies from the same VOD endpoint, distinguished by a boolean-ish field. Set this to whatever that field is named on your portal if it isn't `is_series`. Portals with a genuinely separate series endpoint are auto-detected and ignore this entirely — see `docs/skill-stalker-provider.md` / `docs/skill-xtream-provider.md` |
 | `TMDB_API_READ_TOKEN` | — | TMDB token for poster/backdrop enrichment |
 | `OPENSUBTITLES_API_KEY` | — | Enables online subtitle search/download in the player. Without it, search silently returns 0 results (a startup-adjacent warning is logged the first time a search is attempted) |
+| `SUBDL_API_KEY` | — | Second subtitle source ([subdl.com](https://subdl.com), free key: ~2,000 searches and ~50 downloads per day). Results from both sources are merged; every downloaded file is stored, so each one is fetched only once. Viewers never need an account |
 | `GOOGLE_CLIENT_ID` | — | Google OAuth client ID (enables Google sign-in) |
 | `TLS_CERT_PATH` | — | TLS certificate path (enables HTTPS on the server) |
 | `TLS_KEY_PATH` | — | TLS key path |

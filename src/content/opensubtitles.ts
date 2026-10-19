@@ -80,7 +80,11 @@ export async function linkOpenSubtitlesAccount(username: string, password: strin
 
 export interface SubtitleResult {
   id: string;
+  /** OpenSubtitles file id (0 for other sources). Kept for older clients. */
   fileId: number;
+  /** What to pass to /api/v2/subtitles/download?id= ("os:<fileId>" | "subdl:<path>"). */
+  downloadId: string;
+  source: "opensubtitles" | "subdl";
   language: string;
   releaseName: string;
   downloadCount: number;
@@ -121,6 +125,8 @@ export async function searchSubtitles(params: {
         return {
           id: r.id,
           fileId: file.file_id,
+          downloadId: `os:${file.file_id}`,
+          source: "opensubtitles",
           language: r.attributes?.language || "unknown",
           releaseName: r.attributes?.release || r.attributes?.files?.[0]?.file_name || "Subtitle",
           downloadCount: r.attributes?.download_count || 0,

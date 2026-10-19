@@ -32,7 +32,8 @@ import { getEpgCache, fetchAndCacheEpg } from "@/content/epg";
 import { getPublicOrigin } from "@/infra/publicUrl";
 import { channelLogoPath, proxiedLogoPath } from "@/providers/portalAssets";
 import { fetchMovieMeta, fetchTVMeta } from "@/content/tmdb";
-import { searchSubtitles, resolveSubtitleDownloadUrl } from "@/content/opensubtitles";
+import { searchSubtitles, resolveSubtitleDownloadUrl, type SubtitleResult } from "@/content/opensubtitles";
+import { searchSubdl, downloadSubdlText, isValidSubdlPath } from "@/content/subdl";
 import {
   streamUserLabel,
   CACHE_DURATION_MS,
@@ -47,18 +48,23 @@ import {
 const SEARCH_TTL_MS = 24 * 60 * 60 * 1000;
 const searchCache = new Map<string, { at: number; results: unknown[] }>();
 
+/** SRT -> WebVTT (the web player's <track> only reads VTT; the TV parses either). */
+function toVtt(text: string): string {
+  const body = String(text).replace(/^﻿/, "");
+  if (/^WEBVTT/.test(body)) return body;
+  return "WEBVTT\n\n" + body.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2");
+}
+
 export const subtitleRoutes: ServerRoute[] = [
   {
+    // Searches every configured source in parallel (OpenSubtitles, SubDL) and merges:
+    // OpenSubtitles first by popularity, then SubDL. Each result carries `downloadId`.
     method: "GET",
     path: "/api/v2/subtitles/search",
     handler: async (request, h) => {
       try {
         const { title, year, season, episode, lang } = request.query as {
-          title?: string;
-          year?: string;
-          season?: string;
-          episode?: string;
-          lang?: string;
+          title?: string; year?: string; season?: string; episode?: string; lang?: string;
         };
         if (!title) return h.response({ error: "Missing title" }).code(400);
 
@@ -66,13 +72,16 @@ export const subtitleRoutes: ServerRoute[] = [
         const key = JSON.stringify([title.trim().toLowerCase(), year ?? "", season ?? "", episode ?? "", lang ?? ""]);
         const hit = searchCache.get(key);
         if (hit && Date.now() - hit.at < SEARCH_TTL_MS) return { success: true, results: hit.results };
-        const results = await searchSubtitles({
+
+        const params = {
           title,
           year,
           season: season ? Number(season) : undefined,
           episode: episode ? Number(episode) : undefined,
           language: lang,
-        });
+        };
+        const [os, subdl] = await Promise.all([searchSubtitles(params), searchSubdl(params)]);
+        const results: SubtitleResult[] = [...os, ...subdl];
         if (results.length > 0) {
           searchCache.set(key, { at: Date.now(), results });
           if (searchCache.size > 500) searchCache.delete(searchCache.keys().next().value as string);
@@ -86,52 +95,45 @@ export const subtitleRoutes: ServerRoute[] = [
   },
 
   {
+    // ?id=os:<fileId> | subdl:/subtitle/<x>.zip   (older clients: ?fileId=<n>)
     method: "GET",
     path: "/api/v2/subtitles/download",
     handler: async (request, h) => {
       try {
-        const { fileId } = request.query as { fileId?: string };
-        if (!fileId || !/^\d{1,12}$/.test(fileId)) return h.response({ error: "Missing fileId" }).code(400);
+        const q = request.query as { id?: string; fileId?: string };
+        const id = q.id ?? (q.fileId ? `os:${q.fileId}` : "");
+        const osMatch = /^os:(\d{1,12})$/.exec(id);
+        const subdlPath = id.startsWith("subdl:") ? id.slice("subdl:".length) : null;
+        if (!osMatch && !(subdlPath && isValidSubdlPath(subdlPath))) {
+          return h.response({ error: "Missing or invalid subtitle id" }).code(400);
+        }
 
         // Already fetched once: serve the stored copy, spending no download quota.
-        const stored = await SubtitleFile.findByPk(Number(fileId));
+        const stored = await SubtitleFile.findByPk(id);
         if (stored) return h.response(stored.vtt).header("Content-Type", "text/vtt; charset=utf-8");
 
-        // Draws from the caller's own linked OpenSubtitles quota when they
-        // have one (see [[skill-user-system]] / opensubtitles.ts), falling
-        // back to the shared API-key-only pool otherwise.
-        const userPayload = authCheck(request);
-        const link = await resolveSubtitleDownloadUrl(Number(fileId), userPayload ? userPayload.userId : undefined);
-        if (!link) return h.response({ error: "Failed to resolve subtitle download link" }).code(502);
-
-        const response = await axios({
-          method: "get",
-          url: link,
-          responseType: "text",
-          validateStatus: () => true,
-        });
-
-        // The player renders subtitle tracks via a plain HTML <track> element, which only
-        // understands WebVTT — not SRT (different timestamp separator: "," vs "."). OpenSubtitles
-        // only serves .srt, so convert it here rather than touching the player's track handling.
-        const vtt = "WEBVTT\n\n" + String(response.data).replace(
-          /(\d{2}:\d{2}:\d{2}),(\d{3})/g,
-          "$1.$2",
-        );
-
-        if (response.status >= 200 && response.status < 300 && String(response.data).trim().length > 0) {
-          await SubtitleFile.upsert({ fileId: Number(fileId), vtt }).catch((e: any) =>
-            logger.warn(`[subtitles] could not store fileId=${fileId}: ${e?.message ?? e}`));
+        let text: string | null = null;
+        if (osMatch) {
+          // Draws from the caller's own linked OpenSubtitles quota when they have one,
+          // falling back to the shared API-key-only pool.
+          const userPayload = authCheck(request);
+          const link = await resolveSubtitleDownloadUrl(Number(osMatch[1]), userPayload ? userPayload.userId : undefined);
+          if (!link) return h.response({ error: "Failed to resolve subtitle download link" }).code(502);
+          const response = await axios({ method: "get", url: link, responseType: "text", validateStatus: () => true, maxContentLength: 5 * 1024 * 1024 });
+          if (response.status >= 200 && response.status < 300) text = String(response.data);
+        } else if (subdlPath) {
+          text = await downloadSubdlText(subdlPath);
         }
-        return h.response(vtt)
-          .header("Content-Type", "text/vtt; charset=utf-8")
-          .code(response.status);
+        if (!text || !text.trim()) return h.response({ error: "Subtitle download failed" }).code(502);
+
+        const vtt = toVtt(text);
+        await SubtitleFile.upsert({ key: id, vtt }).catch((e: any) =>
+          logger.warn(`[subtitles] could not store ${id}: ${e?.message ?? e}`));
+        return h.response(vtt).header("Content-Type", "text/vtt; charset=utf-8");
       } catch (err) {
         logger.error({ err }, "Subtitle download error");
         return h.response({ success: false, error: "Subtitle download failed." }).code(500);
       }
     },
   },
-
-
 ];
