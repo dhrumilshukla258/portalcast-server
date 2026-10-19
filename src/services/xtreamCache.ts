@@ -21,6 +21,8 @@ const MEM_MAX_ENTRIES = 3000;
 const memRaw = new Map<string, { value: string; expiresAt: Date; cachedAt: number }>();
 
 function memGet(key: string): { value: string; expiresAt: Date } | undefined {
+  const queued = pendingWrites.get(key);
+  if (queued) return queued;
   const entry = memRaw.get(key);
   if (!entry) return undefined;
   if (entry.cachedAt + MEM_TTL_MS < Date.now()) {
@@ -42,6 +44,41 @@ function memDelete(key: string): void {
   memRaw.delete(key);
 }
 
+// ── Write-behind queue for fire-and-forget per-item rows ─────────────────────
+// A catalog warm stores two small rows per movie (vod_info_*, vod_cmd_*) and two per episode
+// (ep_info_*, ep_cmd_*) without awaiting them. Issued as individual upserts that is one SQLite
+// transaction (and WAL sync) each — measured ~300 rows/s, i.e. ~10 min for an 85k-movie
+// catalog, during which every other query of the app queues behind them. setDeferred() buffers
+// them and writes multi-row upserts instead (WRITE_BATCH rows per statement). Queued values are
+// visible to get()/getMany() immediately via memGet().
+const pendingWrites = new Map<string, { value: string; expiresAt: Date }>();
+const WRITE_BATCH = 300; // 3 bound params per row: stays under SQLite's historical 999 limit
+let flushing: Promise<void> | null = null;
+
+function scheduleFlush(): void {
+  if (flushing) return;
+  flushing = (async () => {
+    await new Promise((r) => setImmediate(r)); // let the caller's loop enqueue its whole batch first
+    while (pendingWrites.size > 0) {
+      const rows: { key: string; value: string; expiresAt: Date }[] = [];
+      for (const [key, v] of pendingWrites) {
+        rows.push({ key, value: v.value, expiresAt: v.expiresAt });
+        if (rows.length >= WRITE_BATCH) break;
+      }
+      for (const r of rows) pendingWrites.delete(r.key);
+      try {
+        await XtreamCache.bulkCreate(rows, { updateOnDuplicate: ["value", "expiresAt"] });
+        for (const r of rows) memSet(r.key, r.value, r.expiresAt);
+      } catch (e: any) {
+        logger.error(`[XtreamCache] deferred write of ${rows.length} rows failed: ${e?.message ?? e}`);
+      }
+    }
+  })().finally(() => {
+    flushing = null;
+    if (pendingWrites.size > 0) scheduleFlush();
+  });
+}
+
 // Per-key write version, bumped on every set/delete (and for all keys by clearXtreamMem), so
 // in-memory views built from cached lists (content/catalogUnion.ts) can tell in O(1) whether
 // a key changed since they were built. Process-local; starts at 0 for every key.
@@ -56,6 +93,7 @@ export function xtreamCacheKeyVersion(key: string): string {
 /** For writers that bypass xtreamCache (raw XtreamCache.destroy): drop the read cache and invalidate all versions. */
 export function clearXtreamMem(): void {
   memRaw.clear();
+  pendingWrites.clear();
   versionEpoch++;
 }
 
@@ -130,7 +168,15 @@ export const xtreamCache = {
     }
   },
 
+  /** Fire-and-forget set, batched with other deferred writes (see pendingWrites above). */
+  setDeferred(key: string, value: any): void {
+    pendingWrites.set(key, { value: JSON.stringify(value), expiresAt: new Date(Date.now() + TTL_MS) });
+    bumpVersion(key);
+    scheduleFlush();
+  },
+
   async set(key: string, value: any): Promise<void> {
+    pendingWrites.delete(key);
     const expiresAt = new Date(Date.now() + TTL_MS);
     const raw = JSON.stringify(value);
     await XtreamCache.upsert({ key, value: raw, expiresAt });
@@ -139,6 +185,7 @@ export const xtreamCache = {
   },
 
   async delete(key: string): Promise<void> {
+    pendingWrites.delete(key);
     memDelete(key);
     await XtreamCache.destroy({ where: { key } });
     bumpVersion(key);
@@ -220,8 +267,8 @@ function toUnixAdded(added: any): string {
 
 export function mapVodItem(m: any, num: number, categoryId: string | number): any {
   const added = toUnixAdded(m.added);
-  if (m.cmd) xtreamCache.set(`vod_cmd_${m.id}`, m.cmd).catch(() => {});
-  xtreamCache.set(`vod_info_${m.id}`, {
+  if (m.cmd) xtreamCache.setDeferred(`vod_cmd_${m.id}`, m.cmd);
+  xtreamCache.setDeferred(`vod_info_${m.id}`, {
     info: {
       name:          m.name,
       cover_big:     buildIconUrl(m.screenshot_uri),
@@ -245,7 +292,7 @@ export function mapVodItem(m: any, num: number, categoryId: string | number): an
       custom_sid:          "",
       direct_source:       "",
     },
-  }).catch(() => {});
+  });
   return {
     num,
     name:                m.name,
@@ -612,14 +659,14 @@ export async function warmSeriesInfoCache(): Promise<void> {
 
           episodesMap[seasonNum] = effectiveEps.map((ep: any, idx: number) => {
             const epNum = parseInt(String(ep.series_number || (idx + 1)));
-            xtreamCache.set(`ep_info_${ep.id}`, {
+            xtreamCache.setDeferred(`ep_info_${ep.id}`, {
               movieId:   seriesId,
               seasonId:  seasonIdInt,
               seriesNum: epNum,
-            }).catch(() => {});
+            });
             totalEpInfo++;
             if (ep.cmd) {
-              xtreamCache.set(`ep_cmd_${ep.id}`, { cmd: ep.cmd, series_num: epNum }).catch(() => {});
+              xtreamCache.setDeferred(`ep_cmd_${ep.id}`, { cmd: ep.cmd, series_num: epNum });
             }
             return {
               id:                  ep.id,
