@@ -1,4 +1,5 @@
 import { ServerRoute, Request, ResponseToolkit } from "@hapi/hapi";
+import { recordFromRequest } from "@/services/SecurityEvents";
 import { httpClient } from "@/streaming/httpClient";
 import http from "http";
 import https, { RequestOptions } from "https";
@@ -117,6 +118,7 @@ export const proxy: ServerRoute[] = [
     handler: async (request, h) => {
       const entry = streamTokenFromRequest(request);
       if (!entry) {
+        if ((request.query as any)?.t) recordFromRequest(request, "stream_token_invalid");
         return h.response({ error: "Unauthorized" }).code(401);
       }
 
@@ -144,6 +146,7 @@ export const proxy: ServerRoute[] = [
     handler: async (request, h) => {
       const entry = streamTokenFromRequest(request);
       if (!entry) {
+        if ((request.query as any)?.t) recordFromRequest(request, "stream_token_invalid");
         return h.response({ error: "Unauthorized" }).code(401);
       }
 

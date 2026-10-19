@@ -22,6 +22,8 @@ import { ContentTheme } from "../models/ContentTheme";
 import { StreamFailure } from "../models/StreamFailure";
 import { MediaInfo } from "../models/MediaInfo";
 import { SubtitleFile } from "../models/SubtitleFile";
+import { SecurityEvent } from "../models/SecurityEvent";
+import { RefreshToken } from "../models/RefreshToken";
 import { logger } from "../infra/logger";
 
 function resolveDatabasePath(): string {
@@ -58,7 +60,7 @@ export const sequelize = new Sequelize({
     XtreamCache, GenreOverride, ContentOverride,
     User, DeviceCode, UserProgress, ContentCache,
     ContentMeta, ContentGenre, ContentCountry, ContentTheme,
-    StreamFailure, MediaInfo, SubtitleFile,
+    StreamFailure, MediaInfo, SubtitleFile, SecurityEvent, RefreshToken,
   ],
   logging: false,
 });

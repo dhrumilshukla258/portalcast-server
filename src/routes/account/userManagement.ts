@@ -1,4 +1,6 @@
 import { ServerRoute } from "@hapi/hapi";
+import { revokeAllForUser } from "@/services/RefreshTokens";
+import { forgetAccountStatus } from "@/auth/accountStatus";
 import { Op } from "sequelize";
 import { logger } from "@/infra/logger";
 import { User } from "../../models/User";
@@ -211,6 +213,10 @@ export const userManagementRoutes: ServerRoute[] = [
         if (name !== undefined) user.name = name.trim();
         if (role !== undefined) user.role = role;
         if (isActive !== undefined) user.isActive = !!isActive;
+        forgetAccountStatus(user.id);
+        if (isActive === false || (role !== undefined && role !== "admin" && user.changed("role"))) {
+          await revokeAllForUser(user.id, isActive === false ? "account disabled" : "role changed");
+        }
 
         if (password) {
           if (password.trim().length < 6) {
@@ -262,6 +268,8 @@ export const userManagementRoutes: ServerRoute[] = [
           return h.response({ error: "You cannot delete your own account" }).code(400);
         }
 
+        await revokeAllForUser(user.id, "account deleted");
+        forgetAccountStatus(user.id);
         await user.destroy();
         return { success: true, message: "User deleted successfully" };
       } catch (error) {

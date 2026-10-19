@@ -1,4 +1,5 @@
 ﻿import { ServerRoute } from "@hapi/hapi";
+import { recordFromRequest } from "@/services/SecurityEvents";
 import {
   writeJSON,
   readChannels,
@@ -205,6 +206,7 @@ export const playlistDomainRoutes: ServerRoute[] = [
           .header("cache-control", "max-age=3600");
       } catch (err) {
         if (err instanceof ForbiddenHostError) {
+          recordFromRequest(request, "image_proxy_blocked", parsed.hostname);
           logger.warn(`[images/proxy] ${err.message} (resolves to a private/loopback address)`);
           return h.response({ success: false, message: "Forbidden host" }).code(403);
         }

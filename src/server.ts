@@ -1,4 +1,9 @@
 import "dotenv/config";
+import { clientIp, isSecureRequest } from "./infra/clientIp";
+import { recordFromRequest, isBanned, purgeOld as purgeOldSecurityEvents } from "./services/SecurityEvents";
+import { purgeRefreshTokens } from "./services/RefreshTokens";
+import { securityRoutes } from "./routes/admin/security";
+import { accountStatus } from "./auth/accountStatus";
 import { initialConfig, serverConfig } from "@/config/server";
 import { liveRoutes } from "./routes/streaming/live";
 import { configRoutes } from "./routes/providerConfig";
@@ -34,6 +39,10 @@ import { Op } from "sequelize";
 import { logger } from "./infra/logger";
 import { authCheck, type JWTPayload } from "./auth/jwt";
 import { primeDiscoverIndex } from "./content/discoverIndex";
+
+// The webui loads scripts/media/artwork from many origins (streams, TMDB, Google sign-in,
+// Chromecast, YouTube trailers), so sources stay open; eval, plugins and <base> are off.
+const CSP = "default-src * 'unsafe-inline' data: blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'self';";
 
 const init = async () => {
   if (!process.env.ADMIN_PASSWORD) {
@@ -72,7 +81,7 @@ const init = async () => {
         .file(path.join(process.cwd(), "public", "index.html"))
         .header(
           "Content-Security-Policy",
-          "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; frame-ancestors 'self';",
+          CSP,
         )
         .header("X-Frame-Options", "SAMEORIGIN");
     },
@@ -90,6 +99,7 @@ const init = async () => {
   server.route(subtitleRoutes);
   server.route(streamFailureRoutes);
   server.route(mediaInfoRoutes);
+  server.route(securityRoutes);
   server.route(adminRoutes);
   server.route(authRoutes);
   server.route(userRoutes);
@@ -138,10 +148,22 @@ const init = async () => {
       request.method.toUpperCase() === "POST" &&
       (p === "/api/auth/admin" ||
         p === "/api/auth/login" ||
+        p === "/api/auth/google" ||
+        p === "/api/auth/refresh" ||
         p === "/api/auth/forgot-password" ||
-        p === "/api/auth/reset-password");
+        p === "/api/auth/reset-password" ||
+        p === "/api/auth/device/code" ||
+        p === "/api/auth/device/authorize");
+    const ip = clientIp(request);
+
+    // A banned address (services/SecurityEvents.ts) gets nothing from the API.
+    if (p.startsWith("/api/") && isBanned(ip)) {
+      return h.response({ error: "Too Many Requests" }).code(429).takeover();
+    }
+
     if (isThrottledAuthEndpoint) {
-      const ip = request.info.remoteAddress;
+      // Refresh is routine (every hour per device): a wider bucket than password tries.
+      const max = p === "/api/auth/refresh" ? ADMIN_LOGIN_RL_MAX * 12 : ADMIN_LOGIN_RL_MAX;
       const key = `${p}:${ip}`;
       const now = Date.now();
       const entry = adminLoginRlMap.get(key);
@@ -149,7 +171,8 @@ const init = async () => {
         adminLoginRlMap.set(key, { count: 1, windowStart: now });
       } else {
         entry.count++;
-        if (entry.count > ADMIN_LOGIN_RL_MAX) {
+        if (entry.count > max) {
+          if (entry.count === max + 1) recordFromRequest(request, "login_throttled");
           return h.response({ error: "Too Many Requests" }).code(429).takeover();
         }
       }
@@ -163,7 +186,6 @@ const init = async () => {
     const isVodStream = p.startsWith("/api/media/");
 
     if (isLiveStream || isVodStream) {
-      const ip = request.info.remoteAddress;
       const key = `${isLiveStream ? "live" : "vod"}:${ip}`;
       const now = Date.now();
       const entry = rlMap.get(key);
@@ -172,6 +194,7 @@ const init = async () => {
       } else {
         entry.count++;
         if (entry.count > RL_MAX) {
+          if (entry.count === RL_MAX + 1) recordFromRequest(request, "stream_throttled");
           return h.response({ error: "Too Many Requests" }).code(429).takeover();
         }
       }
@@ -179,8 +202,22 @@ const init = async () => {
     return h.continue;
   });
 
+  // Security headers on every response. CSP stays permissive for sources (streams, TMDB
+  // artwork, Google sign-in, Chromecast) but forbids plugins, eval and base-URL tricks.
+  server.ext("onPreResponse", (request, h) => {
+    const r: any = request.response;
+    const set = (k: string, v: string) => {
+      if (r?.isBoom) r.output.headers[k] = v; else r?.header?.(k, v);
+    };
+    set("X-Content-Type-Options", "nosniff");
+    set("Referrer-Policy", "strict-origin-when-cross-origin");
+    set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+    if (isSecureRequest(request)) set("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
+    return h.continue;
+  });
+
   // Global Auth Interceptor for Hapi endpoints
-  server.ext("onPreHandler", (request, h) => {
+  server.ext("onPreHandler", async (request, h) => {
     const path = request.path;
 
     // Skip auth for static pages, media streams, image proxies, video stream proxies, and authorization endpoints
@@ -200,7 +237,20 @@ const init = async () => {
 
     const user = authCheck(request);
     if (!user) {
+      // A missing header is just a signed-out client; a present-but-bad token is suspicious.
+      if (request.headers.authorization) recordFromRequest(request, "token_invalid");
       return h.response({ error: "Unauthorized" }).code(401).takeover();
+    }
+
+    // The token says who the user is; the database says whether they still may be here
+    // (disabled/deleted accounts and demoted admins used to keep access for up to an hour).
+    if (typeof user.userId === "number") {
+      const live = await accountStatus(user.userId);
+      if (!live || !live.isActive) {
+        recordFromRequest(request, "token_user_disabled", null, user.userId);
+        return h.response({ error: "Unauthorized" }).code(401).takeover();
+      }
+      user.role = live.role;
     }
 
     // Attach user metadata to plugins state so handlers can access it
@@ -222,9 +272,12 @@ const init = async () => {
     // User owns this data — any valid JWT, any method
     const isUserOwnData =
       path.startsWith("/api/user/") ||
-      path === "/api/auth/device/authorize";
+      path === "/api/auth/device/authorize" ||
+      path === "/api/auth/logout" ||
+      path === "/api/v2/media-info";
 
     if ((isAdminOnlyPath || (isMutation && !isUserOwnData)) && user.role !== "admin") {
+      recordFromRequest(request, "forbidden", `${request.method.toUpperCase()} ${path}`, user.userId as number | undefined);
       return h.response({ error: "Forbidden" }).code(403).takeover();
     }
 
@@ -280,7 +333,7 @@ const init = async () => {
           .file(path.join(process.cwd(), "public", "index.html"))
           .header(
             "Content-Security-Policy",
-            "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; frame-ancestors 'self';",
+            CSP,
           )
           .header("X-Frame-Options", "SAMEORIGIN");
       }
@@ -401,6 +454,15 @@ const init = async () => {
 
     // Broken-stream rows (docs/skill-stream-failures.md) untouched for 30
     // days — auto-hidden rows are kept as the record of why a title is hidden.
+    try {
+      const n = await purgeOldSecurityEvents();
+      if (n > 0) logger.info(`[cleanup] Purged ${n} security event(s) older than 30 days.`);
+    } catch (e) { logger.error(`[cleanup] security_events purge failed: ${e}`); }
+    try {
+      const n = await purgeRefreshTokens();
+      if (n > 0) logger.info(`[cleanup] Purged ${n} expired/revoked refresh token(s).`);
+    } catch (e) { logger.error(`[cleanup] refresh_tokens purge failed: ${e}`); }
+
     try {
       const failuresDeleted = await purgeStaleFailures();
       if (failuresDeleted > 0) logger.info(`[cleanup] Purged ${failuresDeleted} stale stream_failures row(s).`);

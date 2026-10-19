@@ -1,4 +1,7 @@
 import { ServerRoute } from "@hapi/hapi";
+import { issueRefreshToken, rotateRefreshToken, revokeRefreshToken, revokeAllForUser } from "../../services/RefreshTokens";
+import { recordFromRequest } from "../../services/SecurityEvents";
+import { clientIp } from "../../infra/clientIp";
 import { logger } from "@/infra/logger";
 import { OAuth2Client } from "google-auth-library";
 import crypto from "crypto";
@@ -18,7 +21,7 @@ function generateUserCode(): string {
   let code = "";
   for (let i = 0; i < 6; i++) {
     if (i === 3) code += "-";
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
+    code += chars.charAt(crypto.randomInt(chars.length));
   }
   return code;
 }
@@ -51,6 +54,7 @@ export const authRoutes: ServerRoute[] = [
           googlePayload = ticket.getPayload();
         } catch (err: any) {
           logger.error({ err }, "Google token verification failed");
+          recordFromRequest(request, "google_token_invalid");
           return h.response({ error: "Invalid Google ID Token" }).code(401);
         }
 
@@ -141,12 +145,7 @@ export const authRoutes: ServerRoute[] = [
         }, 3600);
 
         // Generate Refresh Token (1 month for web, 6 months for TV)
-        const refreshExpiry = clientType === "tv" ? 6 * 30 * 24 * 3600 : 30 * 24 * 3600;
-        const refreshToken = createJWT({
-          userId: user.id,
-          type: "refresh",
-          clientType
-        }, refreshExpiry);
+        const refreshToken = await issueRefreshToken(user.id, clientType, clientIp(request));
 
         return {
           accessToken,
@@ -216,12 +215,7 @@ export const authRoutes: ServerRoute[] = [
             role: adminUser.role
           }, 3600);
 
-          const refreshExpiry = clientType === "tv" ? 6 * 30 * 24 * 3600 : 30 * 24 * 3600;
-          const refreshToken = createJWT({
-            userId: adminUser.id,
-            type: "refresh",
-            clientType
-          }, refreshExpiry);
+          const refreshToken = await issueRefreshToken(adminUser.id, clientType, clientIp(request));
 
           return {
             accessToken,
@@ -238,10 +232,12 @@ export const authRoutes: ServerRoute[] = [
 
         const user = await User.findOne({ where: { email } });
         if (!user) {
+          recordFromRequest(request, "login_failed", `unknown account ${String(email).slice(0, 80)}`);
           return h.response({ error: "Invalid email or password" }).code(401);
         }
 
         if (!user.isActive) {
+          recordFromRequest(request, "login_disabled", null, user.id);
           return h.response({ error: "Your account is disabled. Please contact the administrator." }).code(403);
         }
 
@@ -251,6 +247,7 @@ export const authRoutes: ServerRoute[] = [
 
         const isMatch = verifyPassword(password, user.passwordHash, user.salt);
         if (!isMatch) {
+          recordFromRequest(request, "login_failed", "wrong password", user.id);
           return h.response({ error: "Invalid email or password" }).code(401);
         }
 
@@ -265,12 +262,7 @@ export const authRoutes: ServerRoute[] = [
         }, 3600);
 
         // Generate Refresh Token (1 month for web, 6 months for TV)
-        const refreshExpiry = clientType === "tv" ? 6 * 30 * 24 * 3600 : 30 * 24 * 3600;
-        const refreshToken = createJWT({
-          userId: user.id,
-          type: "refresh",
-          clientType
-        }, refreshExpiry);
+        const refreshToken = await issueRefreshToken(user.id, clientType, clientIp(request));
 
         return {
           accessToken,
@@ -368,7 +360,8 @@ export const authRoutes: ServerRoute[] = [
         }
 
         const resetToken = crypto.randomBytes(32).toString("hex");
-        user.resetToken = resetToken;
+        // Only the hash is stored: a database leak must not hand out working reset links.
+        user.resetToken = crypto.createHash("sha256").update(resetToken).digest("hex");
         user.resetTokenExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
         await user.save();
 
@@ -402,8 +395,10 @@ export const authRoutes: ServerRoute[] = [
           return h.response({ error: "Password is not matching its criteria" }).code(400);
         }
 
-        const user = await User.findOne({ where: { resetToken: token } });
+        const tokenHash = crypto.createHash("sha256").update(String(token)).digest("hex");
+        const user = await User.findOne({ where: { resetToken: tokenHash } });
         if (!user || !user.resetTokenExpires || new Date() > user.resetTokenExpires) {
+          recordFromRequest(request, "reset_token_invalid");
           return h.response({ error: "Invalid or expired reset token" }).code(400);
         }
 
@@ -433,13 +428,17 @@ export const authRoutes: ServerRoute[] = [
           return h.response({ error: "Missing refresh token" }).code(400);
         }
 
-        const decoded = verifyJWT(refreshToken);
-        if (!decoded || decoded.type !== "refresh") {
+        // Validated against the server's record and rotated (services/RefreshTokens.ts):
+        // sign-out and admin revocation work, and a replayed old token revokes the session.
+        const outcome = await rotateRefreshToken(refreshToken, clientIp(request));
+        if (!outcome.ok) {
+          recordFromRequest(request, outcome.reason === "reuse" ? "refresh_reuse" : "refresh_invalid", outcome.reason, outcome.userId ?? null);
           return h.response({ error: "Invalid or expired refresh token" }).code(401);
         }
 
-        const user = await User.findByPk(decoded.userId);
+        const user = await User.findByPk(outcome.userId);
         if (!user || !user.isActive) {
+          await revokeAllForUser(outcome.userId, "account disabled");
           return h.response({ error: "User is disabled or does not exist" }).code(401);
         }
 
@@ -450,10 +449,9 @@ export const authRoutes: ServerRoute[] = [
           role: user.role
         }, 3600);
 
-        // Optional: Rotate refresh token if close to expiry, or just reuse it
         return {
           accessToken,
-          refreshToken
+          refreshToken: outcome.refreshToken
         };
       } catch (error) {
         logger.error({ err: error }, "Error during token refresh");
@@ -533,11 +531,7 @@ export const authRoutes: ServerRoute[] = [
             role: user.role
           }, 3600);
 
-          const refreshToken = createJWT({
-            userId: user.id,
-            type: "refresh",
-            clientType: "tv"
-          }, 6 * 30 * 24 * 3600);
+          const refreshToken = await issueRefreshToken(user.id, "tv", clientIp(request));
 
           // Clean up the device code from database
           await record.destroy();
@@ -590,6 +584,7 @@ export const authRoutes: ServerRoute[] = [
         });
 
         if (!record || new Date() > record.expiresAt) {
+          recordFromRequest(request, "pairing_code_invalid", null, userPayload.userId as number);
           return h.response({ error: "Invalid or expired user authorization code" }).code(400);
         }
 
@@ -603,6 +598,19 @@ export const authRoutes: ServerRoute[] = [
         logger.error({ err: error }, "Error authorizing device code");
         return h.response({ error: "Internal Server Error" }).code(500);
       }
+    },
+  },
+  {
+    // Sign-out: revokes this refresh token's session on the server (clients also clear
+    // their stored tokens). Unknown tokens are ignored so sign-out never fails.
+    method: "POST",
+    path: "/api/auth/logout",
+    handler: async (request, h) => {
+      const token = (request.payload as any)?.refreshToken;
+      if (typeof token === "string" && token.length > 0) {
+        await revokeRefreshToken(token).catch((err) => logger.error({ err }, "logout revoke failed"));
+      }
+      return { success: true };
     },
   },
 ];

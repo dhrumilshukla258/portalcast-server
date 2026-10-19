@@ -114,6 +114,8 @@ Set provider type to **Xtream** in the profile form, then enter host, username, 
 | `TMDB_API_READ_TOKEN` | — | TMDB token for poster/backdrop enrichment |
 | `OPENSUBTITLES_API_KEY` | — | Enables online subtitle search/download in the player. Without it, search silently returns 0 results (a startup-adjacent warning is logged the first time a search is attempted) |
 | `SUBDL_API_KEY` | — | Second subtitle source ([subdl.com](https://subdl.com), free key: ~2,000 searches and ~50 downloads per day). Results from both sources are merged; every downloaded file is stored, so each one is fetched only once. Viewers never need an account |
+| `TRUSTED_PROXIES` | — | Set to `private` when running behind a reverse proxy on the same host/LAN/Docker (or list proxy IPs/CIDRs). Lets the server see each viewer's real address for rate limits, the security log and automatic bans; without it every viewer shares the proxy's address and auto-bans stay off |
+| `SECURITY_BAN_AFTER` / `SECURITY_BAN_MINUTES` | `20` / `60` | An address with that many failed sign-ins or rejected tokens within 15 min is banned from the API for that many minutes. Admin > Security lists events and bans |
 | `GOOGLE_CLIENT_ID` | — | Google OAuth client ID (enables Google sign-in) |
 | `TLS_CERT_PATH` | — | TLS certificate path (enables HTTPS on the server) |
 | `TLS_KEY_PATH` | — | TLS key path |
@@ -124,6 +126,9 @@ Full variable reference and all features → **[docs/features.md](docs/features.
 ---
 
 ## Authentication
+
+Sessions are revocable: every refresh token is recorded (by hash) and rotated on use; sign-out, disabling a user, changing their role or an admin's "sign out everywhere" (Admin > Security) revoke them, and a replayed old token revokes the whole session. Suspicious activity (failed sign-ins, bad tokens, forbidden requests, wrong pairing codes, image-proxy abuse) is logged under Admin > Security, and addresses that keep failing are banned temporarily (see `TRUSTED_PROXIES`).
+
 
 One user store (the `Users` table), reachable through several doors:
 

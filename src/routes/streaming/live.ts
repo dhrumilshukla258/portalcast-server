@@ -1,4 +1,5 @@
 import { cmdPlayerV2 } from "@/streaming/cmdPlayer";
+import { recordFromRequest } from "@/services/SecurityEvents";
 import axios, { AxiosError, AxiosResponse } from "axios";
 import { ServerRoute } from "@hapi/hapi";
 import { http, https } from "follow-redirects";
@@ -294,7 +295,10 @@ export const liveRoutes: ServerRoute[] = [
     path: "/live.m3u8",
     handler: async (request, h) => {
       const entry = streamTokenFromRequest(request);
-      if (!entry) return h.response({ error: "Unauthorized" }).code(401);
+      if (!entry) {
+        if ((request.query as any)?.t) recordFromRequest(request, "stream_token_invalid");
+        return h.response({ error: "Unauthorized" }).code(401);
+      }
       const res: any = await serveLivePlaylist(request, h, entry);
       // Broken-stream tracking: live failures (e.g. 500 "Failed to generate
       // URL" when the portal is at its connection limit) are recorded for the
