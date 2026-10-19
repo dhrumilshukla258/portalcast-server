@@ -1,4 +1,6 @@
-﻿import { ServerRoute } from "@hapi/hapi";
+﻿import { ServerRoute, Request, ResponseToolkit } from "@hapi/hapi";
+import zlib from "zlib";
+import { promisify } from "util";
 import {
   writeJSON,
   readChannels,
@@ -50,7 +52,20 @@ import {
 // ContentCache, since this is small and per-process is fine; cleared eagerly on refresh so an
 // admin-triggered refresh or override change is reflected immediately rather than waiting out
 // the TTL like movies/series do.
-const channelsResponseCache = new Map<string, { data: any; expiresAt: number }>();
+const channelsResponseCache = new Map<string, { data: any; expiresAt: number; gz?: Promise<Buffer> }>();
+
+// The channel list is ~4.5 MB of JSON on a 10k-channel portal; hapi re-serialised and
+// re-gzipped it on every request even when served from the cache above (~120 ms CPU each).
+// Gzip it once per cache entry (async, off the event loop) and send the buffer.
+const gzipAsync = promisify(zlib.gzip);
+async function sendCachedChannels(request: Request, h: ResponseToolkit, entry: { data: any; gz?: Promise<Buffer> }) {
+  if (!/\bgzip\b/i.test(String(request.headers["accept-encoding"] ?? ""))) return entry.data;
+  entry.gz ??= gzipAsync(Buffer.from(JSON.stringify(entry.data)));
+  return h.response(await entry.gz)
+    .type("application/json; charset=utf-8")
+    .compressed("gzip")
+    .header("vary", "accept-encoding");
+}
 const groupsResponseCache = new Map<string, { data: any; expiresAt: number }>();
 
 function invalidateChannelsCache(profileId: number | undefined) {
@@ -180,7 +195,7 @@ export const channelRoutes: ServerRoute[] = [
         const cacheKey = `${profileId}:${origin}:${userLabel ?? ""}`;
         const cached = channelsResponseCache.get(cacheKey);
         if (cached && cached.expiresAt > Date.now()) {
-          return cached.data;
+          return sendCachedChannels(request, h, cached);
         }
 
         const channels = await readChannels(profileId);
@@ -198,8 +213,9 @@ export const channelRoutes: ServerRoute[] = [
               initialConfig.groups.includes(originalTitleMap.get(channel.tv_genre_id) ?? "")))
           .map((channel) => mapChannel(channel, origin, userLabel, originalTitleMap.get(channel.tv_genre_id)))
           .sort((a, b) => a.name.localeCompare(b.name));
-        channelsResponseCache.set(cacheKey, { data: result, expiresAt: Date.now() + CACHE_DURATION_MS });
-        return result;
+        const entry = { data: result, expiresAt: Date.now() + CACHE_DURATION_MS };
+        channelsResponseCache.set(cacheKey, entry);
+        return sendCachedChannels(request, h, entry);
       } catch (err) {
         logger.error({ err }, "error");
         return h
