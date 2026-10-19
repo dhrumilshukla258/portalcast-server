@@ -1,4 +1,5 @@
 ﻿import { ServerRoute } from "@hapi/hapi";
+import { SubtitleFile } from "@/models/SubtitleFile";
 import {
   writeJSON,
   readChannels,
@@ -43,6 +44,9 @@ import {
   generateCacheKey,
   mapChannel,
 } from "./shared";
+const SEARCH_TTL_MS = 24 * 60 * 60 * 1000;
+const searchCache = new Map<string, { at: number; results: unknown[] }>();
+
 export const subtitleRoutes: ServerRoute[] = [
   {
     method: "GET",
@@ -58,6 +62,10 @@ export const subtitleRoutes: ServerRoute[] = [
         };
         if (!title) return h.response({ error: "Missing title" }).code(400);
 
+        // Same query from any client within 24 h is answered from memory (saves API calls).
+        const key = JSON.stringify([title.trim().toLowerCase(), year ?? "", season ?? "", episode ?? "", lang ?? ""]);
+        const hit = searchCache.get(key);
+        if (hit && Date.now() - hit.at < SEARCH_TTL_MS) return { success: true, results: hit.results };
         const results = await searchSubtitles({
           title,
           year,
@@ -65,6 +73,10 @@ export const subtitleRoutes: ServerRoute[] = [
           episode: episode ? Number(episode) : undefined,
           language: lang,
         });
+        if (results.length > 0) {
+          searchCache.set(key, { at: Date.now(), results });
+          if (searchCache.size > 500) searchCache.delete(searchCache.keys().next().value as string);
+        }
         return { success: true, results };
       } catch (err) {
         logger.error({ err }, "Subtitle search error");
@@ -79,7 +91,11 @@ export const subtitleRoutes: ServerRoute[] = [
     handler: async (request, h) => {
       try {
         const { fileId } = request.query as { fileId?: string };
-        if (!fileId) return h.response({ error: "Missing fileId" }).code(400);
+        if (!fileId || !/^\d{1,12}$/.test(fileId)) return h.response({ error: "Missing fileId" }).code(400);
+
+        // Already fetched once: serve the stored copy, spending no download quota.
+        const stored = await SubtitleFile.findByPk(Number(fileId));
+        if (stored) return h.response(stored.vtt).header("Content-Type", "text/vtt; charset=utf-8");
 
         // Draws from the caller's own linked OpenSubtitles quota when they
         // have one (see [[skill-user-system]] / opensubtitles.ts), falling
@@ -103,6 +119,10 @@ export const subtitleRoutes: ServerRoute[] = [
           "$1.$2",
         );
 
+        if (response.status >= 200 && response.status < 300 && String(response.data).trim().length > 0) {
+          await SubtitleFile.upsert({ fileId: Number(fileId), vtt }).catch((e: any) =>
+            logger.warn(`[subtitles] could not store fileId=${fileId}: ${e?.message ?? e}`));
+        }
         return h.response(vtt)
           .header("Content-Type", "text/vtt; charset=utf-8")
           .code(response.status);
