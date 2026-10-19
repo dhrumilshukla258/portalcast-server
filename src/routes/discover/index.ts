@@ -8,6 +8,7 @@ import { ContentTheme } from "@/models/ContentTheme";
 import { UserProgress } from "@/models/UserProgress";
 import { getActiveProfileId } from "@/routes/stalkerV2/shared";
 import { getCached, setCached } from "@/services/discoverCache";
+import { getHiddenContentKeys } from "@/content/overrides";
 import { extractLanguageInfo, extractQualityTags, extractLanguageFromCategoryName } from "@/content/titleClean";
 import { UNCATEGORIZED_GENRE } from "@/content/metaEnrichment";
 import { readGenres } from "@/infra/storage";
@@ -253,6 +254,10 @@ export const discoverRoutes: ServerRoute[] = [
         where.id = { [Op.in]: filteredIds };
       }
 
+      // Hidden titles (admin or broken-stream auto-hide) never appear in Discover.
+      const hiddenKeys = await getHiddenContentKeys();
+      if (hiddenKeys.length > 0) where.id = { ...(where.id || {}), [Op.notIn]: hiddenKeys };
+
       const { rows, count } = await ContentMeta.findAndCountAll({
         where,
         limit: PAGE_SIZE,
@@ -471,7 +476,8 @@ export const discoverRoutes: ServerRoute[] = [
       const metaById = new Map((topMeta as any[]).map((m) => [m.id, m]));
       // ContentMeta.findAll with Op.in doesn't preserve `topIds`' order — re-apply
       // the overlap-ranked order explicitly.
-      const top = topIds.map((id) => metaById.get(id)).filter(Boolean);
+      const hiddenForRecs = new Set(await getHiddenContentKeys());
+      const top = topIds.filter((id) => !hiddenForRecs.has(id)).map((id) => metaById.get(id)).filter(Boolean);
 
       const ids = top.map((r: any) => r.id);
       const [genresById, countriesById] = await Promise.all([
@@ -499,8 +505,12 @@ export const discoverRoutes: ServerRoute[] = [
       const anchor = await ContentMeta.findByPk(id, { raw: true });
       if (!anchor || !(anchor as any).groupKey) return { variants: [] };
 
+      const hiddenForVariants = await getHiddenContentKeys();
       const rows = await ContentMeta.findAll({
-        where: { groupKey: (anchor as any).groupKey },
+        where: {
+          groupKey: (anchor as any).groupKey,
+          ...(hiddenForVariants.length > 0 ? { id: { [Op.notIn]: hiddenForVariants } } : {}),
+        },
         order: [["isRepresentative", "DESC"], ["name", "ASC"]],
       });
 

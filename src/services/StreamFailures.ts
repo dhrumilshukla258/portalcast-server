@@ -2,6 +2,8 @@ import axios from "axios";
 import { Op } from "sequelize";
 import { Readable } from "stream";
 import { StreamFailure } from "@/models/StreamFailure";
+import { invalidateHiddenContentKeys } from "@/content/overrides";
+import { clearDiscoverCache } from "@/services/discoverCache";
 import { ContentOverride } from "@/models/ContentOverride";
 import { ContentCache } from "@/models/ContentCache";
 import { ConfigProfile } from "@/models/ConfigProfile";
@@ -82,6 +84,9 @@ function overrideKeyFor(itemId: string): string {
 // applied — drop them so a hide/unhide shows up immediately.
 async function invalidateMovieListCache(profileId: number): Promise<void> {
   await ContentCache.destroy({ where: { profileId, cacheKey: { [Op.like]: "movies_%" } } });
+  // Discover also excludes hidden titles now: drop its cached pages and hidden-key set.
+  invalidateHiddenContentKeys();
+  clearDiscoverCache();
 }
 
 async function autoHide(row: StreamFailure): Promise<void> {

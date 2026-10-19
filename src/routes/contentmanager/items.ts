@@ -1,3 +1,5 @@
+import { invalidateHiddenContentKeys } from "@/content/overrides";
+import { clearDiscoverCache } from "@/services/discoverCache";
 ﻿import { ServerRoute } from "@hapi/hapi";
 import { logger } from "@/infra/logger";
 import { GenreOverride } from "@/models/GenreOverride";
@@ -183,6 +185,8 @@ export const itemRoutes: ServerRoute[] = [
         target_category_id: target_category_id ?? null,
         original_category_id: original_category_id ?? null,
       });
+      invalidateHiddenContentKeys();
+      clearDiscoverCache();
       return h.response({ success: true });
     },
   },
@@ -196,6 +200,9 @@ export const itemRoutes: ServerRoute[] = [
         return h.response({ error: "Invalid type" }).code(400);
       }
       await ContentOverride.destroy({ where: { item_key: contentKey(type, id) } });
+      // Discover excludes hidden titles: refresh its hidden-key set and cached pages.
+      invalidateHiddenContentKeys();
+      clearDiscoverCache();
       return h.response({ success: true });
     },
   },

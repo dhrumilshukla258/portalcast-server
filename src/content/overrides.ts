@@ -159,3 +159,28 @@ export async function applyPortalItemOverrides(
 
   return result;
 }
+
+// ── Hidden movie/series keys for Discover ───────────────────────────────────
+// Discover reads ContentMeta, whose ids use the same "{type}_{id}" format as
+// ContentOverride.item_key, so a hidden override can be excluded straight in the
+// query. Before this, Discover ignored `hidden` entirely: titles an admin hid,
+// or that broken-stream tracking auto-hid, still showed up there.
+let hiddenKeysCache: { keys: string[]; at: number } | null = null;
+const HIDDEN_KEYS_TTL_MS = 60_000;
+
+export async function getHiddenContentKeys(): Promise<string[]> {
+  if (hiddenKeysCache && Date.now() - hiddenKeysCache.at < HIDDEN_KEYS_TTL_MS) return hiddenKeysCache.keys;
+  const rows = await ContentOverride.findAll({
+    where: { hidden: true, item_type: ["movie", "series"] },
+    attributes: ["item_key"],
+    raw: true,
+  }) as unknown as { item_key: string }[];
+  hiddenKeysCache = { keys: rows.map((r) => r.item_key), at: Date.now() };
+  return hiddenKeysCache.keys;
+}
+
+/** Call after any hide/unhide so Discover reflects it immediately. */
+export function invalidateHiddenContentKeys(): void {
+  hiddenKeysCache = null;
+}
+
