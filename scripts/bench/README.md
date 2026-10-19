@@ -10,7 +10,7 @@ portal, without touching a real portal or the real database.
   46 MB of JSON). The guide is anchored on the hour the bench DB was built, so it stays usable
   for ~a day of reruns.
 - `run.mjs` — starts the mock (port 18081) and the server from source (`node --import tsx
-  src/server.ts`, port 18080) on a throwaway DB in `C:/Users/dhrumil/AppData/Local/Temp/portalcast-bench`
+  src/server.ts`, port 18080) on a throwaway DB in `<system temp dir>/portalcast-bench`
   (override with `BENCH_DIR`), logs in as admin, and times each endpoint: one *first* request,
   then N warm runs (p50/p95), with wire (gzip) and raw sizes and the server's working set
   after each endpoint.
