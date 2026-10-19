@@ -32,6 +32,7 @@ import { DeviceCode } from "./models/DeviceCode";
 import { Op } from "sequelize";
 import { logger } from "./infra/logger";
 import { authCheck, type JWTPayload } from "./auth/jwt";
+import { primeDiscoverIndex } from "./content/discoverIndex";
 
 const init = async () => {
   if (!process.env.ADMIN_PASSWORD) {
@@ -320,6 +321,9 @@ const init = async () => {
   backgroundJobService.start();
 
   logger.info(`Server running at: ${server.info.uri}`);
+
+  // In-memory Discover index (facets/browse): build now instead of on the first request.
+  primeDiscoverIndex();
 
   // Warm the XtreamCache catalog in the background on startup (every /api/v2
   // movie/series route reads from it), then cleanup stale genres.

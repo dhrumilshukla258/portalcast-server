@@ -1,4 +1,5 @@
 import NodeCache from "node-cache";
+import { invalidateDiscoverIndex } from "@/content/discoverIndex";
 
 // In-memory TTL cache for Discover's non-personalized queries (facets, browse).
 // Unlike xtreamCache (which caches upstream-portal responses), this caches our
@@ -35,4 +36,5 @@ export function setCached<T>(key: string, value: T): void {
 // crash mid-enrichment).
 export function clearDiscoverCache(): void {
   cache.flushAll();
+  invalidateDiscoverIndex();
 }

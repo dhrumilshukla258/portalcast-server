@@ -173,6 +173,15 @@ export async function initDB() {
     } catch (e: any) {
       logger.error(`Migration: failed to create content_meta.enrichedAt index: ${e.message}`);
     }
+    // Covering index for the in-memory Discover index load (content/discoverIndex.ts):
+    // "representative rows, newest first, with id/type/language" is answered from this
+    // index alone. Without it the load read ~94k wide rows (cast, artwork URLs): 7–10 s on
+    // the live data, against 1.6 s with it. One-time build ~1–3 s on the first start.
+    try {
+      await sequelize.query("CREATE INDEX IF NOT EXISTS `idx_content_meta_discover` ON `content_meta` (`isRepresentative`, `enrichedAt`, `id`, `type`, `originalLanguage`);");
+    } catch (e: any) {
+      logger.error(`Migration: failed to create content_meta discover index: ${e.message}`);
+    }
     // PERF INCIDENT (2026-07-17): recomputeRepresentatives() below runs a
     // correlated subquery keyed on groupKey for every content_meta row on
     // every startup. With no index on groupKey, each of those ~100k+ lookups

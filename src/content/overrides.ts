@@ -160,50 +160,48 @@ export async function applyPortalItemOverrides(
   opts: { searching?: boolean } = {},
 ): Promise<any[]> {
   if (items.length === 0 && !(categoryId && getSourceCache) ) return items;
-  const map = items.length > 0
-    ? await loadContentOverrides(items.map((i) => contentKey(type, String(parseInt(i.id)))))
-    : new Map<string, any>();
+  // Every override of this type, from memory (rebuilt only when an override changes).
+  // Previously: one `item_key IN (…)` query per 500 items on every call — ~200 ms for a
+  // 20k-title category on the live data, for a page of 14.
+  const all = await getAllContentOverrides(type);
+  const keyOf = (id: any) => contentKey(type, String(parseInt(id)));
+  const used = new Map<string, any>(); // overrides that apply to the returned items
 
-  let result = items
-    .filter((i) => {
-      const ov = map.get(contentKey(type, String(parseInt(i.id))));
-      if (ov?.hidden) return false;
-      if (categoryId && ov?.target_category_id && ov.target_category_id !== categoryId) return false;
-      return true;
-    })
-    .map((i) => {
-      const ov = map.get(contentKey(type, String(parseInt(i.id))));
-      return ov?.display_name ? { ...i, name: ov.display_name } : i;
-    });
+  let result: any[] = [];
+  for (const i of items) {
+    const key = keyOf(i.id);
+    const ov = all.get(key);
+    if (!ov) { result.push(i); continue; }
+    if (ov.hidden) continue;
+    if (categoryId && ov.target_category_id && ov.target_category_id !== categoryId) continue;
+    used.set(key, ov);
+    result.push(ov.display_name ? { ...i, name: ov.display_name } : i);
+  }
 
-  if (categoryId && getSourceCache && !opts.searching) {
-    const movedIn = await ContentOverride.findAll({
-      where: { item_type: type, target_category_id: categoryId },
-      raw: true,
-    });
+  if (categoryId && getSourceCache && !opts.searching && all.size > 0) {
     const existingIds = new Set(result.map((i: any) => String(parseInt(i.id))));
-    for (const ov of movedIn) {
-      if (ov.hidden) continue;
+    for (const ov of all.values()) {
+      if (ov.target_category_id !== categoryId || ov.hidden || !ov.original_category_id) continue;
       const itemId = ov.item_key.replace(`${type}_`, "");
       if (existingIds.has(itemId)) continue;
-      if (!ov.original_category_id) continue;
       const srcItems = await getSourceCache(ov.original_category_id);
       const srcItem = type === "movie"
         ? srcItems.find((i: any) => String(i.stream_id) === itemId)
         : srcItems.find((i: any) => String(i.series_id) === itemId);
       if (!srcItem) continue;
       result.push({ ...srcItem, id: itemId, name: ov.display_name ?? srcItem.name });
-      map.set(contentKey(type, itemId), ov);
+      used.set(contentKey(type, itemId), ov);
     }
   }
 
-  const hasSortOrder = [...map.values()].some((ov) => ov.sort_order != null);
+  let hasSortOrder = false;
+  for (const ov of used.values()) if (ov.sort_order != null) { hasSortOrder = true; break; }
   if (hasSortOrder && !opts.searching) {
-    result.sort((a, b) => {
-      const aOrder = map.get(contentKey(type, String(parseInt(a.id))))?.sort_order ?? Infinity;
-      const bOrder = map.get(contentKey(type, String(parseInt(b.id))))?.sort_order ?? Infinity;
-      return aOrder - bOrder;
-    });
+    const orderOf = (x: any) => used.get(keyOf(x.id))?.sort_order ?? Infinity;
+    result = result
+      .map((x, idx) => ({ x, o: orderOf(x), idx }))
+      .sort((a, b) => (a.o - b.o) || (a.idx - b.idx))
+      .map((e) => e.x);
   }
 
   return result;
@@ -214,22 +212,33 @@ export async function applyPortalItemOverrides(
 // ContentOverride.item_key, so a hidden override can be excluded straight in the
 // query. Before this, Discover ignored `hidden` entirely: titles an admin hid,
 // or that broken-stream tracking auto-hid, still showed up there.
-let hiddenKeysCache: { keys: string[]; at: number } | null = null;
-const HIDDEN_KEYS_TTL_MS = 60_000;
+// Cached per override generation (bumped by the ContentOverride hooks above), so a
+// hide/unhide is visible on the very next request and nothing is re-queried otherwise.
+let hiddenKeysCache: { gen: number; keys: string[]; set: Set<string> } | null = null;
 
-export async function getHiddenContentKeys(): Promise<string[]> {
-  if (hiddenKeysCache && Date.now() - hiddenKeysCache.at < HIDDEN_KEYS_TTL_MS) return hiddenKeysCache.keys;
+async function loadHiddenKeys(): Promise<{ keys: string[]; set: Set<string> }> {
+  const gen = overridesGeneration();
+  if (hiddenKeysCache && hiddenKeysCache.gen === gen) return hiddenKeysCache;
   const rows = await ContentOverride.findAll({
     where: { hidden: true, item_type: ["movie", "series"] },
     attributes: ["item_key"],
     raw: true,
   }) as unknown as { item_key: string }[];
-  hiddenKeysCache = { keys: rows.map((r) => r.item_key), at: Date.now() };
-  return hiddenKeysCache.keys;
+  const keys = rows.map((r) => r.item_key);
+  hiddenKeysCache = { gen, keys, set: new Set(keys) };
+  return hiddenKeysCache;
+}
+
+export async function getHiddenContentKeys(): Promise<string[]> {
+  return (await loadHiddenKeys()).keys;
+}
+
+/** Same as getHiddenContentKeys, as a Set for O(1) membership checks. Do not mutate. */
+export async function getHiddenContentKeySet(): Promise<Set<string>> {
+  return (await loadHiddenKeys()).set;
 }
 
 /** Call after any hide/unhide so Discover reflects it immediately. */
 export function invalidateHiddenContentKeys(): void {
   hiddenKeysCache = null;
 }
-

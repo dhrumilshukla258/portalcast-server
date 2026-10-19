@@ -1,5 +1,5 @@
 import { ServerRoute } from "@hapi/hapi";
-import { Op, fn, col } from "sequelize";
+import { Op } from "sequelize";
 import { authCheck } from "@/auth/jwt";
 import { ContentMeta, ContentType } from "@/models/ContentMeta";
 import { ContentGenre } from "@/models/ContentGenre";
@@ -7,8 +7,8 @@ import { ContentCountry } from "@/models/ContentCountry";
 import { ContentTheme } from "@/models/ContentTheme";
 import { UserProgress } from "@/models/UserProgress";
 import { getActiveProfileId } from "@/routes/stalkerV2/shared";
-import { getCached, setCached } from "@/services/discoverCache";
-import { getHiddenContentKeys } from "@/content/overrides";
+import { getHiddenContentKeys, getHiddenContentKeySet } from "@/content/overrides";
+import { getDiscoverIndex, facetsFor, browse as browseIndex, recommend, type BrowseQuery } from "@/content/discoverIndex";
 import { extractLanguageInfo, extractQualityTags, extractLanguageFromCategoryName } from "@/content/titleClean";
 import { UNCATEGORIZED_GENRE } from "@/content/metaEnrichment";
 import { readGenres } from "@/infra/storage";
@@ -82,34 +82,6 @@ async function tagsByContentId(Model: typeof ContentGenre | typeof ContentCountr
   return map;
 }
 
-async function facetCounts(Model: typeof ContentGenre | typeof ContentCountry | typeof ContentTheme, type?: ContentType) {
-  // PERF INCIDENT (2026-07-16): filtering to representative-only rows used
-  // to require joining back to ContentMeta on every call (including the
-  // no-`type` case, which is 100% of real traffic — the webui never actually
-  // passes `type` today). That turned a cheap single-table GROUP BY into a
-  // full JOIN across content_genres (~850k rows) on every single Discover
-  // page load, which brought the whole server down (confirmed: genuine SQLite
-  // query cost, not thread-pool starvation — UV_THREADPOOL_SIZE=16 was
-  // already correctly applied when this happened). Fixed by denormalizing
-  // isRepresentative directly onto the tag tables (kept in sync by
-  // recomputeRepresentatives()) — filtering it is now a plain indexed WHERE
-  // on the table already being queried, no join needed at all. The `type`
-  // filter still needs a join since type only lives on ContentMeta, but
-  // that's the rare/currently-unused path, not the hot one.
-  const where: any = { isRepresentative: true };
-  const include: any[] = type
-    ? [{ model: ContentMeta, as: "content", attributes: [], where: { type }, required: true }]
-    : [];
-  const rows = await Model.findAll({
-    attributes: ["value", [fn("COUNT", col("value")), "count"]],
-    where,
-    include,
-    group: ["value"],
-    order: [[fn("COUNT", col("value")), "DESC"]],
-    raw: true,
-  }) as any[];
-  return rows.map((r) => ({ value: r.value, count: Number(r.count) }));
-}
 
 export const discoverRoutes: ServerRoute[] = [
   {
@@ -120,44 +92,19 @@ export const discoverRoutes: ServerRoute[] = [
     path: "/api/v2/discover/facets",
     handler: async (request) => {
       const type = (request.query as any).type as ContentType | undefined;
-
-      // Identical result for every user until the next enrichment run — see
-      // discoverCache.ts. Cache key just needs to vary by `type`.
-      const cacheKey = `facets:${type || "all"}`;
-      const cached = getCached<Record<string, unknown>>(cacheKey);
-      if (cached) return cached;
-
-      const [genres, countries, themes, languages] = await Promise.all([
-        facetCounts(ContentGenre, type),
-        facetCounts(ContentCountry, type),
-        facetCounts(ContentTheme, type),
-        ContentMeta.findAll({
-          attributes: ["originalLanguage", [fn("COUNT", col("id")), "count"]],
-          where: { ...(type ? { type } : {}), originalLanguage: { [Op.ne]: null }, isRepresentative: true },
-          group: ["originalLanguage"],
-          order: [[fn("COUNT", col("id")), "DESC"]],
-          raw: true,
-        }) as unknown as Promise<{ originalLanguage: string; count: number }[]>,
-      ]);
-
-      // "Uncategorized" is a catch-all, not a real genre (see UNCATEGORIZED_GENRE
-      // in metaEnrichment.ts) — facetCounts() orders by count DESC like every
-      // other genre, which could land it anywhere in the list depending on how
-      // many titles fall into it. Pin it to the end regardless of count so it
-      // reads as "everything else," not as a genre competing on popularity.
-      const genresOrdered = [
-        ...genres.filter((g) => g.value !== UNCATEGORIZED_GENRE),
-        ...genres.filter((g) => g.value === UNCATEGORIZED_GENRE),
-      ];
-
-      const result = {
-        genres: genresOrdered,
-        countries,
-        themes,
-        languages: languages.map((l: any) => ({ value: l.originalLanguage, count: Number(l.count) })),
+      // Precomputed per type in the in-memory index (content/discoverIndex.ts).
+      const f = facetsFor(await getDiscoverIndex(), type);
+      // "Uncategorized" is a catch-all, not a real genre (see UNCATEGORIZED_GENRE in
+      // metaEnrichment.ts): pin it to the end so it reads as "everything else".
+      return {
+        genres: [
+          ...f.genres.filter((g) => g.value !== UNCATEGORIZED_GENRE),
+          ...f.genres.filter((g) => g.value === UNCATEGORIZED_GENRE),
+        ],
+        countries: f.countries,
+        themes: f.themes,
+        languages: f.languages,
       };
-      setCached(cacheKey, result);
-      return result;
     },
   },
 
@@ -181,106 +128,34 @@ export const discoverRoutes: ServerRoute[] = [
       const genreValues: string[] = q.genre
         ? String(q.genre).split(",").map((v: string) => v.trim()).filter(Boolean).sort()
         : [];
-      const genreKey = genreValues.join("+");
 
-      // Same reasoning as facets — browse results (genre/country/language/theme
-      // filter combos) are identical for every user, so cache by the exact
-      // filter+page combination that was requested.
-      const cacheKey = `browse:${type || ""}:${genreKey}:${q.country || ""}:${q.language || ""}:${q.theme || ""}:${page}`;
-      const cached = getCached<Record<string, unknown>>(cacheKey);
-      if (cached) return cached;
-
-      // One card per real title — every language/format variant of the same
-      // title shares a groupKey but only the flagged representative row shows
-      // up here; the rest are reachable via /discover/variants on click.
-      const where: any = { isRepresentative: true };
-      if (type) where.type = type;
-      if (q.language) where.originalLanguage = q.language;
-
-      // PERF INCIDENT (2026-07-17): joining ContentMeta -> tag table (the
-      // previous approach here) combined with ORDER BY enrichedAt DESC LIMIT
-      // never completed under real data volume — confirmed via server logs
-      // showing "browse start" with no matching "browse main query took"
-      // line ever following it, for minutes, even with the composite
-      // (value, contentId) index in place (see db/index.ts). SQLite couldn't
-      // use an index to jump straight to the top 40 rows once a join was
-      // involved; it had to materialize/sort a much larger joined set first.
-      // Fixed by resolving matching contentIds from each tag table directly
-      // (a plain indexed WHERE, same pattern /discover/recommendations
-      // already uses) and intersecting them in JS, THEN querying ContentMeta
-      // by a plain `id IN (...)` — no join, so the enrichedAt sort stays cheap.
-      const tagFilters: { model: typeof ContentGenre | typeof ContentCountry | typeof ContentTheme; value: string }[] = [];
-      // One filter entry per selected genre — the intersection below already
-      // ANDs every entry in this array regardless of dimension, so multiple
-      // genre entries naturally AND together the same way genre+country+theme
-      // already did across dimensions.
-      for (const value of genreValues) tagFilters.push({ model: ContentGenre, value });
-      if (q.country) tagFilters.push({ model: ContentCountry, value: q.country });
-      if (q.theme) tagFilters.push({ model: ContentTheme, value: q.theme });
-
-      // Cached separately from the page-level cacheKey above (which includes
-      // `page`) — the resolved id set for a given genre/country/theme combo
-      // is identical across every page of that combo, so without this every
-      // scroll (page 2, 3, 4...) was re-running these tag lookups + JS
-      // intersection from scratch even though only the page number changed.
-      // That redundant work was the actual bottleneck behind "new genre
-      // images load slowly while scrolling" — the item list (and therefore
-      // the images) can't start loading until this resolves.
-      let filteredIds: string[] | null = null;
-      if (tagFilters.length > 0) {
-        const filterIdsCacheKey = `browseIds:${genreKey}:${q.country || ""}:${q.theme || ""}`;
-        const cachedIds = getCached<string[]>(filterIdsCacheKey);
-        if (cachedIds) {
-          filteredIds = cachedIds;
-        } else {
-          const idSets = await Promise.all(
-            tagFilters.map(async ({ model, value }) => {
-              const rows = await model.findAll({
-                attributes: ["contentId"],
-                where: { value, isRepresentative: true },
-                raw: true,
-              }) as any[];
-              return new Set(rows.map((r) => r.contentId as string));
-            })
-          );
-          filteredIds = [...idSets.reduce((a, b) => new Set([...a].filter((id) => b.has(id))))];
-          setCached(filterIdsCacheKey, filteredIds);
-        }
-        if (filteredIds.length === 0) {
-          const empty = { data: [], page, total_items: 0 };
-          setCached(cacheKey, empty);
-          return empty;
-        }
-        where.id = { [Op.in]: filteredIds };
-      }
-
-      // Hidden titles (admin or broken-stream auto-hide) never appear in Discover.
-      const hiddenKeys = await getHiddenContentKeys();
-      if (hiddenKeys.length > 0) where.id = { ...(where.id || {}), [Op.notIn]: hiddenKeys };
-
-      const { rows, count } = await ContentMeta.findAndCountAll({
-        where,
-        limit: PAGE_SIZE,
-        offset: (page - 1) * PAGE_SIZE,
-        order: [["enrichedAt", "DESC"]],
+      // Answered from the in-memory index (content/discoverIndex.ts): tag postings are
+      // intersected in memory and only this page's rows are read, by primary key. One card
+      // per real title: only representative rows are indexed (variants are reachable via
+      // /discover/variants). Multiple genres AND together, as do genre+country+theme.
+      // Hidden titles (admin or broken-stream auto-hide) are skipped at query time.
+      const tags: BrowseQuery["tags"] = genreValues.map((value) => ({ kind: "genre" as const, value }));
+      if (q.country) tags.push({ kind: "country", value: String(q.country) });
+      if (q.theme) tags.push({ kind: "theme", value: String(q.theme) });
+      const [idx, hidden] = await Promise.all([getDiscoverIndex(), getHiddenContentKeySet()]);
+      const { ids, total } = browseIndex(idx, {
+        type, language: q.language ? String(q.language) : undefined, tags, hidden, page, pageSize: PAGE_SIZE,
       });
 
-      const ids = rows.map((r: any) => r.id);
+      const found = ids.length ? await ContentMeta.findAll({ where: { id: { [Op.in]: ids } } }) : [];
+      const byId = new Map(found.map((r: any) => [r.id as string, r]));
+      const rows = ids.map((id) => byId.get(id)).filter(Boolean) as any[];
       const [genresById, countriesById] = await Promise.all([
         tagsByContentId(ContentGenre, ids),
         tagsByContentId(ContentCountry, ids),
       ]);
 
-      // Matches the PaginatedResponse<T> shape the webui's api/types/channels.ts and
-      // useMediaLibrary.ts pagination logic already expect ({data, page, total_items}),
-      // not a bespoke shape — so browse results can reuse the existing append-page logic.
-      const result = {
+      // Same PaginatedResponse<T> shape the clients' pagination already expects.
+      return {
         data: rows.map((r: any) => toMediaItem(r, genresById, countriesById, getPublicOrigin(request))),
         page,
-        total_items: count,
+        total_items: total,
       };
-      setCached(cacheKey, result);
-      return result;
     },
   },
 
@@ -434,50 +309,25 @@ export const discoverRoutes: ServerRoute[] = [
       const topGenres = [...genreCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([g]) => g);
       if (topGenres.length === 0) return { data: [] };
 
-      // Rank by overlap count IN SQL (GROUP BY + ORDER BY) before limiting —
-      // truncating to an arbitrary N candidates first and only scoring/sorting
-      // afterward (the previous approach) could silently exclude the actual
-      // highest-overlap titles whenever more than N rows matched topGenres,
-      // contradicting the "ranked by overlap" behavior this endpoint promises.
-      const overlapRows = (await ContentGenre.findAll({
-        attributes: ["contentId", [fn("COUNT", col("ContentGenre.value")), "overlap"]],
-        // isRepresentative filtered directly here too (denormalized column,
-        // see ContentGenre.ts) — lets SQLite narrow ContentGenre rows via an
-        // indexed seek before even attempting the join below, on top of the
-        // existing value/contentId scoping. groupKey/originalLanguage still
-        // require the join since those only live on ContentMeta — but this
-        // query was already scoped to `value IN topGenres` (at most 5 values)
-        // before the join runs, unlike facetCounts' unscoped full-table join,
-        // so it was never the dangerous case — this is a belt-and-suspenders
-        // consistency improvement, not a fix for a repeat of that incident.
-        where: { value: { [Op.in]: topGenres }, contentId: { [Op.notIn]: watchedIds }, isRepresentative: true },
-        include: [
-          {
-            model: ContentMeta,
-            as: "content",
-            attributes: [],
-            where: {
-              ...(typeFilter ? { type: typeFilter } : {}),
-              ...(watchedGroupKeys.length > 0 ? { groupKey: { [Op.notIn]: watchedGroupKeys } } : {}),
-              ...(languages.size > 0 ? { originalLanguage: { [Op.in]: [...languages] } } : {}),
-            },
-            required: true,
-          },
-        ],
-        group: ["ContentGenre.contentId"],
-        order: [[fn("COUNT", col("ContentGenre.value")), "DESC"]],
-        limit: PAGE_SIZE,
-        raw: true,
-      })) as unknown as { contentId: string }[];
-      if (overlapRows.length === 0) return { data: [] };
+      // Ranked by genre overlap in the in-memory index (content/discoverIndex.ts), ties
+      // newest first. Excludes everything watched by title GROUP, not just exact id, so a
+      // user who watched "ABC Tamil" is not offered "ABC Telugu" as if it were new.
+      const [idx, hidden, groupRows] = await Promise.all([
+        getDiscoverIndex(),
+        getHiddenContentKeySet(),
+        watchedGroupKeys.length > 0
+          ? ContentMeta.findAll({ where: { groupKey: { [Op.in]: watchedGroupKeys } }, attributes: ["id"], raw: true })
+          : Promise.resolve([] as any[]),
+      ]);
+      const exclude = new Set<string>([...watchedIds, ...hidden, ...(groupRows as any[]).map((r) => r.id as string)]);
+      const topIds = recommend(idx, {
+        genres: topGenres, languages: [...languages], type: typeFilter ?? undefined, exclude, limit: PAGE_SIZE,
+      });
+      if (topIds.length === 0) return { data: [] };
 
-      const topIds = overlapRows.map((r) => r.contentId);
       const topMeta = await ContentMeta.findAll({ where: { id: { [Op.in]: topIds } } });
       const metaById = new Map((topMeta as any[]).map((m) => [m.id, m]));
-      // ContentMeta.findAll with Op.in doesn't preserve `topIds`' order — re-apply
-      // the overlap-ranked order explicitly.
-      const hiddenForRecs = new Set(await getHiddenContentKeys());
-      const top = topIds.filter((id) => !hiddenForRecs.has(id)).map((id) => metaById.get(id)).filter(Boolean);
+      const top = topIds.map((id) => metaById.get(id)).filter(Boolean);
 
       const ids = top.map((r: any) => r.id);
       const [genresById, countriesById] = await Promise.all([
