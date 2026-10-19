@@ -13,6 +13,7 @@ import { stalkerApi } from "./providers/stalker";
 import { portalProxy } from "./routes/streaming/portalProxy";
 import { subtitleRoutes } from "./routes/streaming/subtitles";
 import { streamFailureRoutes } from "./routes/streaming/streamFailures";
+import { mediaInfoRoutes } from "./routes/streaming/mediaInfo";
 import { purgeStaleFailures } from "./services/StreamFailures";
 import { adminRoutes } from "./routes/contentmanager";
 import { authRoutes } from "./routes/account/auth";
@@ -88,6 +89,7 @@ const init = async () => {
   server.route(portalProxy);
   server.route(subtitleRoutes);
   server.route(streamFailureRoutes);
+  server.route(mediaInfoRoutes);
   server.route(adminRoutes);
   server.route(authRoutes);
   server.route(userRoutes);

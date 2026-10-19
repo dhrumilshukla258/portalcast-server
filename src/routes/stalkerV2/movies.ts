@@ -13,6 +13,7 @@ import axios from "axios";
 import { ConfigProfile } from "@/models/ConfigProfile";
 import { ContentCache } from "@/models/ContentCache";
 import { peekCategoryList, putCategoryList } from "@/content/categoryLists";
+import { withVideoInfo } from "@/content/mediaInfo";
 import { stalkerApi } from "@/providers/stalker";
 import { Readable } from "stream";
 import { XtreamCache } from "@/models/XtreamCache";
@@ -189,7 +190,7 @@ export const movieRoutes: ServerRoute[] = [
             total_items: list.length,
             actual_length: itemsPerApiPage,
             total_loaded: pageData.length,
-            data: await enrichArtworkFromTmdb(pageData, "movie", getPublicOrigin(request)),
+            data: await withVideoInfo(await enrichArtworkFromTmdb(pageData, "movie", getPublicOrigin(request)), profileId, "movie", (m: any) => m.stream_id ?? m.id),
             errors: false,
             isPortal: initialConfig.providerType === "stalker",
           };
@@ -268,7 +269,7 @@ export const movieRoutes: ServerRoute[] = [
               total_items: list.length,
               actual_length: itemsPerApiPage,
               total_loaded: pageData.length,
-              data: await enrichArtworkFromTmdb(pageData, "movie", getPublicOrigin(request)),
+              data: await withVideoInfo(await enrichArtworkFromTmdb(pageData, "movie", getPublicOrigin(request)), profileId, "movie", (m: any) => m.stream_id ?? m.id),
               errors: false,
               isPortal: initialConfig.providerType === "stalker",
             };

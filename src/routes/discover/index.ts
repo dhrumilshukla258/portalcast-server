@@ -1,4 +1,5 @@
 import { ServerRoute } from "@hapi/hapi";
+import { withVideoInfo, getVideoInfo, ensureMediaInfoLoaded } from "@/content/mediaInfo";
 import { Op } from "sequelize";
 import { authCheck } from "@/auth/jwt";
 import { ContentMeta, ContentType } from "@/models/ContentMeta";
@@ -152,7 +153,10 @@ export const discoverRoutes: ServerRoute[] = [
 
       // Same PaginatedResponse<T> shape the clients' pagination already expects.
       return {
-        data: rows.map((r: any) => toMediaItem(r, genresById, countriesById, getPublicOrigin(request))),
+        data: await withVideoInfo(
+          rows.map((r: any) => toMediaItem(r, genresById, countriesById, getPublicOrigin(request))),
+          await getActiveProfileId(), "movie", (x: any) => (x.type === "movie" ? x.id : undefined),
+        ),
         page,
         total_items: total,
       };
@@ -336,7 +340,10 @@ export const discoverRoutes: ServerRoute[] = [
       ]);
 
       return {
-        data: top.map((r: any) => toMediaItem(r, genresById, countriesById, getPublicOrigin(request))),
+        data: await withVideoInfo(
+          top.map((r: any) => toMediaItem(r, genresById, countriesById, getPublicOrigin(request))),
+          profileId, "movie", (x: any) => (x.type === "movie" ? x.id : undefined),
+        ),
         basedOnTitle,
       };
     },
@@ -366,6 +373,7 @@ export const discoverRoutes: ServerRoute[] = [
 
       const ids = rows.map((r: any) => r.id);
       const profileId = await getActiveProfileId();
+      await ensureMediaInfoLoaded();
       const [genresById, countriesById, movieCategories, seriesCategories] = await Promise.all([
         tagsByContentId(ContentGenre, ids),
         tagsByContentId(ContentCountry, ids),
@@ -407,7 +415,10 @@ export const discoverRoutes: ServerRoute[] = [
             languagePart = null;
           }
 
-          const qualityTags = extractQualityTags(r.name);
+          // A measured resolution (content/mediaInfo.ts) beats the quality words in the
+          // title: "Ek Din HDCam" that decodes as 1080p is labelled "1080p".
+          const measured = r.type === "movie" ? getVideoInfo(profileId ?? 0, "movie", r.id) : undefined;
+          const qualityTags = measured ? [measured.label] : extractQualityTags(r.name);
           const qualitySuffix = qualityTags.length > 0 ? ` ${qualityTags.join(" ")}` : "";
 
           // Keep the label short — a language/quality tag, never the whole
@@ -419,7 +430,11 @@ export const discoverRoutes: ServerRoute[] = [
               ? qualityTags.join(" ")
               : r.name;
 
-          return { ...toMediaItem(r, genresById, countriesById, getPublicOrigin(request)), variantLabel };
+          return {
+            ...toMediaItem(r, genresById, countriesById, getPublicOrigin(request)),
+            variantLabel,
+            ...(measured ? { video: measured } : {}),
+          };
         }),
       };
     },

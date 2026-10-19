@@ -20,6 +20,7 @@ import { recomputeRepresentatives } from "../content/metaEnrichment";
 import { ContentCountry } from "../models/ContentCountry";
 import { ContentTheme } from "../models/ContentTheme";
 import { StreamFailure } from "../models/StreamFailure";
+import { MediaInfo } from "../models/MediaInfo";
 import { logger } from "../infra/logger";
 
 function resolveDatabasePath(): string {
@@ -56,7 +57,7 @@ export const sequelize = new Sequelize({
     XtreamCache, GenreOverride, ContentOverride,
     User, DeviceCode, UserProgress, ContentCache,
     ContentMeta, ContentGenre, ContentCountry, ContentTheme,
-    StreamFailure,
+    StreamFailure, MediaInfo,
   ],
   logging: false,
 });

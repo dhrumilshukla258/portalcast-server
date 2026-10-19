@@ -1,4 +1,5 @@
 ﻿import { ServerRoute } from "@hapi/hapi";
+import { withVideoInfo } from "@/content/mediaInfo";
 import {
   writeJSON,
   readChannels,
@@ -95,6 +96,12 @@ export const seriesRoutes: ServerRoute[] = [
         const cacheKey = generateCacheKey("series", query);
         const itemsPerApiPage = 14;
         const startApiPage = Number(page);
+        // Episode lists (a season is selected) carry each episode's measured video quality
+        // (content/mediaInfo.ts). Added on the way out so cached pages stay current too.
+        const withEpisodeVideo = async (resp: any) => {
+          if (!seasonId || !resp || !Array.isArray(resp.data)) return resp;
+          return { ...resp, data: await withVideoInfo(resp.data, profileId, "episode", (e: any) => e.id) };
+        };
         const getSeriesCache = (catId: string) =>
           xtreamCache.get<any[]>(`series_list_${catId}`).then((v) => v ?? []);
 
@@ -125,7 +132,7 @@ export const seriesRoutes: ServerRoute[] = [
         if (!search && Number(movieId) === 0) {
           const cachedRecord = await ContentCache.findOne({ where: { profileId, cacheKey } });
           if (cachedRecord && new Date() < cachedRecord.expiresAt) {
-            return cachedRecord.response;
+            return withEpisodeVideo(cachedRecord.response);
           }
         }
 
@@ -349,7 +356,7 @@ export const seriesRoutes: ServerRoute[] = [
           });
         }
 
-        return responsePayload;
+        return withEpisodeVideo(responsePayload);
       } catch (err) {
         logger.error({ err }, "error");
         return h
