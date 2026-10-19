@@ -22,8 +22,8 @@ const PATH_RE = /^\/subtitle\/[\w.-]{1,120}\.zip$/;
 /** ISO 639-1 -> SubDL language code (uppercase two letters). */
 const toSubdlLang = (lang?: string) => (lang || "en").slice(0, 2).toUpperCase();
 
-export function isSubdlEnabled(): boolean {
-  return !!subdlApiKey;
+export function isSubdlEnabled(apiKey: string = subdlApiKey): boolean {
+  return !!apiKey;
 }
 
 export function isValidSubdlPath(path: string): boolean {
@@ -36,10 +36,10 @@ export async function searchSubdl(params: {
   season?: number;
   episode?: number;
   language?: string;
-}): Promise<SubtitleResult[]> {
-  if (!subdlApiKey) return [];
+}, apiKey: string = subdlApiKey): Promise<SubtitleResult[]> {
+  if (!apiKey) return [];
   const query: Record<string, string> = {
-    api_key: subdlApiKey,
+    api_key: apiKey,
     film_name: stripReleaseNoise(params.title),
     type: params.season !== undefined || params.episode !== undefined ? "tv" : "movie",
     languages: toSubdlLang(params.language),
@@ -73,8 +73,8 @@ export async function searchSubdl(params: {
 }
 
 /** The subtitle text inside a SubDL zip (first .srt/.vtt entry), or null. */
-export async function downloadSubdlText(path: string): Promise<string | null> {
-  if (!subdlApiKey || !isValidSubdlPath(path)) return null;
+export async function downloadSubdlText(path: string, apiKey: string = subdlApiKey): Promise<string | null> {
+  if (!apiKey || !isValidSubdlPath(path)) return null;
   try {
     const res = await axios.get(`${DOWNLOAD_BASE}${path}`, {
       responseType: "arraybuffer",

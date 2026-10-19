@@ -63,6 +63,21 @@ export const sequelize = new Sequelize({
   logging: false,
 });
 
+/** ALTER TABLE ... ADD COLUMN for each column the table is missing (idempotent). */
+async function ensureColumns(table: string, columns: [string, string][]): Promise<void> {
+  try {
+    const [rows] = (await sequelize.query(`PRAGMA table_info('${table}');`)) as any;
+    const have = new Set((rows as any[]).map((r) => r.name));
+    for (const [name, type] of columns) {
+      if (have.has(name)) continue;
+      await sequelize.query(`ALTER TABLE \`${table}\` ADD COLUMN \`${name}\` ${type};`);
+      logger.info(`Migration: added ${table}.${name}`);
+    }
+  } catch (e: any) {
+    logger.error(`Migration: could not add columns to ${table}: ${e.message}`);
+  }
+}
+
 export async function initDB() {
   try {
     await sequelize.authenticate();
@@ -214,6 +229,14 @@ export async function initDB() {
       }
     }
     logger.info("Database models synced.");
+
+    // sync() never alters an existing table (see above): add missing user columns by hand.
+    await ensureColumns("users", [
+      ["openSubtitlesUsername", "VARCHAR(255)"],
+      ["openSubtitlesPasswordEnc", "TEXT"],
+      ["openSubtitlesApiKeyEnc", "TEXT"],
+      ["subdlApiKeyEnc", "TEXT"],
+    ]);
 
     try {
       // Recomputed on every startup regardless (cheap — two indexed queries),

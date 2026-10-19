@@ -1,11 +1,14 @@
 import { ServerRoute } from "@hapi/hapi";
+import axios from "axios";
+import { subtitleKeysFor, forgetSubtitleKeys } from "@/content/subtitleKeys";
+import { openSubtitlesApiKey, subdlApiKey } from "@/config/server";
 import { logger } from "@/infra/logger";
 import { User } from "../../models/User";
 import { UserProgress } from "../../models/UserProgress";
 import { ConfigProfile } from "../../models/ConfigProfile";
 import { authCheck } from "../../auth/jwt";
 import { encryptSecret } from "../../auth/crypto";
-import { linkOpenSubtitlesAccount } from "../../content/opensubtitles";
+import { forgetOpenSubtitlesSession, linkOpenSubtitlesAccount } from "../../content/opensubtitles";
 import { proxiedImageUrl } from "@/providers/portalAssets";
 import { getPublicOrigin } from "@/infra/publicUrl";
 import { socketService } from "@/services/SocketService";
@@ -321,6 +324,10 @@ export const userRoutes: ServerRoute[] = [
       return {
         linked: Boolean(user.openSubtitlesUsername),
         username: user.openSubtitlesUsername || null,
+        // Keys are never returned, only whether they are set (own) or provided by the server.
+        hasOwnApiKey: Boolean(user.openSubtitlesApiKeyEnc),
+        serverHasApiKey: Boolean(openSubtitlesApiKey),
+        subdl: { hasOwnApiKey: Boolean(user.subdlApiKeyEnc), serverHasApiKey: Boolean(subdlApiKey) },
       };
     },
   },
@@ -331,25 +338,39 @@ export const userRoutes: ServerRoute[] = [
       const userPayload = authCheck(request);
       if (!userPayload) return h.response({ error: "Unauthorized" }).code(401);
 
-      const { username, password } = request.payload as { username?: string; password?: string };
-      if (!username || !password) {
-        return h.response({ error: "Missing username or password" }).code(400);
+      const { username, password, apiKey } = request.payload as { username?: string; password?: string; apiKey?: string };
+      const ownKey = typeof apiKey === "string" ? apiKey.trim() : "";
+      if (ownKey && (ownKey.length < 16 || ownKey.length > 128)) {
+        return h.response({ error: "That does not look like an OpenSubtitles API key" }).code(400);
       }
-
-      // Verify the credentials actually work before storing them — an
-      // unlinkable typo'd account is worse than no linked account at all,
-      // since downloads would silently keep falling back to the shared pool.
-      const result = await linkOpenSubtitlesAccount(username, password);
-      if (!result.success) {
-        return h.response({ error: result.error || "Login failed" }).code(400);
+      if ((username && !password) || (!username && password)) {
+        return h.response({ error: "Enter both username and password" }).code(400);
       }
+      if (!username && !ownKey) return h.response({ error: "Nothing to save" }).code(400);
 
       const user = await User.findByPk(userPayload.userId);
       if (!user) return h.response({ error: "User not found" }).code(404);
+      const keyToUse = ownKey || (user.openSubtitlesApiKeyEnc ? (await subtitleKeysFor(user.id)).openSubtitles : openSubtitlesApiKey);
 
-      user.openSubtitlesUsername = username;
-      user.openSubtitlesPasswordEnc = encryptSecret(password);
+      if (username && password) {
+        // Verify the credentials actually work before storing them — an
+        // unlinkable typo'd account is worse than no linked account at all,
+        // since downloads would silently keep falling back to the shared pool.
+        const result = await linkOpenSubtitlesAccount(username, password, keyToUse);
+        if (!result.success) return h.response({ error: result.error || "Login failed" }).code(400);
+        user.openSubtitlesUsername = username;
+        user.openSubtitlesPasswordEnc = encryptSecret(password);
+      } else if (ownKey) {
+        // Key only: check it is accepted by a tiny search before storing it.
+        const probe = await axios.get("https://api.opensubtitles.com/api/v1/infos/formats", {
+          headers: { "Api-Key": ownKey, "User-Agent": "PortalCast-Server" }, timeout: 8000, validateStatus: () => true,
+        });
+        if (probe.status === 401 || probe.status === 403) return h.response({ error: "OpenSubtitles rejected that API key" }).code(400);
+      }
+      if (ownKey) user.openSubtitlesApiKeyEnc = encryptSecret(ownKey);
       await user.save();
+      forgetSubtitleKeys(user.id);
+      forgetOpenSubtitlesSession(user.id);
 
       return { success: true };
     },
@@ -366,8 +387,49 @@ export const userRoutes: ServerRoute[] = [
 
       user.openSubtitlesUsername = null as any;
       user.openSubtitlesPasswordEnc = null as any;
+      user.openSubtitlesApiKeyEnc = null as any;
       await user.save();
+      forgetSubtitleKeys(user.id);
+      forgetOpenSubtitlesSession(user.id);
 
+      return { success: true };
+    },
+  },
+  {
+    // The user's own SubDL key (free at subdl.com). Checked with a search before saving.
+    method: "PUT",
+    path: "/api/user/subdl",
+    handler: async (request, h) => {
+      const userPayload = authCheck(request);
+      if (!userPayload) return h.response({ error: "Unauthorized" }).code(401);
+      const apiKey = String((request.payload as any)?.apiKey ?? "").trim();
+      if (apiKey.length < 8 || apiKey.length > 128) return h.response({ error: "That does not look like a SubDL API key" }).code(400);
+      const probe = await axios.get("https://api.subdl.com/api/v1/subtitles", {
+        params: { api_key: apiKey, film_name: "Inception", type: "movie", languages: "EN", subs_per_page: 1 },
+        timeout: 8000, validateStatus: () => true,
+      });
+      if (probe.status === 401 || probe.status === 403 || probe.data?.status === false && /key/i.test(String(probe.data?.error ?? ""))) {
+        return h.response({ error: "SubDL rejected that API key" }).code(400);
+      }
+      const user = await User.findByPk(userPayload.userId);
+      if (!user) return h.response({ error: "User not found" }).code(404);
+      user.subdlApiKeyEnc = encryptSecret(apiKey);
+      await user.save();
+      forgetSubtitleKeys(user.id);
+      return { success: true };
+    },
+  },
+  {
+    method: "DELETE",
+    path: "/api/user/subdl",
+    handler: async (request, h) => {
+      const userPayload = authCheck(request);
+      if (!userPayload) return h.response({ error: "Unauthorized" }).code(401);
+      const user = await User.findByPk(userPayload.userId);
+      if (!user) return h.response({ error: "User not found" }).code(404);
+      user.subdlApiKeyEnc = null as any;
+      await user.save();
+      forgetSubtitleKeys(user.id);
       return { success: true };
     },
   },

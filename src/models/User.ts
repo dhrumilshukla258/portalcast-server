@@ -71,4 +71,13 @@ export class User extends Model {
 
     @Column(DataType.TEXT)
     declare openSubtitlesPasswordEnc?: string;
+
+    /** The user's own OpenSubtitles consumer API key (encrypted); optional. Lets search and
+     *  downloads work, on their own quota, even when the server has no OPENSUBTITLES_API_KEY. */
+    @Column(DataType.TEXT)
+    declare openSubtitlesApiKeyEnc?: string;
+
+    /** The user's own SubDL API key (encrypted); optional, same idea as above. */
+    @Column(DataType.TEXT)
+    declare subdlApiKeyEnc?: string;
 }

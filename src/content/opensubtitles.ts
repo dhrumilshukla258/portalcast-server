@@ -7,9 +7,9 @@ import { User } from "@/models/User";
 
 const OS_BASE = "https://api.opensubtitles.com/api/v1";
 
-function headers(bearerToken?: string) {
+function headers(bearerToken?: string, apiKey: string = openSubtitlesApiKey) {
   return {
-    "Api-Key": openSubtitlesApiKey,
+    "Api-Key": apiKey,
     "Content-Type": "application/json",
     // OpenSubtitles requires a descriptive User-Agent identifying the app, not a browser UA.
     "User-Agent": "stalker-m3u-server v1.0",
@@ -30,12 +30,13 @@ interface OSSession {
 const sessionCache = new Map<number, OSSession>();
 const SESSION_TTL_MS = 23 * 60 * 60 * 1000; // refresh a little before the real 24h expiry
 
-async function loginOpenSubtitlesUser(username: string, password: string): Promise<OSSession | null> {
+async function loginOpenSubtitlesUser(username: string, password: string, apiKey: string = openSubtitlesApiKey): Promise<OSSession | null> {
+  if (!apiKey) return null;
   try {
     const { data } = await axios.post(
       `${OS_BASE}/login`,
       { username, password },
-      { headers: headers(), timeout: 8000 },
+      { headers: headers(undefined, apiKey), timeout: 8000 },
     );
     if (!data?.token) return null;
     return {
@@ -52,7 +53,7 @@ async function loginOpenSubtitlesUser(username: string, password: string): Promi
 // Resolves (and caches) a per-user OpenSubtitles session for a linked account.
 // Returns null if the user hasn't linked an account or login fails — callers
 // fall back to the shared-key anonymous download in that case.
-async function getUserSession(appUserId: number): Promise<OSSession | null> {
+async function getUserSession(appUserId: number, apiKey: string = openSubtitlesApiKey): Promise<OSSession | null> {
   const cached = sessionCache.get(appUserId);
   if (cached && cached.expiresAt > Date.now()) return cached;
 
@@ -67,13 +68,18 @@ async function getUserSession(appUserId: number): Promise<OSSession | null> {
     return null;
   }
 
-  const session = await loginOpenSubtitlesUser(user.openSubtitlesUsername, password);
+  const session = await loginOpenSubtitlesUser(user.openSubtitlesUsername, password, apiKey);
   if (session) sessionCache.set(appUserId, session);
   return session;
 }
 
-export async function linkOpenSubtitlesAccount(username: string, password: string): Promise<{ success: boolean; error?: string }> {
-  const session = await loginOpenSubtitlesUser(username, password);
+export function forgetOpenSubtitlesSession(appUserId: number): void {
+  sessionCache.delete(appUserId);
+}
+
+export async function linkOpenSubtitlesAccount(username: string, password: string, apiKey: string = openSubtitlesApiKey): Promise<{ success: boolean; error?: string }> {
+  if (!apiKey) return { success: false, error: "No OpenSubtitles API key: add your own key (free at opensubtitles.com/consumers) or ask the admin to set one" };
+  const session = await loginOpenSubtitlesUser(username, password, apiKey);
   if (!session) return { success: false, error: "OpenSubtitles login failed — check username/password" };
   return { success: true };
 }
@@ -96,11 +102,8 @@ export async function searchSubtitles(params: {
   season?: number;
   episode?: number;
   language?: string;
-}): Promise<SubtitleResult[]> {
-  if (!openSubtitlesApiKey) {
-    logger.warn("[OpenSubtitles] OPENSUBTITLES_API_KEY is not set — online subtitle search always returns 0 results");
-    return [];
-  }
+}, apiKey: string = openSubtitlesApiKey): Promise<SubtitleResult[]> {
+  if (!apiKey) return [];
 
   const query: Record<string, string> = {
     query: stripReleaseNoise(params.title),
@@ -112,7 +115,7 @@ export async function searchSubtitles(params: {
 
   try {
     const { data } = await axios.get(`${OS_BASE}/subtitles`, {
-      headers: headers(),
+      headers: headers(undefined, apiKey),
       params: query,
       timeout: 8000,
     });
@@ -144,17 +147,17 @@ export async function searchSubtitles(params: {
 // rate-limited download link — this isn't the final .srt content itself.
 // `appUserId`, when provided, draws from that user's own linked OpenSubtitles
 // account/quota instead of the shared anonymous (API-key-only) pool.
-export async function resolveSubtitleDownloadUrl(fileId: number, appUserId?: number): Promise<string | null> {
-  if (!openSubtitlesApiKey) return null;
+export async function resolveSubtitleDownloadUrl(fileId: number, appUserId?: number, apiKey: string = openSubtitlesApiKey): Promise<string | null> {
+  if (!apiKey) return null;
 
-  const session = appUserId !== undefined ? await getUserSession(appUserId) : null;
+  const session = appUserId !== undefined ? await getUserSession(appUserId, apiKey) : null;
   const base = session?.baseUrl || OS_BASE;
 
   try {
     const { data } = await axios.post(
       `${base}/download`,
       { file_id: fileId },
-      { headers: headers(session?.token), timeout: 8000 },
+      { headers: headers(session?.token, apiKey), timeout: 8000 },
     );
     return data?.link || null;
   } catch (err: any) {
@@ -164,7 +167,7 @@ export async function resolveSubtitleDownloadUrl(fileId: number, appUserId?: num
       sessionCache.delete(appUserId);
       logger.warn(`[OpenSubtitles] linked session for user ${appUserId} rejected (401) — retrying anonymously`);
       try {
-        const { data } = await axios.post(`${OS_BASE}/download`, { file_id: fileId }, { headers: headers(), timeout: 8000 });
+        const { data } = await axios.post(`${OS_BASE}/download`, { file_id: fileId }, { headers: headers(undefined, apiKey), timeout: 8000 });
         return data?.link || null;
       } catch {
         // fall through to the error log below

@@ -34,6 +34,7 @@ import { channelLogoPath, proxiedLogoPath } from "@/providers/portalAssets";
 import { fetchMovieMeta, fetchTVMeta } from "@/content/tmdb";
 import { searchSubtitles, resolveSubtitleDownloadUrl, type SubtitleResult } from "@/content/opensubtitles";
 import { searchSubdl, downloadSubdlText, isValidSubdlPath } from "@/content/subdl";
+import { subtitleKeysFor } from "@/content/subtitleKeys";
 import {
   streamUserLabel,
   CACHE_DURATION_MS,
@@ -69,6 +70,7 @@ export const subtitleRoutes: ServerRoute[] = [
         if (!title) return h.response({ error: "Missing title" }).code(400);
 
         // Same query from any client within 24 h is answered from memory (saves API calls).
+        // Only non-empty answers are cached, so a user who adds a key gets results right away.
         const key = JSON.stringify([title.trim().toLowerCase(), year ?? "", season ?? "", episode ?? "", lang ?? ""]);
         const hit = searchCache.get(key);
         if (hit && Date.now() - hit.at < SEARCH_TTL_MS) return { success: true, results: hit.results };
@@ -80,7 +82,9 @@ export const subtitleRoutes: ServerRoute[] = [
           episode: episode ? Number(episode) : undefined,
           language: lang,
         };
-        const [os, subdl] = await Promise.all([searchSubtitles(params), searchSubdl(params)]);
+        const caller = authCheck(request);
+        const keys = await subtitleKeysFor(caller ? caller.userId : undefined);
+        const [os, subdl] = await Promise.all([searchSubtitles(params, keys.openSubtitles), searchSubdl(params, keys.subdl)]);
         const results: SubtitleResult[] = [...os, ...subdl];
         if (results.length > 0) {
           searchCache.set(key, { at: Date.now(), results });
@@ -117,12 +121,15 @@ export const subtitleRoutes: ServerRoute[] = [
           // Draws from the caller's own linked OpenSubtitles quota when they have one,
           // falling back to the shared API-key-only pool.
           const userPayload = authCheck(request);
-          const link = await resolveSubtitleDownloadUrl(Number(osMatch[1]), userPayload ? userPayload.userId : undefined);
+          const uid = userPayload ? userPayload.userId : undefined;
+          const keys = await subtitleKeysFor(uid);
+          const link = await resolveSubtitleDownloadUrl(Number(osMatch[1]), uid, keys.openSubtitles);
           if (!link) return h.response({ error: "Failed to resolve subtitle download link" }).code(502);
           const response = await axios({ method: "get", url: link, responseType: "text", validateStatus: () => true, maxContentLength: 5 * 1024 * 1024 });
           if (response.status >= 200 && response.status < 300) text = String(response.data);
         } else if (subdlPath) {
-          text = await downloadSubdlText(subdlPath);
+          const caller = authCheck(request);
+          text = await downloadSubdlText(subdlPath, (await subtitleKeysFor(caller ? caller.userId : undefined)).subdl);
         }
         if (!text || !text.trim()) return h.response({ error: "Subtitle download failed" }).code(502);
 
