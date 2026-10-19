@@ -248,6 +248,11 @@ const init = async () => {
     path: "/{param*}",
     handler: (request, h) => {
       const param = (request.params.param as string) || "";
+      // An unknown API path is a 404, not the webui's index.html: clients probe newer
+      // endpoints (e.g. /api/v2/epg/window) and must be able to tell they are missing.
+      if (param === "api" || param.startsWith("api/")) {
+        return h.response({ error: "Not found" }).code(404);
+      }
       const publicRoot = path.join(process.cwd(), "public");
       const filePath = path.resolve(publicRoot, param);
       const withinPublicRoot =
