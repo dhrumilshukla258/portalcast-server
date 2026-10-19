@@ -11,6 +11,9 @@ import { ConfigProfile } from "@/models/ConfigProfile";
 import { logger } from "@/infra/logger";
 
 const CACHE_DURATION_MS = 12 * 60 * 60 * 1000;
+// Pause between 5-channel batches of the EPG fetch, to stay gentle on the portal. Overridable
+// for the benchmark harness (scripts/bench), where 10k channels x 500 ms would take ~17 min.
+const BATCH_DELAY_MS = Number(process.env.EPG_FETCH_BATCH_DELAY_MS ?? 500);
 
 interface EpgCache {
   timestamp: Date;
@@ -99,8 +102,8 @@ export async function fetchAndCacheEpg(): Promise<EpgCache> {
     // FIX 3: THE MAGIC STICK - Yield control back to Event Loop
     await new Promise(resolve => setImmediate(resolve));
     
-    if (i + CONCURRENCY_LIMIT < filteredChannels.length) {
-      await new Promise(resolve => setTimeout(resolve, 500));
+    if (BATCH_DELAY_MS > 0 && i + CONCURRENCY_LIMIT < filteredChannels.length) {
+      await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS));
     }
   }
 
