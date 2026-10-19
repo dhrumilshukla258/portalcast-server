@@ -601,6 +601,13 @@ export const authRoutes: ServerRoute[] = [
     },
   },
   {
+    // The Google sign-in client id is public by nature (it is embedded in any page that
+    // uses it), so the webui fetches it here instead of having it baked in at build time.
+    method: "GET",
+    path: "/api/auth/google/client-id",
+    handler: () => ({ clientId: process.env.GOOGLE_CLIENT_ID || null }),
+  },
+  {
     // Sign-out: revokes this refresh token's session on the server (clients also clear
     // their stored tokens). Unknown tokens are ignored so sign-out never fails.
     method: "POST",
