@@ -1,6 +1,6 @@
 # Broken Streams (Stream Failures) — Skill Reference
 
-Tracks titles the portal still **lists** but whose stream is **dead**, auto-hides movies after 3 failed attempts, and gives the admin a "Broken streams" view to test/unhide/dismiss them. Owner's rule: *"after 3 tries hide it and give admin a view of failed urls so they can try and fix it."*
+Tracks titles the portal still **lists** but whose stream is **dead**, auto-hides movies after 3 failed attempts where the upstream answered "not found" (404/410; connection-limit errors, 5xx, timeouts and network drops are listed but never hide), and gives the admin a "Broken streams" view to test/unhide/dismiss them. Owner's rule: *"after 3 tries hide it and give admin a view of failed urls so they can try and fix it."*
 
 Related: [[skill-stream-tokens]], [[skill-content-manager]], [[skill-content-lifecycle]], [[skill-database]], [[skill-admin-dashboard]]
 

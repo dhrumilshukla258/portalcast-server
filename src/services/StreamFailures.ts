@@ -56,6 +56,11 @@ function attemptKeyFor(meta: StreamTokenMeta, tokenId?: string): string {
   return base;
 }
 
+/** Upstream said the file does not exist (as opposed to "busy", "error" or no answer). */
+export function isDefinitiveFailure(status: number | null): boolean {
+  return status === 404 || status === 410;
+}
+
 export function hostOf(url?: string | null): string | null {
   if (!url) return null;
   const m = String(url).match(/https?:\/\/[^\s"']+/);
@@ -155,13 +160,24 @@ export function recordFailure(
       attempts = [];
       count = 0;
     }
-    const isNewAttempt = !attempts.includes(attempt);
+    // Only a "the file is gone" answer is a strike toward auto-hide. Connection-limit
+    // errors ("Failed to generate URL"), portal 5xx, timeouts and network drops say
+    // nothing about this title: three retries during a portal outage or while another
+    // device holds the only connection used to hide a perfectly good movie. Those
+    // still count (the admin list shows them) but never hide anything.
+    // Strike attempts are stored as "d:<attempt>" so no schema change is needed.
+    const definitive = isDefinitiveFailure(status);
+    const strikeKey = `d:${attempt}`;
+    const isNewAttempt = !attempts.includes(attempt) && !attempts.includes(strikeKey);
     if (isNewAttempt) {
       count += 1;
-      attempts.push(attempt);
+      attempts.push(definitive ? strikeKey : attempt);
       if (attempts.length > MAX_ATTEMPT_TOKENS) attempts = attempts.slice(-MAX_ATTEMPT_TOKENS);
       if (row.dismissed) row.dismissed = false; // new failures re-open a dismissed row
+    } else if (definitive && attempts.includes(attempt)) {
+      attempts = attempts.map((a) => (a === attempt ? strikeKey : a)); // same attempt, now a 404
     }
+    const strikes = attempts.filter((a) => a.startsWith("d:")).length;
 
     row.failureCount = count;
     row.attemptTokens = attempts;
@@ -177,7 +193,7 @@ export function recordFailure(
     row.firstFailedAt = row.firstFailedAt ?? now;
     row.lastFailedAt = now;
 
-    if (itemType === "movie" && row.hideable && !row.autoHidden && count >= AUTO_HIDE_THRESHOLD) {
+    if (itemType === "movie" && row.hideable && !row.autoHidden && strikes >= AUTO_HIDE_THRESHOLD) {
       await autoHide(row);
     }
     row.changed("attemptTokens", true);
@@ -230,6 +246,8 @@ export function serializeFailure(r: StreamFailure) {
     title: r.title,
     category: r.category,
     failureCount: r.failureCount,
+    // Failures that count toward auto-hide ("file not found"); see recordFailure.
+    strikes: (Array.isArray(r.attemptTokens) ? r.attemptTokens : []).filter((a: string) => a.startsWith("d:")).length,
     threshold: r.itemType === "movie" && r.hideable ? AUTO_HIDE_THRESHOLD : null,
     lastStatus: r.lastStatus,
     lastError: r.lastError,
