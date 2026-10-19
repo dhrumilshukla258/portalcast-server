@@ -12,6 +12,7 @@ import { serverManager } from "@/serverManager";
 import axios from "axios";
 import { ConfigProfile } from "@/models/ConfigProfile";
 import { ContentCache } from "@/models/ContentCache";
+import { peekCategoryList, putCategoryList } from "@/content/categoryLists";
 import { stalkerApi } from "@/providers/stalker";
 import { Readable } from "stream";
 import { XtreamCache } from "@/models/XtreamCache";
@@ -175,6 +176,29 @@ export const movieRoutes: ServerRoute[] = [
         const getVodCache = (catId: string) =>
           xtreamCache.get<any[]>(`vod_streams_${catId}`).then((v) => v ?? []);
 
+        // Prepared category list in memory (content/categoryLists.ts): a page is a slice.
+        const categorySlot = `${profileId}:movie:${category}`;
+        const categoryListKey = `vod_streams_${category}`;
+        const pageFromList = async (list: any[]) => {
+          const offset = (startApiPage - 1) * itemsPerApiPage;
+          const pageData = list.slice(offset, offset + itemsPerApiPage);
+          return {
+            success: true,
+            page: Number(page),
+            pageAtaTime: 1,
+            total_items: list.length,
+            actual_length: itemsPerApiPage,
+            total_loaded: pageData.length,
+            data: await enrichArtworkFromTmdb(pageData, "movie", getPublicOrigin(request)),
+            errors: false,
+            isPortal: initialConfig.providerType === "stalker",
+          };
+        };
+        if (!search && Number(movieId) === 0 && String(category) !== "*" && !String(category).startsWith("vcat_")) {
+          const prepared = peekCategoryList(categorySlot, categoryListKey);
+          if (prepared) return pageFromList(prepared);
+        }
+
         // ContentCache check — skip if searching or drilling into a specific item
         if (!search && Number(movieId) === 0) {
           const cachedRecord = await ContentCache.findOne({ where: { profileId, cacheKey } });
@@ -248,14 +272,7 @@ export const movieRoutes: ServerRoute[] = [
               errors: false,
               isPortal: initialConfig.providerType === "stalker",
             };
-            if (!search) {
-              await ContentCache.upsert({
-                profileId,
-                cacheKey,
-                response: responsePayload,
-                expiresAt: new Date(Date.now() + CACHE_DURATION_MS),
-              });
-            }
+            // No ContentCache write: the union lives in memory, a page is O(page).
             return responsePayload;
           }
         }
@@ -279,28 +296,8 @@ export const movieRoutes: ServerRoute[] = [
                 screenshot_uri: m.screenshot_uri || m.stream_icon || "",
               }));
             const allOverridden = await applyPortalItemOverrides(allNormalized, "movie", String(category), getVodCache, { searching: !!search });
-            const offset = (startApiPage - 1) * itemsPerApiPage;
-            const pageData = allOverridden.slice(offset, offset + itemsPerApiPage);
-            const responsePayload = {
-              success: true,
-              page: Number(page),
-              pageAtaTime: 1,
-              total_items: allOverridden.length,
-              actual_length: itemsPerApiPage,
-              total_loaded: pageData.length,
-              data: await enrichArtworkFromTmdb(pageData, "movie", getPublicOrigin(request)),
-              errors: false,
-              isPortal: initialConfig.providerType === "stalker",
-            };
-            if (!search) {
-              await ContentCache.upsert({
-                profileId,
-                cacheKey,
-                response: responsePayload,
-                expiresAt: new Date(Date.now() + CACHE_DURATION_MS),
-              });
-            }
-            return responsePayload;
+            if (!search) putCategoryList(categorySlot, categoryListKey, allOverridden);
+            return pageFromList(allOverridden);
           }
 
           // Browsing/search never talks to the portal directly — only actual
