@@ -258,7 +258,17 @@ Virtual categories have IDs prefixed `vcat_`. A virtual ID never reaches the por
 
 ## EPG Handling
 
-EPG data is fetched from the portal, cached in SQLite (`EpgCache` table, compressed with gzip), and served to the web UI via `GET /api/v2/epg`.
+EPG data is fetched from the portal, cached in SQLite (`EpgCache` table, compressed with gzip), and served via `GET /api/v2/epg` (whole guide) and `GET /api/v2/epg/window` (only what overlaps the next few hours — what clients should use).
+
+### Serving (`src/content/epgServe.ts`)
+
+The stored guide is turned into one in-memory snapshot per guide version (rebuilt after each refresh and at startup, ~3 s for 549k programmes): the whole `{timestamp, data}` response gzipped once, plus a columnar programme store (one Buffer of programme JSON + `Uint32Array` start / stop / prefix-max stop / byte ranges). `/api/v2/epg` is a buffer send; a window is two binary searches per channel, prebuilt and gzipped once per hour.
+
+`GET /api/v2/epg/window?hours=6[&ids=1,2,3]` — `hours` 1–24 (default 6). Response:
+`{ timestamp, windowStart, windowEnd, data: { [channelId]: [{ start_timestamp, stop_timestamp, name, ... }] } }`
+with every programme that overlaps `[windowStart, windowEnd)` (unix seconds), sorted by start. The window is hour-aligned — `windowStart` = start of the current hour, `windowEnd` = `windowStart + (hours + 1) h` — so a response still covers now..now+hours for the whole hour. Channels with no programme in the window are omitted. Programme objects are passed through as stored (same fields as `/api/v2/epg`). Weak `ETag`; `If-None-Match` gets a 304 (the body changes once per hour or after an EPG refresh). No guide younger than 12 h → `{ timestamp: null, windowStart, windowEnd, data: {} }`.
+
+Bench (10,171 channels / 549k programmes, `scripts/bench`): `/api/v2/epg` 2.5 s → 46 ms p50; the 6 h window is 1.6 MB gzipped (vs. 6.8 MB) in 12 ms, 304 in 5 ms.
 
 ### Fetch strategy
 
@@ -440,7 +450,8 @@ On top of the JWT requirement, a role check applies:
 | `GET /api/v2/series` | Series (paginated) |
 | `GET /api/v2/channel-link` | Resolve live stream URL. Optional `id` (channel id) + `title` enable broken-stream tracking for this link |
 | `GET /api/v2/movie-link` | Resolve VOD / episode URL. Params: `id` (file id), `series`, optional `title`/`category` (admin labels), and — **new, optional** — `itemId` (the LIST item id the client browses by, e.g. the movie card's `id`) + `itemType` (`movie` \| `episode`). These key [[skill-stream-failures]]'s 3-strikes auto-hide; older clients that omit them still work (fallback: file `id` + kind, auto-hide only if that id is a verified movie list id) |
-| `GET /api/v2/epg` | EPG data |
+| `GET /api/v2/epg` | EPG data (whole guide, `[]` when none) |
+| `GET /api/v2/epg/window?hours=6&ids=` | Programmes overlapping the next `hours` (1–24); ETag/304 — see [EPG Handling](#epg-handling) |
 | `GET /api/v2/expiry` | Portal subscription expiry |
 
 ### Sync

@@ -45,7 +45,15 @@ Multiple portal configurations stored in `ConfigProfile`. Only one is active at 
 
 ## EPG Handling
 
-EPG data for Stalker portals is fetched per-channel, compressed with gzip, and stored in the `EpgCache` table (SQLite). Served to the web UI via `GET /api/v2/epg`.
+EPG data for Stalker portals is fetched per-channel, compressed with gzip, and stored in the `EpgCache` table (SQLite). Served via `GET /api/v2/epg` (whole guide) and `GET /api/v2/epg/window?hours=6` (what both clients should use).
+
+### Serving: snapshot + window (`src/content/epgServe.ts`)
+- `getEpgSnapshot()` is the single read path. Per request it runs two small queries (active profile, newest `EpgCache` row's `id`/`timestamp` — never the data column) and returns the in-memory snapshot for that row, rebuilding it only when the row changed (null when missing or > 12 h old, the same rule `getEpgCache()` applies). Builds are shared by concurrent callers.
+- A snapshot holds `full` (the whole `/api/v2/epg` body, gzipped once — the route just sends the buffer, gunzipping only for a client without `Accept-Encoding: gzip`) and a columnar store of programmes that have not ended: one `Buffer` with each channel's programme JSON comma-joined in start order, `Uint32Array`s for start, stop, prefix-max stop and byte ranges. Prefix-max stop is monotone even with overlapping programmes, so "first programme still running at t" is a binary search; a window is O(C log P + K) and a run of programmes is one zero-copy `subarray`.
+- Windows are hour-aligned (`[hourStart, hourStart + (hours+1) h)`) so one body serves the whole hour; it is built + gzipped once per (hours, hour) and the 6 h one is prebuilt with the snapshot and at each hour boundary. Weak ETag = hash of (row, hours, hour[, ids]); `If-None-Match` → 304. `ids=` windows are built per request (small) and left to hapi to compress.
+- Primed by `fetchAndCacheEpg()` after it writes, and at startup (server.ts uses `getEpgSnapshot()` for its "missing or stale?" check; so does `BackgroundJobService`'s 30-min check — neither parses the whole guide any more).
+- `getEpgCache()` (full parse into objects) still exists for code that needs the objects; avoid it on request paths.
+- Memory: ~the JSON size of not-yet-ended programmes (off-heap) + 20 bytes per programme + the full gzip (~7 MB on the owner's portal). `ETag` is in hapi's CORS `additionalExposedHeaders` so the cross-origin Tizen build can revalidate.
 
 ### Fetch strategy
 - **Startup:** fetch immediately if cache is missing or stale (> 12 hours old)
@@ -64,10 +72,10 @@ EpgCache.destroy({ where: { updatedAt: { [Op.lt]: cutoff } } })
 ```
 
 ### Concurrency
-Channels are fetched 5 at a time with a yield between batches to avoid memory spikes on large channel lists.
+Channels are fetched 5 at a time with a yield and a 500 ms pause between batches (`EPG_FETCH_BATCH_DELAY_MS`, used as 0 by the benchmark harness in `scripts/bench`).
 
 ### Xtream EPG
-For Xtream providers, `XtreamClient.getEPG()` uses the portal's `get_short_epg` action (limit: 24 entries per channel). EPG titles are Base64-decoded automatically.
+For Xtream providers, `XtreamClient.getEPG()` uses the portal's `get_short_epg` action (limit: 24 entries per channel). EPG titles are Base64-decoded automatically. It bypasses the client's 6 h request cache (`makeRequest(..., { cache: false })`): the result goes straight into `EpgCache`, and caching 10k parsed responses only held memory.
 
 ### Title decoding (Xtream)
 Xtream portals Base64-encode EPG titles. `decodeBase64Safe` in `xtream-client.ts` handles:
@@ -89,6 +97,7 @@ Xtream portals Base64-encode EPG titles. `decodeBase64Safe` in `xtream-client.ts
 | `GET /api/v2/refresh-movie-groups` | Sync VOD categories + trigger cache warm |
 | `GET /api/v2/refresh-series-groups` | Sync series categories + auto-detect portal type |
 | `POST /api/v2/refresh-epg` | Refresh EPG |
+| `GET /api/v2/epg/window?hours=6&ids=` | Programmes overlapping the next `hours` (1–24), ETag/304 |
 
 ---
 
@@ -112,5 +121,6 @@ Connect at `ws://server:3000/` — the frontend uses this to auto-reload when th
 - `src/models/ConfigProfile.ts` — Profile Sequelize model
 - `src/models/EpgCache.ts` — EPG cache model
 - `src/content/epg.ts` — EPG fetch and cache logic
+- `src/content/epgServe.ts` — serving snapshot, `/api/v2/epg/window` windows, ETags
 - `src/services/SocketService.ts` — WebSocket event broadcasting
 - `src/serverManager.ts` — Provider lifecycle management
