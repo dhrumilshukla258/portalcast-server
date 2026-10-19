@@ -219,8 +219,10 @@ function fingerprint(items: Searchable[]): string {
 /** Ranked search over `items`, reusing an index built for the same snapshot under `key`. */
 export function searchCatalog<T extends Searchable>(key: string, items: T[], query: string): T[] {
   if (!query || !query.trim()) return items;
-  const fp = fingerprint(items);
   let entry = indexCache.get(key);
+  // Callers holding a long-lived snapshot (content/catalogUnion.ts) pass the same array every
+  // time: identity proves it is the indexed snapshot, so skip the O(n) fingerprint.
+  const fp = entry && entry.index.items === items ? entry.fp : fingerprint(items);
   if (!entry || entry.fp !== fp) {
     entry = { fp, index: new SearchIndex(items) };
     indexCache.delete(key);

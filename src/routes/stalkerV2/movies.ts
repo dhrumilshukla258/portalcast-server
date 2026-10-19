@@ -46,6 +46,7 @@ import {
   mapChannel,
   filterBySearch,
 } from "./shared";
+import { getCatalogUnion, applyOverridesToMatches } from "@/content/catalogUnion";
 export const movieRoutes: ServerRoute[] = [
   {
     method: "GET",
@@ -152,7 +153,12 @@ export const movieRoutes: ServerRoute[] = [
         // already-warmed per-category cache first so a Discover click hits the same
         // fast, cached path any other movie lookup does.
         if (Number(movieId) !== 0 && String(category) === "*") {
-          const groups = await readGenres("movie", profileId);
+          // O(1) via the in-memory "*" catalog's id -> category map; the per-genre scan below
+          // stays as the fallback for titles only present in a hidden genre.
+          const union = await getCatalogUnion("movie", profileId);
+          const known = union?.catOf.get(String(movieId));
+          const groups = known ? [] : await readGenres("movie", profileId);
+          if (known) category = known;
           for (const g of groups) {
             if (!g.id || g.id === "*") continue;
             const cached = await xtreamCache.get<any[]>(`vod_streams_${g.id}`);
@@ -218,32 +224,24 @@ export const movieRoutes: ServerRoute[] = [
         // so build it by unioning those instead of ever touching the portal (same pattern the
         // Xtream player API already uses for its no-category "all" request in protocol.ts).
         if (Number(movieId) === 0 && String(category) === "*") {
-          const groups = await readGenres("movie", profileId);
-          const hiddenIds = await getHiddenGenreIds("movie");
-          const visibleIds = groups
-            .filter((g: any) => g.id && g.id !== "*" && !hiddenIds.has(String(g.id)))
-            .map((g: any) => `vod_streams_${g.id}`);
-          const cachedByKey = await xtreamCache.getMany<any[]>(visibleIds);
-          const cachedMovies: any[] = [];
-          for (const key of visibleIds) {
-            const cached = cachedByKey.get(key);
-            if (cached) cachedMovies.push(...cached);
-          }
-          if (cachedMovies.length > 0) {
-            const allNormalized = filterBySearch(cachedMovies, search, `movie:${category}`)
-              .map((m: any) => ({
-                ...m,
-                id: String(m.stream_id),
-                screenshot_uri: m.screenshot_uri || m.stream_icon || "",
-              }));
-            const allOverridden = await applyPortalItemOverrides(allNormalized, "movie", String(category), getVodCache, { searching: !!search });
+          // In-memory union, rebuilt only when a category list or an override changed (see
+          // content/catalogUnion.ts); a page is O(page) instead of re-reading ~85k items.
+          const union = await getCatalogUnion("movie", profileId);
+          if (union) {
+            const list = search
+              ? await applyOverridesToMatches("movie", filterBySearch(union.raw, search, `movie:${category}`))
+              : union.browse;
             const offset = (startApiPage - 1) * itemsPerApiPage;
-            const pageData = allOverridden.slice(offset, offset + itemsPerApiPage);
+            const pageData = list.slice(offset, offset + itemsPerApiPage).map((m: any) => ({
+              ...m,
+              id: String(m.stream_id),
+              screenshot_uri: m.screenshot_uri || m.stream_icon || "",
+            }));
             const responsePayload = {
               success: true,
               page: Number(page),
               pageAtaTime: 1,
-              total_items: allOverridden.length,
+              total_items: list.length,
               actual_length: itemsPerApiPage,
               total_loaded: pageData.length,
               data: await enrichArtworkFromTmdb(pageData, "movie", getPublicOrigin(request)),

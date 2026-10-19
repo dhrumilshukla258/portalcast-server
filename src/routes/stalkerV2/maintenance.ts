@@ -16,7 +16,7 @@ import { stalkerApi } from "@/providers/stalker";
 import { Readable } from "stream";
 import { XtreamCache } from "@/models/XtreamCache";
 import { ContentOverride } from "@/models/ContentOverride";
-import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres, catchupScan, xtreamCache, getOrRefreshVodStreams, getOrRefreshSeriesList } from "@/services/xtreamCache";
+import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres, catchupScan, xtreamCache, getOrRefreshVodStreams, getOrRefreshSeriesList, clearXtreamMem } from "@/services/xtreamCache";
 import { logger } from "@/infra/logger";
 import { authCheck } from "@/auth/jwt";
 import { mintStreamToken, proxyUrlFor, streamTokenFromRequest } from "@/services/StreamTokens";
@@ -270,6 +270,9 @@ export const maintenanceRoutes: ServerRoute[] = [
         const count = await XtreamCache.destroy({
           where: prefix ? { key: { [Op.like]: `${prefix}%` } } : {},
         });
+        // Rows were deleted behind xtreamCache's back: drop its 30 s read cache and invalidate
+        // views built from it (the in-memory "*" catalog), or they would keep serving them.
+        clearXtreamMem();
         return { success: true, message: `Cleared ${count} xtream cache entries.` };
       } catch (err) {
         logger.error({ err }, "Error clearing xtream cache");

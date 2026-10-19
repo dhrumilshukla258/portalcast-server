@@ -42,6 +42,23 @@ function memDelete(key: string): void {
   memRaw.delete(key);
 }
 
+// Per-key write version, bumped on every set/delete (and for all keys by clearXtreamMem), so
+// in-memory views built from cached lists (content/catalogUnion.ts) can tell in O(1) whether
+// a key changed since they were built. Process-local; starts at 0 for every key.
+const keyVersion = new Map<string, number>();
+let versionEpoch = 0;
+const bumpVersion = (key: string) => keyVersion.set(key, (keyVersion.get(key) ?? 0) + 1);
+
+export function xtreamCacheKeyVersion(key: string): string {
+  return `${versionEpoch}.${keyVersion.get(key) ?? 0}`;
+}
+
+/** For writers that bypass xtreamCache (raw XtreamCache.destroy): drop the read cache and invalidate all versions. */
+export function clearXtreamMem(): void {
+  memRaw.clear();
+  versionEpoch++;
+}
+
 export const xtreamCache = {
   async get<T>(key: string): Promise<T | undefined> {
     const hit = memGet(key);
@@ -118,11 +135,13 @@ export const xtreamCache = {
     const raw = JSON.stringify(value);
     await XtreamCache.upsert({ key, value: raw, expiresAt });
     memSet(key, raw, expiresAt);
+    bumpVersion(key);
   },
 
   async delete(key: string): Promise<void> {
     memDelete(key);
     await XtreamCache.destroy({ where: { key } });
+    bumpVersion(key);
   },
 };
 

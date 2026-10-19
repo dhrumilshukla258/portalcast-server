@@ -46,6 +46,7 @@ import {
   mapChannel,
   filterBySearch,
 } from "./shared";
+import { getCatalogUnion, applyOverridesToMatches } from "@/content/catalogUnion";
 export const seriesRoutes: ServerRoute[] = [
   {
     method: "GET",
@@ -152,36 +153,28 @@ export const seriesRoutes: ServerRoute[] = [
         // touching the portal, the same way the Xtream player API already does for its
         // no-category-id "all" request in protocol.ts.
         if (Number(movieId) === 0 && String(category) === "*") {
-          const genres = await readGenres("series", profileId);
-          const hiddenIds = await getHiddenGenreIds("series");
-          const visibleIds = genres
-            .filter((g: any) => g.id && g.id !== "*" && !hiddenIds.has(String(g.id)))
-            .map((g: any) => `series_list_${g.id}`);
-          const cachedByKey = await xtreamCache.getMany<any[]>(visibleIds);
-          const cachedSeries: any[] = [];
-          for (const key of visibleIds) {
-            const cached = cachedByKey.get(key);
-            if (cached) cachedSeries.push(...cached);
-          }
-          if (cachedSeries.length > 0) {
-            const allNormalized = filterBySearch(cachedSeries, search, `series:${category}`)
-              .map((s: any) => ({
-                ...s,
-                id: String(s.series_id),
-                [seriesFlag]: 1,
-                screenshot_uri: s.screenshot_uri || s.cover || "",
-                description: s.description || s.plot || "",
-                actors: s.actors || s.cast || "",
-                genres_str: s.genres_str || s.genre || "",
-              }));
-            const allOverridden = await applyPortalItemOverrides(allNormalized, "series", String(category), getSeriesCache, { searching: !!search });
+          // In-memory union, rebuilt only when a category list or an override changed (see
+          // content/catalogUnion.ts); a page is O(page) instead of re-reading every category.
+          const union = await getCatalogUnion("series", profileId);
+          if (union) {
+            const list = search
+              ? await applyOverridesToMatches("series", filterBySearch(union.raw, search, `series:${category}`))
+              : union.browse;
             const offset = (startApiPage - 1) * itemsPerApiPage;
-            const pageData = allOverridden.slice(offset, offset + itemsPerApiPage);
+            const pageData = list.slice(offset, offset + itemsPerApiPage).map((s: any) => ({
+              ...s,
+              id: String(s.series_id),
+              [seriesFlag]: 1,
+              screenshot_uri: s.screenshot_uri || s.cover || "",
+              description: s.description || s.plot || "",
+              actors: s.actors || s.cast || "",
+              genres_str: s.genres_str || s.genre || "",
+            }));
             const responsePayload = {
               success: true,
               page: Number(page),
               pageAtaTime: 1,
-              total_items: allOverridden.length,
+              total_items: list.length,
               actual_length: itemsPerApiPage,
               total_loaded: pageData.length,
               data: await enrichArtworkFromTmdb(pageData, "series", getPublicOrigin(request)),

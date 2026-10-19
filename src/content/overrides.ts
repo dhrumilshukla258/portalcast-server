@@ -2,6 +2,46 @@ import { GenreOverride } from "@/models/GenreOverride";
 import { ContentOverride } from "@/models/ContentOverride";
 import { GenreType } from "@/models/Genre";
 
+// ── Override generation ─────────────────────────────────────────────────────
+// Bumped by Sequelize hooks on every ContentOverride / GenreOverride write (content manager,
+// broken-stream auto-hide, …), so in-memory views derived from overrides — the "*" catalog in
+// content/catalogUnion.ts, the hidden-genre set and the per-type override map below — can be
+// validated with an integer compare instead of a query. Hooks are attached lazily on first use
+// because the models are only initialised once initDB() has run.
+let overridesGen = 0;
+let hooksAttached = false;
+const OVERRIDE_HOOKS = [
+  "afterCreate", "afterUpdate", "afterSave", "afterUpsert", "afterDestroy",
+  "afterBulkCreate", "afterBulkUpdate", "afterBulkDestroy",
+] as const;
+
+function attachHooks(): void {
+  if (hooksAttached) return;
+  hooksAttached = true;
+  const bump = () => { overridesGen++; };
+  for (const model of [ContentOverride, GenreOverride] as any[]) {
+    for (const hook of OVERRIDE_HOOKS) model.addHook(hook, `overridesGen_${hook}`, bump);
+  }
+}
+
+export function overridesGeneration(): number {
+  attachHooks();
+  return overridesGen;
+}
+
+const allOverridesCache = new Map<string, { gen: number; map: Map<string, any> }>();
+
+/** Every ContentOverride row of `type`, keyed by item_key — one query per override change. */
+export async function getAllContentOverrides(type: string): Promise<Map<string, any>> {
+  const gen = overridesGeneration();
+  const hit = allOverridesCache.get(type);
+  if (hit && hit.gen === gen) return hit.map;
+  const rows = await ContentOverride.findAll({ where: { item_type: type }, raw: true });
+  const map = new Map<string, any>(rows.map((r: any) => [r.item_key, r]));
+  allOverridesCache.set(type, { gen, map });
+  return map;
+}
+
 export function genreKey(type: GenreType, id: string): string {
   return `${type}_${id}`;
 }
@@ -94,12 +134,19 @@ export async function applyChannelOverrides(channels: any[]): Promise<any[]> {
     });
 }
 
+const hiddenGenreCache = new Map<string, { gen: number; ids: Set<string> }>();
+
 export async function getHiddenGenreIds(type: GenreType): Promise<Set<string>> {
+  const gen = overridesGeneration();
+  const hit = hiddenGenreCache.get(type);
+  if (hit && hit.gen === gen) return new Set(hit.ids);
   const prefix = `${type}_`;
   const rows = await GenreOverride.findAll({ where: { hidden: true }, raw: true });
-  return new Set(
+  const ids = new Set(
     rows.filter((r) => r.genre_key.startsWith(prefix)).map((r) => r.genre_key.slice(prefix.length))
   );
+  hiddenGenreCache.set(type, { gen, ids });
+  return new Set(ids);
 }
 
 // Apply to portal item arrays (browser stalkerV2): { id, name, ... }
