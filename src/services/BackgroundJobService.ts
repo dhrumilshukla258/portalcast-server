@@ -1,4 +1,5 @@
-import { fetchAndCacheEpg, getEpgCache } from "@/content/epg";
+import { fetchAndCacheEpg } from "@/content/epg";
+import { getEpgSnapshot } from "@/content/epgServe";
 import { serverManager } from "@/serverManager";
 import { logger } from "@/infra/logger";
 
@@ -43,7 +44,9 @@ class BackgroundJobService {
       return;
     }
 
-    const cache = await getEpgCache();
+    // The served snapshot carries the stored guide's timestamp; unlike getEpgCache() this does
+    // not gunzip + JSON.parse the whole guide every 30 minutes just to read it.
+    const cache = await getEpgSnapshot();
     const now = Date.now();
 
     const needsUpdate =

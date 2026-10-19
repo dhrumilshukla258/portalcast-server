@@ -9,6 +9,7 @@ import { Channel, EPG_List, Genre } from "@/types/domain";
 import { initialConfig } from "@/config/server";
 import { ConfigProfile } from "@/models/ConfigProfile";
 import { logger } from "@/infra/logger";
+import { primeEpgSnapshot } from "@/content/epgServe";
 
 const CACHE_DURATION_MS = 12 * 60 * 60 * 1000;
 // Pause between 5-channel batches of the EPG fetch, to stay gentle on the portal. Overridable
@@ -111,5 +112,8 @@ export async function fetchAndCacheEpg(): Promise<EpgCache> {
   await writeEpgCache(cache, profileId);
 
   logger.info("EPG cache updated.");
+  // Rebuild the served snapshot (full-guide gzip + programme windows) now, not on the first
+  // client request after the refresh.
+  primeEpgSnapshot();
   return cache;
 }

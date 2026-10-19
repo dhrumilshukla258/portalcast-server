@@ -25,7 +25,8 @@ import { initDB } from "./db";
 import { migrateToProfiles, loadActiveProfileFromDB } from "./config/server";
 import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres } from "./services/xtreamCache";
 import { enrichContentMeta, sweepStaleContent } from "./content/metaEnrichment";
-import { fetchAndCacheEpg, getEpgCache } from "./content/epg";
+import { fetchAndCacheEpg } from "./content/epg";
+import { getEpgSnapshot } from "./content/epgServe";
 import { EpgCache } from "./models/EpgCache";
 import { DeviceCode } from "./models/DeviceCode";
 import { Op } from "sequelize";
@@ -341,7 +342,9 @@ const init = async () => {
   })();
 
   // Fetch EPG on startup if cache is missing or stale
-  getEpgCache().then((cache) => {
+  // getEpgSnapshot() is null when the guide is missing or > 12 h old (same rule as
+  // getEpgCache), and otherwise builds the served snapshot now instead of on the first request.
+  getEpgSnapshot().then((cache) => {
     if (!cache) {
       fetchAndCacheEpg().catch((e) => logger.error(`[EPG startup] ${e}`));
     }
