@@ -236,6 +236,10 @@ export const mapChannel = (channel: any, origin: string, userLabel?: string, gen
       kind: "live",
       label: channel.name,
       category: genreTitle,
+      // Broken-stream tracking: live is recorded only, never auto-hidden.
+      itemType: "live",
+      itemId: String(channel.id),
+      resolve: { cmd: channel.cmd },
     });
     cmdUrl = `${origin}/live.m3u8?t=${token}&id=${channel.id}&proxy=1`;
   } else {

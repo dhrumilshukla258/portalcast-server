@@ -424,8 +424,8 @@ On top of the JWT requirement, a role check applies:
 | `GET /api/v2/movies` | Movies (paginated) |
 | `GET /api/v2/series-groups` | Series categories |
 | `GET /api/v2/series` | Series (paginated) |
-| `GET /api/v2/channel-link` | Resolve live stream URL |
-| `GET /api/v2/movie-link` | Resolve VOD / episode URL |
+| `GET /api/v2/channel-link` | Resolve live stream URL. Optional `id` (channel id) + `title` enable broken-stream tracking for this link |
+| `GET /api/v2/movie-link` | Resolve VOD / episode URL. Params: `id` (file id), `series`, optional `title`/`category` (admin labels), and — **new, optional** — `itemId` (the LIST item id the client browses by, e.g. the movie card's `id`) + `itemType` (`movie` \| `episode`). These key [[skill-stream-failures]]'s 3-strikes auto-hide; older clients that omit them still work (fallback: file `id` + kind, auto-hide only if that id is a verified movie list id) |
 | `GET /api/v2/epg` | EPG data |
 | `GET /api/v2/expiry` | Portal subscription expiry |
 
@@ -521,6 +521,17 @@ Preferences (favorites, recent channels, last-selected category/TV group/channel
 | `PUT /api/admin/items/{type}/{id}` | Update item (rename / hide / move) |
 | `PUT /api/admin/items/{type}/{category_id}/reorder` | Bulk-set item sort order |
 | `DELETE /api/admin/items/{type}/{id}` | Remove item override |
+
+### Broken streams (admin only)
+
+Titles the portal still lists but whose stream is dead. Every failed playback attempt is recorded; a **movie** that fails 3 distinct attempts within 24 h is auto-hidden (`ContentOverride.hidden`); episodes and live channels are recorded only. Full detail → [[skill-stream-failures]].
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/admin/stream-failures?status=active\|hidden\|all` | Failure rows, newest first |
+| `POST /api/admin/stream-failures/{id}/test` | Re-resolve the link server-side and fetch the first bytes → `{ ok, status, error, item }`; resets the count on success |
+| `POST /api/admin/stream-failures/{id}/unhide` | Undo an auto-hide (409 if the item wasn't hidden by this feature) |
+| `DELETE /api/admin/stream-failures/{id}` | Dismiss (a new failure re-opens it) |
 
 ### Content Enrichment (admin only)
 

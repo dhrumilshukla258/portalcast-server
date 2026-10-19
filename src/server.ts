@@ -12,6 +12,8 @@ import { proxy } from "./routes/streaming/proxy";
 import { stalkerApi } from "./providers/stalker";
 import { portalProxy } from "./routes/streaming/portalProxy";
 import { subtitleRoutes } from "./routes/streaming/subtitles";
+import { streamFailureRoutes } from "./routes/streaming/streamFailures";
+import { purgeStaleFailures } from "./services/StreamFailures";
 import { adminRoutes } from "./routes/contentmanager";
 import { authRoutes } from "./routes/account/auth";
 import { userRoutes } from "./routes/account/user";
@@ -83,6 +85,7 @@ const init = async () => {
   server.route(proxy);
   server.route(portalProxy);
   server.route(subtitleRoutes);
+  server.route(streamFailureRoutes);
   server.route(adminRoutes);
   server.route(authRoutes);
   server.route(userRoutes);
@@ -381,6 +384,13 @@ const init = async () => {
       const deviceCodesDeleted = await DeviceCode.destroy({ where: { expiresAt: { [Op.lt]: now } } });
       if (deviceCodesDeleted > 0) logger.info(`[cleanup] Purged ${deviceCodesDeleted} expired device_codes row(s).`);
     } catch (e) { logger.error(`[cleanup] device_codes purge failed: ${e}`); }
+
+    // Broken-stream rows (docs/skill-stream-failures.md) untouched for 30
+    // days — auto-hidden rows are kept as the record of why a title is hidden.
+    try {
+      const failuresDeleted = await purgeStaleFailures();
+      if (failuresDeleted > 0) logger.info(`[cleanup] Purged ${failuresDeleted} stale stream_failures row(s).`);
+    } catch (e) { logger.error(`[cleanup] stream_failures purge failed: ${e}`); }
   };
 
   runDbCleanup().catch((e) => logger.error(`[cleanup startup] ${e}`));

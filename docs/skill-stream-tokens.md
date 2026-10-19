@@ -65,7 +65,7 @@ if (!userLabel) {
 | `LiveStreamService.generateSignedUrl` | `LiveStreamService.ts` | `"cmd<_>seq"` segment resourceId | inherited |
 | `live.ts`'s own `generateSignedUrl` | `live.ts` | `"cmd<_>seq"` segment resourceId | inherited |
 
-**Segment/sub-playlist tokens must inherit `{kind, label, category}` from the *parent* token, not the whole parent object** — extract just those three fields (see Lessons).
+**Segment/sub-playlist tokens must inherit the parent's *metadata*, not the whole parent object** — use `inheritTokenMeta(entry)` (StreamTokens.ts), which copies `{kind, label, category}` plus the broken-stream identity `{itemType, itemId, profileId, hideable, resolve, attemptId}` (see [[skill-stream-failures]]) and never `resource` (see Lessons).
 
 ---
 

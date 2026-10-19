@@ -68,6 +68,10 @@ Admin-only CRUD over the `Users` table — this is what backs the Admin Dashboar
 - `PUT /api/admin/users/{id}` — update name/role/isActive/password. Flipping `isActive` false→true (approving a pending signup) fires `sendUserApprovedEmail()`. **Self-protection guardrails**: an admin cannot deactivate their own account or demote their own role via this endpoint.
 - `DELETE /api/admin/users/{id}` — also blocked against self-deletion.
 
+### Broken streams — `/api/admin/stream-failures` (`src/routes/streaming/streamFailures.ts`)
+
+Admin-only list/test/unhide/dismiss over the `StreamFailure` table — backs the Admin Dashboard's **Broken streams** tab. Movies that fail 3 playback attempts in 24 h are auto-hidden; episodes/live are recorded only. Full detail → [[skill-stream-failures]].
+
 ### Content metadata enrichment — `POST /api/admin/content-meta/enrich`, `GET /api/admin/content-meta/status` (`src/routes/contentmanager/metaEnrichment.ts`)
 
 Part of the Discover feature ([[skill-discover]]), surfaced here because it's a manual-trigger-only admin action. `enrich` fire-and-forget triggers a full TMDB catalog backfill (`enrichContentMeta()` — hours-long at the throttled rate, hence manual-only, never automatic). `status` returns `{ total, byType, bySource }` counts from `ContentMeta` so the dashboard can show enrichment progress without polling the (potentially hours-long) enrich call itself.

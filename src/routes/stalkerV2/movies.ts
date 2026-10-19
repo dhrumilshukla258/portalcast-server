@@ -536,10 +536,29 @@ export const movieRoutes: ServerRoute[] = [
             logger.error("[movie-link] No resolvable identity for authenticated request — refusing to return raw URL");
             return h.response({ error: "Unauthorized" }).code(401);
           }
+          // Broken-stream identity (src/services/StreamFailures.ts). `id` here
+          // is the FILE id; newer clients also send the LIST item id they
+          // browse by (`itemId`) + `itemType`, which is what an auto-hide
+          // must key on. Older clients don't — fall back to the file id, and
+          // only allow auto-hide when that fallback is verifiably a real
+          // movie list id (vod_info_<id> is cached per list item by the warm).
+          const { itemId: qItemId, itemType: qItemType } = request.query as { itemId?: string; itemType?: string };
+          const itemType: "movie" | "episode" =
+            qItemType === "movie" || qItemType === "episode" ? qItemType : isSeries ? "episode" : "movie";
+          const itemId = qItemId ? String(qItemId) : String(id);
+          let hideable = !!qItemId;
+          if (!qItemId && itemType === "movie" && id) {
+            hideable = !!(await xtreamCache.get<any>(`vod_info_${id}`).catch(() => null));
+          }
           const tokenizedUrl = proxyUrlFor(rawUrl, userLabel, {
             kind: isSeries ? "series" : "movie",
             label: effectiveTitle,
             category: effectiveCategory,
+            itemType,
+            itemId,
+            profileId: await getActiveProfileId(),
+            hideable,
+            resolve: { id: String(id), series: String(series ?? ""), ...(cmd ? { cmd: String(cmd) } : {}) },
           });
           if (movieLink.js) movieLink.js.cmd = tokenizedUrl;
           else movieLink.cmd = tokenizedUrl;

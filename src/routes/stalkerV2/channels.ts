@@ -226,7 +226,17 @@ export const channelRoutes: ServerRoute[] = [
             logger.error("[channel-link] No resolvable identity for authenticated request — refusing to return raw URL");
             return h.response({ error: "Unauthorized" }).code(401);
           }
-          const tokenizedUrl = proxyUrlFor(rawUrl, userLabel, { kind: "live" });
+          const { id: channelId, title } = request.query as { id?: string; title?: string };
+          const tokenizedUrl = proxyUrlFor(rawUrl, userLabel, {
+            kind: "live",
+            label: title,
+            // Broken-stream tracking (record-only for live). Only when the
+            // client sent the channel `id` — the cmd itself can embed upstream
+            // credentials, so it must never become a row's visible itemId.
+            ...(channelId ? { itemType: "live" as const, itemId: String(channelId) } : {}),
+            profileId: await getActiveProfileId(),
+            resolve: { cmd: String(request.query.cmd ?? "") },
+          });
           if (channelLink.js) channelLink.js.cmd = tokenizedUrl;
           else channelLink.cmd = tokenizedUrl;
         }

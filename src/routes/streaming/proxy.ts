@@ -5,8 +5,8 @@ import https, { RequestOptions } from "https";
 import { initialConfig } from "@/config/server";
 import { logger } from "@/infra/logger";
 import { streamTracker } from "@/services/StreamTracker";
-import { mintStreamToken, streamTokenFromRequest } from "@/services/StreamTokens";
-import type { StreamMeta } from "@/services/StreamTracker";
+import { mintStreamToken, streamTokenFromRequest, inheritTokenMeta, type StreamTokenMeta } from "@/services/StreamTokens";
+import { recordFailure, recordSuccess } from "@/services/StreamFailures";
 
 // HLS segment files sit alongside each other in the same directory (e.g.
 // .../seg-00001.ts, seg-00002.ts) — dropping the filename gives a stable
@@ -32,7 +32,7 @@ function assertHttpUrl(raw: string) {
 // `/api/proxy/stream?t=<random>`, never the real address (even base64 is
 // trivially reversible by anyone who copies the link, which is exactly what
 // this replaces).
-export function getProxiedUrl(url: string, userLabel: string, referer?: string, meta?: StreamMeta): string {
+export function getProxiedUrl(url: string, userLabel: string, referer?: string, meta?: StreamTokenMeta): string {
   const token = mintStreamToken(url, userLabel, referer, meta);
   return `/api/proxy/stream?t=${token}`;
 }
@@ -43,7 +43,7 @@ export async function handleProxyStream(
   decodedUrl: string,
   referer: string | undefined,
   userLabel: string,
-  meta?: StreamMeta,
+  meta?: StreamTokenMeta,
 ) {
   const requestHeaders: Record<string, string | undefined> = {
     Referer: referer,
@@ -65,6 +65,18 @@ export async function handleProxyStream(
   } as any);
 
   const stream = response.data as http.IncomingMessage;
+
+  // Broken-stream tracking (src/services/StreamFailures.ts): a byte stream
+  // that actually starts flowing is the only reliable "this title plays"
+  // signal (a playlist can load fine while every segment is dead).
+  if (meta) {
+    const tokenId = (request.query as any)?.t;
+    if (response.status >= 400) {
+      recordFailure(meta, tokenId, response.status, `Upstream returned HTTP ${response.status}`, decodedUrl);
+    } else {
+      recordSuccess(meta, tokenId);
+    }
+  }
 
   // Clean up upstream connection if client aborts/disconnects
   request.raw.req.on("close", () => {
@@ -115,6 +127,7 @@ export const proxy: ServerRoute[] = [
         return await handleProxyStream(request, h, entry.resource, entry.referer, entry.userLabel, entry);
       } catch (error: any) {
         logger.error("[/proxy/stream] error: " + (error?.message ?? error));
+        recordFailure(entry, (request.query as any)?.t, error?.response?.status ?? null, error?.message ?? String(error), entry.resource);
         if (error.response) {
           return h
             .response({ error: "Failed to fetch upstream content" })
@@ -143,7 +156,7 @@ export const proxy: ServerRoute[] = [
         let isHttpUrl = true;
         try { assertHttpUrl(decodedUrl); } catch { isHttpUrl = false; }
         if (!isHttpUrl) {
-          const cmdToken = mintStreamToken(decodedUrl, userLabel);
+          const cmdToken = mintStreamToken(decodedUrl, userLabel, undefined, inheritTokenMeta(entry));
           return h.redirect(`/live.m3u8?t=${cmdToken}`);
         }
 
@@ -203,6 +216,7 @@ export const proxy: ServerRoute[] = [
         });
 
         if (resp.status < 200 || resp.status >= 300) {
+          recordFailure(entry, (request.query as any)?.t, resp.status, "Failed to fetch stream", playlistUrl);
           return h
             .response({ error: "Failed to fetch stream" })
             .code(resp.status);
@@ -234,7 +248,10 @@ export const proxy: ServerRoute[] = [
             // silently overwrite the new segment/sub-playlist URL with the
             // old one (object spread order), making every segment re-fetch
             // the parent playlist instead of real video data.
-            const subMeta: StreamMeta = { kind: entry.kind, label: entry.label, category: entry.category };
+            // inheritTokenMeta also carries the broken-stream identity
+            // (itemType/itemId/attemptId) so segment failures/successes
+            // count against the same playback attempt.
+            const subMeta = inheritTokenMeta(entry);
 
             if (
               urlToRewrite.endsWith(".m3u8") ||
@@ -260,6 +277,7 @@ export const proxy: ServerRoute[] = [
           .header("Cache-Control", "no-cache");
       } catch (err: any) {
         logger.error("[/proxy] error: " + (err?.message ?? err));
+        recordFailure(entry, (request.query as any)?.t, err?.response?.status ?? null, err?.message ?? String(err), entry.resource);
         return h.response({ error: "Failed to proxy playlist" }).code(500);
       }
     },

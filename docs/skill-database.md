@@ -39,6 +39,7 @@ Export: `databasePath` (used by pull-db.sh and diagnostics).
 | `ContentGenre` | `content_genres` | Discover genre tags, one row per `(contentId, value)` — see [[skill-discover]] |
 | `ContentCountry` | `content_countries` | Discover country tags — see [[skill-discover]] |
 | `ContentTheme` | `content_themes` | Discover theme tags (curated TMDB keyword buckets) — see [[skill-discover]] |
+| `StreamFailure` | `stream_failures` | Broken-stream tracking, unique on `(profileId, itemType, itemId)` — see [[skill-stream-failures]] |
 
 ---
 
@@ -111,6 +112,7 @@ Separate from the startup migrations above — this is a recurring job (`setInte
 | Table | Rule |
 |-------|------|
 | `EpgCache` | Rows with `updatedAt` older than 7 days |
+| `StreamFailure` | Rows with `updatedAt` older than 30 days, except `autoHidden` ones — see [[skill-stream-failures]] |
 | `DeviceCode` | Rows with `expiresAt` in the past (the successful-pairing path already deletes its own row immediately — anything left past expiry is an abandoned/expired pairing attempt; TV pairing/QR sign-in is actively used, so these genuinely accumulate) |
 
 `XtreamCache` is **deliberately not purged here at all**, despite genuinely accumulating unbounded per-item rows over time (see [[skill-content-lifecycle]] for that gap) — a time-based purge was added, then reverted the same session. It's a real incident worth knowing before trying again: even scoped to only `vod_streams_*`/`series_list_*` list-cache keys with a 7-day-stale grace period, the *first* version of this purge had no key filter at all and also deleted per-item detail rows (`series_info_*`, `vod_info_*`, `vod_cmd_*`, `ep_info_*`, `ep_cmd_*`) that are write-once — never rewritten again once complete, so their `expiresAt` freezes forever and they cross any age-based threshold eventually regardless of still being actively read. Deleting them forced `warmSeriesInfoCache()` (see [[skill-xtream-provider]]) to rebuild the entire series catalog from scratch on the next warm cycle — hours of unnecessary re-fetching, observed directly in production logs. Any future attempt at cleaning up `XtreamCache` needs to either scope to list-cache keys only (as the reverted version did) or, better, track a real "last read" timestamp instead of relying on `expiresAt`/last-write age at all.
