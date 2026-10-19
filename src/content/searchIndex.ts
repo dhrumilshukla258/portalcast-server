@@ -12,11 +12,12 @@
 // - Inverted index over a sorted vocabulary: each query word is matched as a PREFIX of a
 //   title word (binary search for the vocabulary range: O(log V + matches)), all query words
 //   must match (AND), in any order. Typing feels instant: "dark kni" already matches.
-// - Typo tolerance (one edit) via a SymSpell deletion map: every vocabulary term (len >= 4)
-//   is stored under each of its single-character deletions; a query word's own deletions are
-//   looked up the same way, so a candidate set within edit distance 1 is found in O(L) hash
-//   lookups instead of comparing against the whole vocabulary. Only used when a word has
-//   no prefix match.
+// - Typo tolerance (one edit): a query word with no prefix match has every string one edit
+//   away generated (deletions, adjacent swaps, substitutions and insertions over [a-z0-9],
+//   about 75 per character) and each is looked up in a term -> index map. O(L·36) hash
+//   lookups per misspelled word and no extra memory. (A SymSpell deletion map was used
+//   first: on the real 85k-title catalog it held 1.4M keys, took 7 s to build and ~460 MB,
+//   which the 1 GB container could not afford.)
 // - Ranking: exact title > title starts with query > all words whole > prefix > fuzzy,
 //   plus a bonus when the query contains the title's year, then shorter titles first.
 // - Built once per catalog snapshot (fingerprinted by size + an id hash) and reused across
@@ -48,29 +49,20 @@ function tokensOf(norm: string): string[] {
   return norm ? norm.split(" ") : [];
 }
 
-function deletions(term: string): string[] {
-  const out: string[] = [];
-  for (let i = 0; i < term.length; i++) out.push(term.slice(0, i) + term.slice(i + 1));
-  return out;
-}
+const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 
-/** True Damerau (OSA) distance <= 1, cheap check without a full DP matrix. */
-function withinOneEdit(a: string, b: string): boolean {
-  if (a === b) return true;
-  const la = a.length, lb = b.length;
-  if (Math.abs(la - lb) > 1) return false;
-  let i = 0;
-  while (i < la && i < lb && a[i] === b[i]) i++;
-  if (la === lb) {
-    if (a.slice(i + 1) === b.slice(i + 1)) return true; // substitution
-    return i + 1 < la && a[i] === b[i + 1] && a[i + 1] === b[i] && a.slice(i + 2) === b.slice(i + 2); // transposition
-  }
-  return la > lb ? a.slice(i + 1) === b.slice(i) : a.slice(i) === b.slice(i + 1); // deletion / insertion
+/** Every string one edit (delete, adjacent swap, substitute, insert) away from `w`. */
+function editsOne(w: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < w.length; i++) out.push(w.slice(0, i) + w.slice(i + 1));
+  for (let i = 0; i + 1 < w.length; i++) out.push(w.slice(0, i) + w[i + 1] + w[i] + w.slice(i + 2));
+  for (let i = 0; i < w.length; i++) for (const c of ALPHABET) if (c !== w[i]) out.push(w.slice(0, i) + c + w.slice(i + 1));
+  for (let i = 0; i <= w.length; i++) for (const c of ALPHABET) out.push(w.slice(0, i) + c + w.slice(i));
+  return out;
 }
 
 interface Doc {
   norm: string;          // normalized full title
-  words: Set<string>;    // its words (and adjacent-pair joins)
   year: string;
   len: number;
 }
@@ -79,7 +71,7 @@ export class SearchIndex<T extends Searchable> {
   private readonly docs: Doc[];
   private readonly vocab: string[];             // sorted unique terms
   private readonly postings: Int32Array[];      // vocab index -> doc ids (ascending)
-  private readonly deletes = new Map<string, number[]>(); // SymSpell: deletion -> vocab indices
+  private readonly termIndex = new Map<string, number>(); // term -> vocab index (typo lookup)
 
   constructor(readonly items: T[]) {
     const termDocs = new Map<string, number[]>();
@@ -93,18 +85,11 @@ export class SearchIndex<T extends Searchable> {
         if (!list) termDocs.set(t, (list = []));
         list.push(docId);
       }
-      return { norm, words: terms, year: String(item.year ?? "").slice(0, 4), len: norm.length };
+      return { norm, year: String(item.year ?? "").slice(0, 4), len: norm.length };
     });
     this.vocab = [...termDocs.keys()].sort();
     this.postings = this.vocab.map((t) => Int32Array.from(termDocs.get(t)!));
-    this.vocab.forEach((term, vi) => {
-      if (term.length < MIN_FUZZY_LEN) return;
-      for (const d of [term, ...deletions(term)]) {
-        let list = this.deletes.get(d);
-        if (!list) this.deletes.set(d, (list = []));
-        list.push(vi);
-      }
-    });
+    this.vocab.forEach((term, vi) => { if (term.length >= MIN_FUZZY_LEN - 1) this.termIndex.set(term, vi); });
   }
 
   private markBuf: Int8Array | null = null;
@@ -123,14 +108,13 @@ export class SearchIndex<T extends Searchable> {
     return [start, lo];
   }
 
-  /** Vocabulary indices within one edit of `word` (SymSpell lookup + verification). */
+  /** Vocabulary indices within one edit of `word` (generated edits looked up in termIndex). */
   private fuzzyTerms(word: string): number[] {
     if (word.length < MIN_FUZZY_LEN) return [];
     const seen = new Set<number>();
-    for (const d of [word, ...deletions(word)]) {
-      for (const vi of this.deletes.get(d) ?? []) {
-        if (!seen.has(vi) && withinOneEdit(word, this.vocab[vi])) seen.add(vi);
-      }
+    for (const e of editsOne(word)) {
+      const vi = this.termIndex.get(e);
+      if (vi !== undefined) seen.add(vi);
     }
     return [...seen];
   }
