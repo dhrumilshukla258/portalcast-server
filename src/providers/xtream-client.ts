@@ -151,10 +151,14 @@ export class XtreamClient implements IProvider {
       .join("|");
   }
 
-  private async makeRequest(params: Record<string, any>) {
+  // `cache: false` skips the 6 h response cache: used for get_short_epg, which is fetched once
+  // per channel per guide refresh and stored in EpgCache anyway — caching 10k parsed (and, with
+  // NodeCache's clone-on-set, copied) EPG responses only held hundreds of MB for 6 h.
+  private async makeRequest(params: Record<string, any>, opts: { cache?: boolean } = {}) {
     this.lastRequestTime = Date.now();
+    const useCache = opts.cache !== false;
     const cacheKey = this.getCacheKey(params);
-    const cachedData = this.cache.get(cacheKey);
+    const cachedData = useCache ? this.cache.get(cacheKey) : undefined;
     if (cachedData !== undefined) {
       return cachedData;
     }
@@ -184,7 +188,7 @@ export class XtreamClient implements IProvider {
       })
       .then((response) => {
         this.breaker.recordSuccess();
-        this.cache.set(cacheKey, response.data);
+        if (useCache) this.cache.set(cacheKey, response.data);
         requestMetrics.record(classifyXtreamRequest(params), "success");
         return response.data;
       })
@@ -288,7 +292,7 @@ export class XtreamClient implements IProvider {
         action: "get_short_epg",
         stream_id: channelId,
         limit: 24,
-      });
+      }, { cache: false });
 
       let listings: any[] = [];
       if (Array.isArray(data)) {
