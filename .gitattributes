@@ -1,0 +1,4 @@
+# Scripts and unit files run on Linux/macOS: always LF.
+*.sh text eol=lf
+*.service text eol=lf
+packaging/linux/* text eol=lf
