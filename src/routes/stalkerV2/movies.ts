@@ -230,13 +230,13 @@ export const movieRoutes: ServerRoute[] = [
             if (cached) cachedMovies.push(...cached);
           }
           if (cachedMovies.length > 0) {
-            const allNormalized = filterBySearch(cachedMovies, search)
+            const allNormalized = filterBySearch(cachedMovies, search, `movie:${category}`)
               .map((m: any) => ({
                 ...m,
                 id: String(m.stream_id),
                 screenshot_uri: m.screenshot_uri || m.stream_icon || "",
               }));
-            const allOverridden = await applyPortalItemOverrides(allNormalized, "movie", String(category), getVodCache);
+            const allOverridden = await applyPortalItemOverrides(allNormalized, "movie", String(category), getVodCache, { searching: !!search });
             const offset = (startApiPage - 1) * itemsPerApiPage;
             const pageData = allOverridden.slice(offset, offset + itemsPerApiPage);
             const responsePayload = {
@@ -274,13 +274,13 @@ export const movieRoutes: ServerRoute[] = [
             // only have the older Xtream-shaped fields — stream_icon is already a complete,
             // working image URL (same one Xtream players render), so fall back to it instead
             // of requiring every old cache entry to be rebuilt from the portal.
-            const allNormalized = filterBySearch(cachedMovies, search)
+            const allNormalized = filterBySearch(cachedMovies, search, `movie:${category}`)
               .map((m: any) => ({
                 ...m,
                 id: String(m.stream_id),
                 screenshot_uri: m.screenshot_uri || m.stream_icon || "",
               }));
-            const allOverridden = await applyPortalItemOverrides(allNormalized, "movie", String(category), getVodCache);
+            const allOverridden = await applyPortalItemOverrides(allNormalized, "movie", String(category), getVodCache, { searching: !!search });
             const offset = (startApiPage - 1) * itemsPerApiPage;
             const pageData = allOverridden.slice(offset, offset + itemsPerApiPage);
             const responsePayload = {

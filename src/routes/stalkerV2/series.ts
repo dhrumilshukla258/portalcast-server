@@ -164,7 +164,7 @@ export const seriesRoutes: ServerRoute[] = [
             if (cached) cachedSeries.push(...cached);
           }
           if (cachedSeries.length > 0) {
-            const allNormalized = filterBySearch(cachedSeries, search)
+            const allNormalized = filterBySearch(cachedSeries, search, `series:${category}`)
               .map((s: any) => ({
                 ...s,
                 id: String(s.series_id),
@@ -174,7 +174,7 @@ export const seriesRoutes: ServerRoute[] = [
                 actors: s.actors || s.cast || "",
                 genres_str: s.genres_str || s.genre || "",
               }));
-            const allOverridden = await applyPortalItemOverrides(allNormalized, "series", String(category), getSeriesCache);
+            const allOverridden = await applyPortalItemOverrides(allNormalized, "series", String(category), getSeriesCache, { searching: !!search });
             const offset = (startApiPage - 1) * itemsPerApiPage;
             const pageData = allOverridden.slice(offset, offset + itemsPerApiPage);
             const responsePayload = {
@@ -211,7 +211,7 @@ export const seriesRoutes: ServerRoute[] = [
             // Existing cached series entries already carry rich data under Xtream-shaped
             // field names (cover/plot/cast/genre) — map them to what the web UI expects
             // instead of requiring every cache entry to be rebuilt from the portal.
-            const allNormalized = filterBySearch(cachedSeries, search)
+            const allNormalized = filterBySearch(cachedSeries, search, `series:${category}`)
               .map((s: any) => ({
                 ...s,
                 id: String(s.series_id),
@@ -221,7 +221,7 @@ export const seriesRoutes: ServerRoute[] = [
                 actors: s.actors || s.cast || "",
                 genres_str: s.genres_str || s.genre || "",
               }));
-            const allOverridden = await applyPortalItemOverrides(allNormalized, "series", String(category), getSeriesCache);
+            const allOverridden = await applyPortalItemOverrides(allNormalized, "series", String(category), getSeriesCache, { searching: !!search });
             const offset = (startApiPage - 1) * itemsPerApiPage;
             const pageData = allOverridden.slice(offset, offset + itemsPerApiPage);
             const responsePayload = {

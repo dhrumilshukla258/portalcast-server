@@ -1,3 +1,4 @@
+import { searchCatalog } from "@/content/searchIndex";
 import axios from "axios";
 import { Readable } from "stream";
 import crypto from "crypto";
@@ -22,10 +23,13 @@ export const CACHE_DURATION_MS = 4 * 60 * 60 * 1000; // 4 hours
 // Case-insensitive substring filter over an item list's display name, used
 // to search already-warmed DB cache entries instead of issuing a live portal
 // search. Lowercases the search term once up front rather than per item.
-export const filterBySearch = <T extends { name?: string }>(items: T[], search: string): T[] => {
-  if (!search) return items;
-  const needle = search.toLowerCase();
-  return items.filter((item) => String(item?.name ?? "").toLowerCase().includes(needle));
+/**
+ * Ranked, typo-tolerant, word-order-independent title search (see content/searchIndex.ts).
+ * `indexKey` names the catalog snapshot (e.g. "movie:*") so its index is reused across requests.
+ */
+export const filterBySearch = <T extends { name?: string }>(items: T[], search: string, indexKey = "default"): T[] => {
+  if (!search || !search.trim()) return items;
+  return searchCatalog(indexKey, items as any[], search) as T[];
 };
 
 export const resolveStalkerUrl = (stalker: any, urlPath: string): string => {

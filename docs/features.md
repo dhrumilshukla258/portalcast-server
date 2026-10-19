@@ -412,6 +412,20 @@ On top of the JWT requirement, a role check applies:
 
 ---
 
+## Search
+
+`/api/v2/movies` and `/api/v2/series` with `search=` use a ranked title index
+(`src/content/searchIndex.ts`), not a substring scan:
+
+- Normalised: case, accents, punctuation and `&`/`and` don't matter; adjacent words are also
+  indexed joined, so "spiderman", "spider man" and "Spider-Man" all match.
+- Every query word must match the start of a title word, in any order ("dark knight bat").
+- One-letter typos are tolerated (SymSpell deletion map), only for words with no prefix match.
+- Ranked: exact title, then starts-with, contains, whole-word, prefix, typo; a year in the
+  query boosts matching titles; shorter titles first.
+- Built once per catalog snapshot (fingerprint of size + ids) and reused; searches keep the
+  ranked order through overrides and never append moved-in items.
+
 ## API Reference
 
 ### Browse (`/api/v2`, used by the web UI and TV apps)

@@ -109,8 +109,10 @@ export async function applyPortalItemOverrides(
   type: "movie" | "series",
   categoryId?: string | null,
   getSourceCache?: (catId: string) => Promise<any[]>,
+  /** Search results: keep the ranked order and don't append moved-in items (they were never matched against the query). */
+  opts: { searching?: boolean } = {},
 ): Promise<any[]> {
-  if (items.length === 0 && !(categoryId && getSourceCache)) return items;
+  if (items.length === 0 && !(categoryId && getSourceCache) ) return items;
   const map = items.length > 0
     ? await loadContentOverrides(items.map((i) => contentKey(type, String(parseInt(i.id)))))
     : new Map<string, any>();
@@ -127,7 +129,7 @@ export async function applyPortalItemOverrides(
       return ov?.display_name ? { ...i, name: ov.display_name } : i;
     });
 
-  if (categoryId && getSourceCache) {
+  if (categoryId && getSourceCache && !opts.searching) {
     const movedIn = await ContentOverride.findAll({
       where: { item_type: type, target_category_id: categoryId },
       raw: true,
@@ -149,7 +151,7 @@ export async function applyPortalItemOverrides(
   }
 
   const hasSortOrder = [...map.values()].some((ov) => ov.sort_order != null);
-  if (hasSortOrder) {
+  if (hasSortOrder && !opts.searching) {
     result.sort((a, b) => {
       const aOrder = map.get(contentKey(type, String(parseInt(a.id))))?.sort_order ?? Infinity;
       const bOrder = map.get(contentKey(type, String(parseInt(b.id))))?.sort_order ?? Infinity;
