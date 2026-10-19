@@ -1,4 +1,5 @@
 ﻿import { ServerRoute } from "@hapi/hapi";
+import { sniffImage, mimeOf, svgHeaders, type ImageKind } from "@/infra/sniffImage";
 import { recordFromRequest } from "@/services/SecurityEvents";
 import {
   writeJSON,
@@ -14,7 +15,6 @@ import axios from "axios";
 import { ConfigProfile } from "@/models/ConfigProfile";
 import { ContentCache } from "@/models/ContentCache";
 import { stalkerApi } from "@/providers/stalker";
-import { Readable } from "stream";
 import dns from "dns";
 import net from "net";
 import { Agent } from "undici";
@@ -33,7 +33,7 @@ import { mintDownloadToken, DownloadPayload } from "@/services/downloadTokens";
 import crypto from "crypto";
 import { getEpgCache, fetchAndCacheEpg } from "@/content/epg";
 import { getPublicOrigin } from "@/infra/publicUrl";
-import { channelLogoPath, proxiedLogoPath } from "@/providers/portalAssets";
+import { channelLogoPath, proxiedLogoPath, verifyImageProxySignature } from "@/providers/portalAssets";
 import { fetchMovieMeta, fetchTVMeta } from "@/content/tmdb";
 import { searchSubtitles, resolveSubtitleDownloadUrl } from "@/content/opensubtitles";
 import {
@@ -72,6 +72,23 @@ function isPrivateOrLoopbackAddress(address: string): boolean {
 }
 
 class ForbiddenHostError extends Error {}
+
+// Relayed images are buffered (posters/logos are small) so their real type can be read
+// from the bytes. Anything over the cap or not an image is refused.
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+async function readImageBody(response: Response): Promise<{ buf: Buffer; kind: ImageKind } | null> {
+  const len = Number(response.headers.get("content-length") || 0);
+  if (len > MAX_IMAGE_BYTES) return null;
+  const buf = Buffer.from(await response.arrayBuffer());
+  if (buf.length > MAX_IMAGE_BYTES) return null;
+  const kind = sniffImage(buf);
+  return kind ? { buf, kind } : null;
+}
+function imageResponse(h: any, img: { buf: Buffer; kind: ImageKind }) {
+  const r = h.response(img.buf).type(mimeOf(img.kind)).header("cache-control", "max-age=3600");
+  if (img.kind === "svg") for (const [k, v] of Object.entries(svgHeaders)) r.header(k, v);
+  return r;
+}
 
 // Resolves `hostname` once, rejects private/loopback/link-local results, and
 // pins the actual TCP connection to that validated address via undici's
@@ -130,14 +147,13 @@ export const playlistDomainRoutes: ServerRoute[] = [
             .code(404);
         }
 
-        const contentType =
-          response.headers.get("content-type") || "image/jpeg";
-        const nodeStream = Readable.fromWeb(response.body as any);
-
-        return h
-          .response(nodeStream)
-          .type(contentType)
-          .header("cache-control", "max-age=3600");
+        // Served by what the bytes are, not by what the portal claims (or the extension).
+        const img = await readImageBody(response);
+        if (!img) {
+          recordFromRequest(request, "image_proxy_blocked", `portal path ${slug.slice(0, 80)} is not an image`);
+          return h.response({ success: false, message: "Not an image" }).code(400);
+        }
+        return imageResponse(h, img);
       } catch (err) {
         logger.error({ err }, "Piping error");
         return h
@@ -158,8 +174,12 @@ export const playlistDomainRoutes: ServerRoute[] = [
     method: "GET",
     path: "/api/images/proxy",
     handler: async (request, h) => {
-      const { u } = request.query as { u?: string };
+      const { u, s } = request.query as { u?: string; s?: string };
       if (!u) return h.response({ success: false, message: "Missing u" }).code(400);
+      if (!verifyImageProxySignature(u, s)) {
+        recordFromRequest(request, "image_proxy_blocked", "unsigned or tampered image URL");
+        return h.response({ success: false, message: "Forbidden" }).code(403);
+      }
 
       let targetUrl: string;
       let parsed: URL;
@@ -194,16 +214,14 @@ export const playlistDomainRoutes: ServerRoute[] = [
           logger.warn(`[images/proxy] upstream ${parsed.hostname} returned ${response.status}`);
           return h.response({ success: false, message: "Image not found" }).code(404);
         }
-        const contentType = response.headers.get("content-type") || "";
-        if (!contentType.startsWith("image/")) {
-          logger.warn(`[images/proxy] ${parsed.hostname} sent non-image content-type "${contentType}" for ${parsed.pathname}`);
+        // Served by what the bytes are, not by the upstream's Content-Type.
+        const img = await readImageBody(response);
+        if (!img) {
+          recordFromRequest(request, "image_proxy_blocked", `${parsed.hostname} returned a non-image`);
+          logger.warn(`[images/proxy] ${parsed.hostname} sent a non-image for ${parsed.pathname}`);
           return h.response({ success: false, message: "Not an image" }).code(400);
         }
-        const nodeStream = Readable.fromWeb(response.body as any);
-        return h
-          .response(nodeStream)
-          .type(contentType)
-          .header("cache-control", "max-age=3600");
+        return imageResponse(h, img);
       } catch (err) {
         if (err instanceof ForbiddenHostError) {
           recordFromRequest(request, "image_proxy_blocked", parsed.hostname);

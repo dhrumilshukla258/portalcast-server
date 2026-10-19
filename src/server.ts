@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { clientIp, isSecureRequest } from "./infra/clientIp";
+import { suspiciousRequestReason } from "./infra/requestHygiene";
 import { recordFromRequest, isBanned, purgeOld as purgeOldSecurityEvents } from "./services/SecurityEvents";
 import { purgeRefreshTokens } from "./services/RefreshTokens";
 import { securityRoutes } from "./routes/admin/security";
@@ -161,6 +162,15 @@ const init = async () => {
       return h.response({ error: "Too Many Requests" }).code(429).takeover();
     }
 
+    // Request hygiene: traversal, null bytes, script/SQL-shaped input and oversized URLs
+    // have no legitimate use here. Rejected outright and counted toward a ban.
+    const rawUrl = request.url.pathname + request.url.search;
+    const shady = suspiciousRequestReason(rawUrl, request.headers["user-agent"] as string | undefined);
+    if (shady) {
+      recordFromRequest(request, "suspicious_request", shady);
+      return h.response({ error: "Bad Request" }).code(400).takeover();
+    }
+
     if (isThrottledAuthEndpoint) {
       // Refresh is routine (every hour per device): a wider bucket than password tries.
       const max = p === "/api/auth/refresh" ? ADMIN_LOGIN_RL_MAX * 12 : ADMIN_LOGIN_RL_MAX;
@@ -184,17 +194,21 @@ const init = async () => {
     // bucket, never lock the same IP out of movie/series playback too.
     const isLiveStream = p.startsWith("/live.m3u8") || p.startsWith("/player/");
     const isVodStream = p.startsWith("/api/media/");
+    // The unauthenticated image relays (an <img> cannot send a bearer token) get their
+    // own bucket: a poster-heavy page is a few hundred requests, a scraper is thousands.
+    const isImage = p.startsWith("/api/images/");
 
-    if (isLiveStream || isVodStream) {
-      const key = `${isLiveStream ? "live" : "vod"}:${ip}`;
+    if (isLiveStream || isVodStream || isImage) {
+      const key = `${isLiveStream ? "live" : isVodStream ? "vod" : "img"}:${ip}`;
       const now = Date.now();
       const entry = rlMap.get(key);
       if (!entry || now - entry.windowStart > RL_WINDOW) {
         rlMap.set(key, { count: 1, windowStart: now });
       } else {
         entry.count++;
-        if (entry.count > RL_MAX) {
-          if (entry.count === RL_MAX + 1) recordFromRequest(request, "stream_throttled");
+        const max = isImage ? RL_MAX * 5 : RL_MAX;
+        if (entry.count > max) {
+          if (entry.count === max + 1) recordFromRequest(request, "stream_throttled", isImage ? "images" : undefined);
           return h.response({ error: "Too Many Requests" }).code(429).takeover();
         }
       }
@@ -289,11 +303,11 @@ const init = async () => {
     method: "GET",
     path: "/api/health",
     options: { auth: false },
-    handler: (_request, h) => {
+    handler: (request, h) => {
       return h.response({
         status: "ok",
-        uptimeSeconds: Math.floor((Date.now() - startTime) / 1000),
-        provider: initialConfig.providerType ?? "unknown",
+        // Nothing about the setup (provider type, uptime) for anonymous callers.
+        ...(authCheck(request) ? { uptimeSeconds: Math.floor((Date.now() - startTime) / 1000), provider: initialConfig.providerType ?? "unknown" } : {}),
       }).code(200);
     },
   });
@@ -306,6 +320,7 @@ const init = async () => {
       // An unknown API path is a 404, not the webui's index.html: clients probe newer
       // endpoints (e.g. /api/v2/epg/window) and must be able to tell they are missing.
       if (param === "api" || param.startsWith("api/")) {
+        recordFromRequest(request, "unknown_api_path");
         return h.response({ error: "Not found" }).code(404);
       }
       const publicRoot = path.join(process.cwd(), "public");

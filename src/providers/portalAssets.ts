@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { initialConfig } from "@/config/server";
 
 // Normalizes a portal channel logo reference to a portal-root path suitable
@@ -53,6 +54,22 @@ export function proxiedImageUrl(url?: string, origin?: string): string {
   } catch {
     // Malformed URL — fall through and proxy it anyway rather than leak it as-is.
   }
-  const relative = `/api/images/proxy?u=${Buffer.from(url, "utf8").toString("base64url")}`;
+  const u = Buffer.from(url, "utf8").toString("base64url");
+  // Signed: the proxy only fetches URLs this server handed out, so it is never an open
+  // image relay anyone on the internet can point at arbitrary hosts.
+  const relative = `/api/images/proxy?u=${u}&s=${imageProxySignature(u)}`;
   return origin ? `${origin}${relative}` : relative;
+}
+
+const IMAGE_PROXY_KEY = crypto.createHmac("sha256", process.env.JWT_SECRET || "portalcast").update("image-proxy").digest();
+
+export function imageProxySignature(u: string): string {
+  return crypto.createHmac("sha256", IMAGE_PROXY_KEY).update(u).digest("base64url").slice(0, 22);
+}
+
+export function verifyImageProxySignature(u: string, s: string | undefined): boolean {
+  if (!s) return false;
+  const want = Buffer.from(imageProxySignature(u));
+  const have = Buffer.from(String(s));
+  return want.length === have.length && crypto.timingSafeEqual(want, have);
 }

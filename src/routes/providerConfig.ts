@@ -1,4 +1,6 @@
 import { ServerRoute } from "@hapi/hapi";
+import { sniffRasterImage } from "@/infra/sniffImage";
+import { recordFromRequest } from "@/services/SecurityEvents";
 import * as fs from "fs/promises";
 import * as path from "path";
 import { logger } from "@/infra/logger";
@@ -34,7 +36,9 @@ export const configRoutes: ServerRoute[] = [
     method: "GET",
     path: "/api/v2/provider-key",
     handler: async () => ({
-      providerKey: `${initialConfig.providerType || "stalker"}_${initialConfig.hostname || "default_host"}`,
+      // Stable per-provider key for client preferences. Was `<type>_<hostname>`, which
+      // told every signed-in user the upstream portal's address; now a hash of it.
+      providerKey: `${initialConfig.providerType || "stalker"}_${crypto.createHash("sha256").update(`${initialConfig.hostname || "default_host"}:${initialConfig.port || ""}`).digest("hex").slice(0, 16)}`,
     }),
   },
   {
@@ -183,9 +187,15 @@ export const configRoutes: ServerRoute[] = [
         const file = payload?.file;
         if (!file) return h.response({ error: "No file provided" }).code(400);
 
-        const filename = file.hapi?.filename || `upload-${Date.now()}`;
-        const cleanFilename = filename.replace(/[^a-zA-Z0-9.\-_]/g, "_");
-        const uniqueFilename = `${Date.now()}-${cleanFilename}`;
+        // Judged by content, never by the name the browser sent: only raster images are
+        // stored, under a name we choose, so nothing executable or HTML-like can land in
+        // /uploads (which is served from our origin).
+        const kind = sniffRasterImage(file as Buffer);
+        if (!kind) {
+          recordFromRequest(request, "upload_rejected", "carousel image is not a raster image");
+          return h.response({ error: "Only PNG, JPEG, GIF, WebP or AVIF images are allowed" }).code(400);
+        }
+        const uniqueFilename = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}.${kind}`;
         
         await fs.mkdir(uploadDir, { recursive: true });
         const filePath = path.join(uploadDir, uniqueFilename);

@@ -31,6 +31,8 @@ export type SecurityKind =
   | "image_proxy_blocked"    // image proxy pointed at a private/loopback address
   | "upload_rejected"        // avatar upload was not an image
   | "reset_token_invalid"
+  | "suspicious_request"     // traversal / injection-shaped path or query, oversized URL
+  | "unknown_api_path"       // probing for routes that do not exist
   | "ip_banned"
   | "ip_unbanned";
 
@@ -55,7 +57,7 @@ const MEMORY_RECENT = 500;
 const BANNABLE: ReadonlySet<SecurityKind> = new Set([
   "login_failed", "login_disabled", "google_token_invalid", "token_invalid", "forbidden",
   "refresh_invalid", "refresh_reuse", "pairing_code_invalid", "stream_token_invalid",
-  "image_proxy_blocked", "reset_token_invalid",
+  "image_proxy_blocked", "reset_token_invalid", "suspicious_request", "unknown_api_path",
 ]);
 
 // ---- state ------------------------------------------------------------------------

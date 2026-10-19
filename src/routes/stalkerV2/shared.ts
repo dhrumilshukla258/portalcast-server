@@ -147,7 +147,24 @@ export async function* streamHlsSegments(
 // known, and the TMDB lookup runs in the background to populate the cache for next time.
 // This keeps every page load fast regardless of TMDB's response time; the trade-off is a
 // brand-new (never-viewed) item may show without its TMDB image until a later reload.
+/**
+ * Fields that would reveal the upstream portal to a client inspecting responses:
+ * `stream_icon`/`cover` (raw logo URLs on the portal host) and `direct_source` (a raw
+ * stream URL on some portals). Clients only ever use the proxied `screenshot_uri`.
+ */
+function stripUpstreamFields(item: any, origin?: string): any {
+  if (!item || typeof item !== "object") return item;
+  const { stream_icon: _si, direct_source: _ds, cover, ...rest } = item;
+  if (typeof cover === "string" && cover) rest.cover = proxiedImageUrl(cover, origin);
+  return rest;
+}
+
 export async function enrichArtworkFromTmdb(items: any[], kind: "movie" | "series", origin?: string): Promise<any[]> {
+  const enriched = await enrichArtworkFromTmdbRaw(items, kind, origin);
+  return enriched.map((it) => stripUpstreamFields(it, origin));
+}
+
+async function enrichArtworkFromTmdbRaw(items: any[], kind: "movie" | "series", origin?: string): Promise<any[]> {
   const cacheKeys = items.map((item: any) => {
     const itemId = item.id ?? item.stream_id ?? item.series_id;
     return itemId ? `tmdb_web_${kind}_${itemId}` : undefined;

@@ -1,5 +1,6 @@
 import { cmdPlayerV2 } from "@/streaming/cmdPlayer";
 import { recordFromRequest } from "@/services/SecurityEvents";
+import { proxyUrlFor } from "@/services/StreamTokens";
 import axios, { AxiosError, AxiosResponse } from "axios";
 import { ServerRoute } from "@hapi/hapi";
 import { http, https } from "follow-redirects";
@@ -276,6 +277,8 @@ async function handleProxy(cmd: string, play: string | undefined, h: any, userLa
   }
 }
 
+const ALLOW_DIRECT_STREAMS = process.env.ALLOW_DIRECT_STREAMS === "true";
+
 async function handleNonProxy(cmd: string, h: ResponseToolkit<ReqRefDefaults>) {
   try {
     const redirectedUrl = await cmdPlayerV2(cmd);
@@ -345,7 +348,10 @@ async function serveLivePlaylist(request: any, h: any, entry: NonNullable<Return
   // so they get a direct redirect and stream from the portal without server load.
   const ua = String(request.headers["user-agent"] || "");
   const isSmartTv = /Tizen|SMART-TV|SmartTV|Web0S|WebOS/i.test(ua);
-  const forceProxy = proxyParam === "1" && !isSmartTv;
+  // Unless the admin opted in (ALLOW_DIRECT_STREAMS=true), every stream is relayed: a
+  // redirect would hand the provider's address to the client (smart-TV webviews and
+  // proxy=0 used to get one by default).
+  const forceProxy = (proxyParam === "1" && !isSmartTv) || !ALLOW_DIRECT_STREAMS;
 
   if (initialConfig.providerType === "xtream") {
     const useProxy = forceProxy || (initialConfig.proxy && proxyParam !== "0");
@@ -380,6 +386,8 @@ async function serveLivePlaylist(request: any, h: any, entry: NonNullable<Return
     try {
       const redirectedUrl = await cmdPlayerV2(cmd, Number(start_time), Number(end_time));
       if (redirectedUrl) {
+        // Catch-up used to redirect straight to the provider; relay it like everything else.
+        if (!ALLOW_DIRECT_STREAMS) return h.redirect(proxyUrlFor(redirectedUrl, userLabel, meta)).code(302);
         return h.redirect(redirectedUrl).code(302);
       }
       return h.response({ error: "Unable to fetch catchup stream" }).code(400);

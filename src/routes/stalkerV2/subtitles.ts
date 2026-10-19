@@ -1,4 +1,5 @@
 ﻿import { ServerRoute } from "@hapi/hapi";
+import { toVtt } from "@/content/subtitleText";
 import { SubtitleFile } from "@/models/SubtitleFile";
 import {
   writeJSON,
@@ -49,13 +50,6 @@ import {
 const SEARCH_TTL_MS = 24 * 60 * 60 * 1000;
 const searchCache = new Map<string, { at: number; results: unknown[] }>();
 
-/** SRT -> WebVTT (the web player's <track> only reads VTT; the TV parses either). */
-function toVtt(text: string): string {
-  const body = String(text).replace(/^﻿/, "");
-  if (/^WEBVTT/.test(body)) return body;
-  return "WEBVTT\n\n" + body.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2");
-}
-
 export const subtitleRoutes: ServerRoute[] = [
   {
     // Searches every configured source in parallel (OpenSubtitles, SubDL) and merges:
@@ -67,7 +61,9 @@ export const subtitleRoutes: ServerRoute[] = [
         const { title, year, season, episode, lang } = request.query as {
           title?: string; year?: string; season?: string; episode?: string; lang?: string;
         };
-        if (!title) return h.response({ error: "Missing title" }).code(400);
+        if (!title || title.length > 200) return h.response({ error: "Missing or too long title" }).code(400);
+        for (const v of [year, season, episode]) if (v !== undefined && !/^\d{1,4}$/.test(String(v))) return h.response({ error: "Invalid number" }).code(400);
+        if (lang !== undefined && !/^[a-z]{2,3}(-[a-z]{2})?$/i.test(String(lang))) return h.response({ error: "Invalid language" }).code(400);
 
         // Same query from any client within 24 h is answered from memory (saves API calls).
         // Only non-empty answers are cached, so a user who adds a key gets results right away.
@@ -134,6 +130,10 @@ export const subtitleRoutes: ServerRoute[] = [
         if (!text || !text.trim()) return h.response({ error: "Subtitle download failed" }).code(502);
 
         const vtt = toVtt(text);
+        if (!vtt) {
+          logger.warn(`[subtitles] ${id}: provider returned something that is not a subtitle file`);
+          return h.response({ error: "That file is not a subtitle" }).code(502);
+        }
         await SubtitleFile.upsert({ key: id, vtt }).catch((e: any) =>
           logger.warn(`[subtitles] could not store ${id}: ${e?.message ?? e}`));
         return h.response(vtt).header("Content-Type", "text/vtt; charset=utf-8");

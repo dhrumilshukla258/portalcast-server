@@ -116,6 +116,7 @@ Set provider type to **Xtream** in the profile form, then enter host, username, 
 | `SUBDL_API_KEY` | — | Second subtitle source ([subdl.com](https://subdl.com), free key: ~2,000 searches and ~50 downloads per day). Results from both sources are merged; every downloaded file is stored, so each one is fetched only once. Viewers never need an account |
 | `TRUSTED_PROXIES` | — | Set to `private` when running behind a reverse proxy on the same host/LAN/Docker (or list proxy IPs/CIDRs). Lets the server see each viewer's real address for rate limits, the security log and automatic bans; without it every viewer shares the proxy's address and auto-bans stay off |
 | `SECURITY_BAN_AFTER` / `SECURITY_BAN_MINUTES` | `20` / `60` | An address with that many failed sign-ins or rejected tokens within 15 min is banned from the API for that many minutes. Admin > Security lists events and bans |
+| `ALLOW_DIRECT_STREAMS` | `false` | Off: every live stream is relayed through this server, so the provider's addresses never reach a client. `true` lets clients that ask for it (TV app "Direct live streams") be redirected straight to the provider's CDN |
 | `GOOGLE_CLIENT_ID` | — | Google OAuth client ID (enables Google sign-in) |
 | `TLS_CERT_PATH` | — | TLS certificate path (enables HTTPS on the server) |
 | `TLS_KEY_PATH` | — | TLS key path |
@@ -127,7 +128,7 @@ Full variable reference and all features → **[docs/features.md](docs/features.
 
 ## Authentication
 
-Sessions are revocable: every refresh token is recorded (by hash) and rotated on use; sign-out, disabling a user, changing their role or an admin's "sign out everywhere" (Admin > Security) revoke them, and a replayed old token revokes the whole session. Suspicious activity (failed sign-ins, bad tokens, forbidden requests, wrong pairing codes, image-proxy abuse) is logged under Admin > Security, and addresses that keep failing are banned temporarily (see `TRUSTED_PROXIES`).
+Sessions are revocable: every refresh token is recorded (by hash) and rotated on use; sign-out, disabling a user, changing their role or an admin's "sign out everywhere" (Admin > Security) revoke them, and a replayed old token revokes the whole session. Suspicious activity (failed sign-ins, bad tokens, forbidden requests, wrong pairing codes, image-proxy abuse, hostile request shapes, route probing) is logged under Admin > Security, and addresses that keep failing are banned temporarily (see `TRUSTED_PROXIES`).
 
 
 One user store (the `Users` table), reachable through several doors:
@@ -145,6 +146,10 @@ Stream endpoints (`/live.m3u8`, `/api/proxy`, `/player/*`, etc.) can't require a
 No exceptions — every stream-adjacent route (including downloads and embedded-subtitle extraction) requires a valid token bound to that exact resource on every request, not just the initial one. The single unauthenticated route left is `/api/images/{slug*}` (poster/logo relay) — restricted to real image paths, no credentials or streams reachable through it.
 
 ---
+
+## What clients can and cannot see
+
+The provider's address never reaches a client: stream links are opaque tokens relayed by this server, HLS playlists are rewritten (segments, keys, init maps), artwork goes through signed image-proxy URLs, raw portal fields (`stream_icon`, `cover`, `direct_source`) are stripped from catalog responses, and the per-provider preference key is a hash. Uploads and relayed images are accepted by content (magic bytes), never by extension or declared type; subtitle files must parse as subtitles. Unknown `/api` paths, traversal/injection-shaped requests and scanner tools are rejected, logged and count toward a ban.
 
 ## Clients
 

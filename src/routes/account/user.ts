@@ -1,4 +1,5 @@
 import { ServerRoute } from "@hapi/hapi";
+import { sniffRasterImage } from "@/infra/sniffImage";
 import crypto from "crypto";
 import { recordFromRequest } from "@/services/SecurityEvents";
 import axios from "axios";
@@ -29,16 +30,6 @@ const getActiveProfileId = async () => {
   });
   return activeProfile?.id || 1;
 };
-
-/** "png" | "jpg" | "gif" | "webp" from the file's first bytes, else null. */
-function imageKind(buf: Buffer): "png" | "jpg" | "gif" | "webp" | null {
-  if (!Buffer.isBuffer(buf) || buf.length < 12) return null;
-  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return "png";
-  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "jpg";
-  if (buf.subarray(0, 4).toString("ascii") === "GIF8") return "gif";
-  if (buf.subarray(0, 4).toString("ascii") === "RIFF" && buf.subarray(8, 12).toString("ascii") === "WEBP") return "webp";
-  return null;
-}
 
 export const userRoutes: ServerRoute[] = [
   {
@@ -306,9 +297,9 @@ export const userRoutes: ServerRoute[] = [
 
         // Only real raster images, judged by content (a .png that is really HTML or SVG
         // would be served from our origin as whatever it is). The stored name is ours.
-        const kind = imageKind(file);
+        const kind = sniffRasterImage(file as Buffer);
         if (!kind) {
-          recordFromRequest(request, "upload_rejected", "avatar is not a png/jpeg/gif/webp", user.id);
+          recordFromRequest(request, "upload_rejected", "avatar is not a raster image", user.id);
           return h.response({ error: "Only PNG, JPEG, GIF or WebP images are allowed" }).code(400);
         }
         const uniqueFilename = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}.${kind}`;
