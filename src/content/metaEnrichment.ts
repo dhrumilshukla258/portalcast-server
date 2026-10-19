@@ -287,31 +287,41 @@ async function enrichSeries(): Promise<void> {
 // since SQLite has no single-statement UPSERT-across-groups primitive.
 export async function recomputeRepresentatives(): Promise<void> {
   const sequelize = ContentMeta.sequelize!;
-  await sequelize.query("UPDATE `content_meta` SET `isRepresentative` = 0;");
-  await sequelize.query(`
-    UPDATE \`content_meta\` SET \`isRepresentative\` = 1 WHERE \`id\` IN (
-      SELECT cm1.id FROM \`content_meta\` cm1
-      WHERE cm1.groupKey IS NOT NULL
-        AND cm1.id = (
-          SELECT cm2.id FROM \`content_meta\` cm2
-          WHERE cm2.groupKey = cm1.groupKey
-          ORDER BY (cm2.source = 'tmdb') DESC, cm2.poster IS NOT NULL DESC, cm2.enrichedAt DESC
-          LIMIT 1
-        )
-    );
-  `);
-
-  // Mirror the flag onto the tag tables so facet counting can filter on a
-  // plain indexed column of the table it's already querying, with zero join
-  // back to content_meta — see ContentGenre.ts for the incident that made
-  // this necessary (an unconditional join here took the whole server down).
-  for (const table of ["content_genres", "content_countries", "content_themes"]) {
-    await sequelize.query(`
-      UPDATE \`${table}\` SET \`isRepresentative\` = (
-        SELECT cm.isRepresentative FROM \`content_meta\` cm WHERE cm.id = \`${table}\`.\`contentId\`
-      );
+  // One representative per groupKey: TMDB-sourced first, then has a poster, then most
+  // recently enriched (id breaks remaining ties, so the choice is deterministic).
+  //
+  // Computed once into a temp table, then only rows whose flag is actually wrong are
+  // written. The previous version reset and rewrote the flag on every content_meta row
+  // and every tag row (~540k rows on the live data), on every startup and after every
+  // enrichment run: 21–30 s of writes, each also updating every index containing the
+  // flag, even when nothing had changed. Measured on a live copy: 3 s on a typical
+  // restart (0 rows written), with the identical selection.
+  //
+  // The tag tables mirror the flag so facet/browse filtering never needs a join back to
+  // content_meta (see ContentGenre.ts for the incident that made this necessary).
+  // Runs inside one transaction so the temp table and the updates share a connection.
+  await sequelize.transaction(async (transaction) => {
+    const q = (sql: string) => sequelize.query(sql, { transaction });
+    await q("CREATE TEMP TABLE IF NOT EXISTS `rep_ids` (`id` TEXT PRIMARY KEY) WITHOUT ROWID;");
+    await q("DELETE FROM temp.`rep_ids`;");
+    await q(`
+      INSERT INTO temp.\`rep_ids\` (\`id\`)
+      SELECT \`id\` FROM (
+        SELECT \`id\`, ROW_NUMBER() OVER (
+          PARTITION BY \`groupKey\`
+          ORDER BY (\`source\` = 'tmdb') DESC, \`poster\` IS NOT NULL DESC, \`enrichedAt\` DESC, \`id\` ASC
+        ) AS rn
+        FROM \`content_meta\` WHERE \`groupKey\` IS NOT NULL
+      ) WHERE rn = 1;
     `);
-  }
+    await q("UPDATE `content_meta` SET `isRepresentative` = 1 WHERE `isRepresentative` IS NOT 1 AND `id` IN (SELECT `id` FROM temp.`rep_ids`);");
+    await q("UPDATE `content_meta` SET `isRepresentative` = 0 WHERE `isRepresentative` IS NOT 0 AND `id` NOT IN (SELECT `id` FROM temp.`rep_ids`);");
+    for (const table of ["content_genres", "content_countries", "content_themes"]) {
+      await q(`UPDATE \`${table}\` SET \`isRepresentative\` = 1 WHERE \`isRepresentative\` IS NOT 1 AND \`contentId\` IN (SELECT \`id\` FROM temp.\`rep_ids\`);`);
+      await q(`UPDATE \`${table}\` SET \`isRepresentative\` = 0 WHERE \`isRepresentative\` IS NOT 0 AND \`contentId\` NOT IN (SELECT \`id\` FROM temp.\`rep_ids\`);`);
+    }
+    await q("DELETE FROM temp.`rep_ids`;");
+  });
 }
 
 // One-time repair for rows enriched before portalCategoryId existed —
