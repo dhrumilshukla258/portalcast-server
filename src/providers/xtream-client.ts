@@ -335,6 +335,14 @@ export class XtreamClient implements IProvider {
   }
 
   async getMovies(params: MoviesApiParams): Promise<Data<Programs<Video>>> {
+    // Episode file lookup (`/api/v2/movies?movieId=<seriesId>&seasonId=&episodeId=`), the call both
+    // clients make before movie-link. On Xtream, movieId here is a SERIES id: falling through to
+    // get_vod_info looked up an unrelated movie with that id, so episodes played the wrong file or
+    // failed (found 2026-10-18 driving the TV app). Return the episode from get_series_info instead.
+    if (params.episodeId && Number(params.episodeId) > 0 && params.movieId) {
+      const episode = await this.findEpisode(params.movieId, params.episodeId);
+      return { js: { total_items: episode ? 1 : 0, max_page_items: 1, data: episode ? [episode] : [] } };
+    }
     if (params.movieId && Number(params.movieId) !== 0) {
       try {
         const data = await this.makeRequest({
@@ -492,6 +500,35 @@ export class XtreamClient implements IProvider {
       censored: 0,
     }));
     return { js: genres };
+  }
+
+  /** One episode of a series, shaped like getSeries' episode rows; null if not found. */
+  private async findEpisode(seriesId: number | string, episodeId: number | string): Promise<Video | null> {
+    const data = await this.makeRequest({ action: "get_series_info", series_id: seriesId });
+    if (!data?.episodes) return null;
+    for (const seasonNum of Object.keys(data.episodes)) {
+      const list = data.episodes[seasonNum];
+      if (!Array.isArray(list)) continue;
+      const ep = list.find((e: any) => String(e.id) === String(episodeId));
+      if (!ep) continue;
+      const duration = ep.info?.duration_secs
+        ? Math.floor(parseInt(ep.info.duration_secs) / 60)
+        : ep.info?.duration ? parseDurationToMinutes(ep.info.duration) : 0;
+      return {
+        id: ep.id,
+        name: ep.title || `Episode ${ep.episode_num}`,
+        cmd: `${this.baseUrl}/series/${this.username}/${this.password}/${ep.id}.${ep.container_extension || "mp4"}`,
+        screenshot_uri: ep.info?.movie_image || data.info?.cover,
+        category_id: data.info?.category_id,
+        time: duration,
+        rating_imdb: data.info?.rating,
+        series: [],
+        is_episode: 1,
+        series_number: parseInt(seasonNum),
+        episode_number: parseInt(ep.episode_num),
+      } as any;
+    }
+    return null;
   }
 
   async getSeries(params: MoviesApiParams): Promise<Data<Programs<Video>>> {
