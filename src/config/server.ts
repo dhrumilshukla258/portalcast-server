@@ -25,7 +25,9 @@ export const serverConfig = {
   port: Number(process.env.PORT) || 3000,
   ...(tlsConfig ? { tls: tlsConfig } : {}),
   routes: {
-    cors: { origin: ["*"] },
+    // ETag exposed so cross-origin clients (the Tizen build) can revalidate
+    // /api/v2/epg/window with If-None-Match (already an allowed request header).
+    cors: { origin: ["*"], additionalExposedHeaders: ["ETag"] },
     state: {
       parse: false,
       failAction: "ignore" as const,
