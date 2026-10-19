@@ -1,0 +1,132 @@
+# Native PortalCast Server packages, attached to a GitHub Release.
+#
+#   git tag v1.2.0 && git push origin v1.2.0      -> builds everything and publishes the release
+#   Actions > Release > Run workflow               -> test build (artifacts only, no release)
+#
+# Each package bundles the official Node.js runtime (same major as the Docker image) and the
+# production node_modules built on that OS/CPU, so nothing else needs to be installed.
+# ffmpeg stays optional (HEVC live / VOD transcoding); the .deb recommends it.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_MAJOR: "20"
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-x64,   os: ubuntu-22.04,     node: linux-x64,    deb: amd64 }
+          - { target: linux-arm64, os: ubuntu-22.04-arm, node: linux-arm64,  deb: arm64 }
+          - { target: windows-x64, os: windows-2022,     node: win-x64 }
+          - { target: macos-arm64, os: macos-14,         node: darwin-arm64, mac: arm64 }
+          - { target: macos-x64,   os: macos-15-intel,   node: darwin-x64,   mac: x64 }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_MAJOR }}
+          cache: npm
+
+      - name: Version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then V="${GITHUB_REF_NAME#v}"; else V="$(node -p "require('./package.json').version")-dev.${GITHUB_RUN_NUMBER}"; fi
+          echo "PORTALCAST_VERSION=$V" >> "$GITHUB_ENV"
+          echo "NODE_VERSION=$(node -p process.version)" >> "$GITHUB_ENV"
+
+      - name: Install, build, prune
+        run: |
+          npm ci
+          npm run build
+          npm prune --omit=dev
+
+      - name: Fetch Node.js runtime (${{ env.NODE_VERSION }}, ${{ matrix.node }})
+        run: |
+          mkdir -p build && cd build
+          base="https://nodejs.org/dist/${NODE_VERSION}"
+          name="node-${NODE_VERSION}-${{ matrix.node }}"
+          if [[ "${{ matrix.node }}" == win-* ]]; then
+            curl -fsSLO "$base/$name.zip"; unzip -q "$name.zip"
+          else
+            ext=tar.gz; [[ "${{ matrix.node }}" == linux-* ]] && ext=tar.xz
+            curl -fsSLO "$base/$name.$ext"; tar -xf "$name.$ext"
+          fi
+          curl -fsSL "$base/SHASUMS256.txt" -o SHASUMS256.txt
+          grep -E " ${name}\.(zip|tar\.gz|tar\.xz)$" SHASUMS256.txt > expected.txt
+          if command -v sha256sum >/dev/null; then sha256sum -c expected.txt; else shasum -a 256 -c expected.txt; fi
+          echo "NODE_DIR=$PWD/$name" >> "$GITHUB_ENV"
+
+      - name: Assemble bundle
+        run: node packaging/build-bundle.mjs --node "$NODE_DIR" --out build/portalcast-server
+
+      - name: Smoke test (launcher creates config, server answers)
+        run: |
+          D="$RUNNER_TEMP/pc-smoke"; mkdir -p "$D"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then N=build/portalcast-server/node/node.exe; else N=build/portalcast-server/node/bin/node; fi
+          "$N" build/portalcast-server/launcher.js --config "$D/portalcast.env" --data "$D/data" > "$D/log.txt" 2>&1 &
+          for i in $(seq 1 60); do curl -fs -o /dev/null http://127.0.0.1:3000/ && ok=1 && break; sleep 2; done
+          cat "$D/log.txt" | tail -20
+          [[ "${ok:-}" == 1 ]] || { echo "server did not answer"; exit 1; }
+          test -f "$D/FIRST-RUN.txt"
+          kill %1 || true
+
+      - name: Package (.deb + .tar.gz)
+        if: matrix.deb
+        run: |
+          curl -fsSL "https://github.com/goreleaser/nfpm/releases/download/v2.41.1/nfpm_2.41.1_Linux_$( [[ ${{ matrix.deb }} == arm64 ]] && echo arm64 || echo x86_64 ).tar.gz" | tar -xz -C build nfpm
+          mkdir -p dist-pkg
+          NFPM_ARCH=${{ matrix.deb }} BUNDLE_DIR=build/portalcast-server build/nfpm package --packager deb --config packaging/linux/nfpm.yaml --target dist-pkg/
+          tar -C build -czf "dist-pkg/portalcast-server-${PORTALCAST_VERSION}-${{ matrix.target }}.tar.gz" portalcast-server
+
+      - name: Package (.exe + .zip)
+        if: runner.os == 'Windows'
+        run: |
+          mkdir -p dist-pkg
+          if ! command -v iscc >/dev/null && [ ! -f "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" ]; then choco install innosetup -y --no-progress; fi
+          ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          "$ISCC" "/DAppVersion=${PORTALCAST_VERSION}" "/DBundleDir=$(cygpath -w "$PWD/build/portalcast-server")" "/DOutDir=$(cygpath -w "$PWD/dist-pkg")" packaging/windows/portalcast.iss
+          (cd build && 7z a -tzip "../dist-pkg/portalcast-server-${PORTALCAST_VERSION}-windows-x64.zip" portalcast-server >/dev/null)
+
+      - name: Package (.dmg)
+        if: matrix.mac
+        run: packaging/macos/build-dmg.sh build/portalcast-server "$PORTALCAST_VERSION" ${{ matrix.mac }} dist-pkg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portalcast-server-${{ matrix.target }}
+          path: dist-pkg/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Checksums
+        run: cd assets && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: assets/*
+          generate_release_notes: true

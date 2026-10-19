@@ -1,0 +1,23 @@
+[Unit]
+Description=PortalCast Server
+Documentation=https://github.com/dhrumilshukla258/portalcast-server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=portalcast
+Group=portalcast
+WorkingDirectory=/opt/portalcast/app
+ExecStart=/opt/portalcast/node/bin/node /opt/portalcast/launcher.js --config /etc/portalcast/portalcast.env --data /var/lib/portalcast
+Restart=on-failure
+RestartSec=5
+# Hardening: the server only needs its data dir and the network.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/portalcast /etc/portalcast
+
+[Install]
+WantedBy=multi-user.target

@@ -42,3 +42,7 @@ database.db-shm
 temp
 uploads
 tsconfig.tsbuildinfo
+
+# native packaging output (packaging/, .github/workflows/release.yml)
+/build/
+/dist-pkg/

@@ -1,0 +1,25 @@
+# Built by .github/workflows/release.yml:  nfpm package --packager deb --config packaging/linux/nfpm.yaml
+# Env: PORTALCAST_VERSION (e.g. 1.2.0), NFPM_ARCH (amd64 | arm64), BUNDLE_DIR (from build-bundle.mjs)
+name: portalcast-server
+arch: ${NFPM_ARCH}
+platform: linux
+version: ${PORTALCAST_VERSION}
+section: video
+priority: optional
+maintainer: PortalCast <noreply@github.com>
+description: |
+  PortalCast Server: IPTV portal gateway with a web UI and TV app backend.
+  Runs as the systemd service "portalcast" on port 3000.
+homepage: https://github.com/dhrumilshukla258/portalcast-server
+license: MIT
+recommends:
+  - ffmpeg
+contents:
+  - src: ${BUNDLE_DIR}/
+    dst: /opt/portalcast/
+  - src: packaging/linux/portalcast.service
+    dst: /lib/systemd/system/portalcast.service
+scripts:
+  postinstall: packaging/linux/postinstall.sh
+  preremove: packaging/linux/preremove.sh
+  postremove: packaging/linux/postremove.sh

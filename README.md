@@ -54,6 +54,26 @@ docker compose up -d
 Open `http://localhost:3000` to configure your portal.
 Log in as admin in the web UI and open `/admin` for the full dashboard (stats, live streams, content manager, users, logs) — or `http://localhost:3000/contentmanager` for the standalone content admin panel.
 
+### Install without Docker
+
+Each [GitHub Release](https://github.com/dhrumilshukla258/portalcast-server/releases) has native packages with Node.js bundled — nothing else to install:
+
+| Platform | File | Runs as |
+|---|---|---|
+| Debian / Ubuntu / Raspberry Pi OS (x64, arm64) | `portalcast-server_<version>_<arch>.deb` | systemd service `portalcast` |
+| Windows 10/11 (x64) | `portalcast-server-<version>-windows-x64-setup.exe` | startup task, runs at boot |
+| macOS (Apple silicon, Intel) | `portalcast-server-<version>-macos-<arch>.dmg` | login agent, opens the browser |
+| Any of the above, portable | `.tar.gz` / `.zip` | run `node/bin/node launcher.js` |
+
+The first start creates the config file with a random JWT secret and admin password and writes the sign-in details to `FIRST-RUN.txt` next to it:
+
+- Linux: `/etc/portalcast/portalcast.env` (data in `/var/lib/portalcast`); `sudo systemctl restart portalcast` after edits
+- Windows: `C:\ProgramData\PortalCast\portalcast.env`
+- macOS: `~/Library/Application Support/PortalCast/portalcast.env`
+
+Optional: install `ffmpeg` for HEVC live / VOD transcoding. Packages are built by
+`.github/workflows/release.yml` on every `v*` tag (see `packaging/`).
+
 ---
 
 ## Provider Setup
