@@ -199,6 +199,11 @@ export const xtreamCache = {
 const SERIES_SOURCE_TTL_MS = 5000;
 let seriesSourceCache: { value: boolean; expiresAt: number } | undefined;
 
+/** Call after writing portal_series_source, so a warm started right after sees the new value. */
+export function invalidateSeriesSourceCache(): void {
+  seriesSourceCache = undefined;
+}
+
 async function isNativeSeriesSource(): Promise<boolean> {
   if (seriesSourceCache && seriesSourceCache.expiresAt > Date.now()) {
     return seriesSourceCache.value;

@@ -16,7 +16,7 @@ import { stalkerApi } from "@/providers/stalker";
 import { Readable } from "stream";
 import { XtreamCache } from "@/models/XtreamCache";
 import { ContentOverride } from "@/models/ContentOverride";
-import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres, catchupScan, xtreamCache, getOrRefreshVodStreams, getOrRefreshSeriesList } from "@/services/xtreamCache";
+import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres, catchupScan, xtreamCache, getOrRefreshVodStreams, getOrRefreshSeriesList, invalidateSeriesSourceCache } from "@/services/xtreamCache";
 import { logger } from "@/infra/logger";
 import { authCheck } from "@/auth/jwt";
 import { mintStreamToken, proxyUrlFor, streamTokenFromRequest } from "@/services/StreamTokens";
@@ -377,6 +377,7 @@ export const seriesRoutes: ServerRoute[] = [
         if (nativeCats.length > 0) {
           await upsertGenres(nativeCats, "series", profileId);
           await XtreamCache.upsert({ key: "portal_series_source", value: JSON.stringify("native"), expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) });
+          invalidateSeriesSourceCache(); // else warmSeriesCache below may read the 5 s memo of the old mode
           await xtreamCache.delete("series_cats");
           warmSeriesCache().catch((e) => logger.error({ err: e }, "[warm-xtream-series]"));
           return nativeCats;
@@ -386,6 +387,7 @@ export const seriesRoutes: ServerRoute[] = [
         // Don't pre-populate series genres here; warmVodCache will scan each
         // VOD category and call upsertGenre("series") for any that contain series.
         await XtreamCache.upsert({ key: "portal_series_source", value: JSON.stringify("vod"), expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) });
+        invalidateSeriesSourceCache();
         await xtreamCache.delete("series_cats");
         warmVodCache().catch((e) => logger.error({ err: e }, "[warm-xtream-vod]"));
         return await readGenres("series", profileId);
