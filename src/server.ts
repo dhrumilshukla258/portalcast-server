@@ -238,6 +238,7 @@ const init = async () => {
     if (
       (!path.startsWith("/api/") && !path.startsWith("/v2/")) ||
       path.startsWith("/api/auth/") ||
+      path === "/api/health" || // uptime monitors; says nothing to anonymous callers
       path.startsWith("/api/images/") ||
       path.startsWith("/api/proxy") ||
       path.startsWith("/api/media/") ||
