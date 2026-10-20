@@ -135,8 +135,16 @@ function stripChannelPrefix(name: string): string {
     sep === ":" || sep === "|" || /\s/.test(String(prefix).trim()) ? "" : match);
 }
 
+// Turkish dubs and dramas, written only one of two ways on the portal: a trailing tag
+// ("Maternal Instinct - Turkish", 673 titles) or a label in front ("Turkish Drama : Hercai").
+// Not a general language word: "The Turkish Detective" keeps it.
+const TURKISH_TAG_RE = /\s*[-–(\[]\s*turkish\s*[)\]]?\s*$/i;
+const TURKISH_LABEL_RE = /^\s*turkish(?:\s+dramas?)?\s*:\s*/i;
+
 function stripNoise(name: string): string {
   return stripChannelPrefix(name)
+    .replace(TURKISH_LABEL_RE, "")
+    .replace(TURKISH_TAG_RE, "")
     .replace(VARIANT_RE, "")
     // Removing a tag from "Title - Hindi" or "Title (ES)" leaves the separator behind
     // ("Title -" / "Title ()") — without cleaning it up, two titles differing only by

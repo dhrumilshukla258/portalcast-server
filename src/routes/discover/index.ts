@@ -36,7 +36,13 @@ function toMediaItem(row: any, genresById: Map<string, string[]>, countriesById:
   // cleaned before the channel list existed still carry it in trimmedName, so a name with
   // a channel is cleaned again here (stripReleaseNoise is a few regexes).
   const network = channelOf(row.name);
-  const displayName = network ? stripReleaseNoise(row.name) || row.trimmedName || row.name : row.trimmedName || row.name;
+  const cleaned = network ? stripReleaseNoise(row.name) || row.trimmedName || row.name : row.trimmedName || row.name;
+  // "Kim's Convenience 2016" -> "Kim's Convenience": a trailing year equal to the title's own
+  // year is shown next to it already. Titles that end in another year ("Blade Runner 2049")
+  // are untouched.
+  const year = String(row.year || "").trim();
+  const withoutYear = /^\d{4}$/.test(year) ? cleaned.replace(new RegExp(`[\\s_\\-]*[(\\[]?${year}[)\\]]?\\s*$`), "").trim() : cleaned;
+  const displayName = withoutYear || cleaned;
   return {
     id: row.id,
     // row.id is "movie_{rawId}"/"series_{rawId}" — the webui strips the

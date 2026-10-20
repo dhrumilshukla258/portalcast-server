@@ -648,6 +648,12 @@ async function runFixups(): Promise<void> {
     await recomputeRepresentatives();
     clearDiscoverCache();
   });
+  // "- Turkish" / "Turkish Drama :" became tags (titleClean.ts): regroup and rename those.
+  await step("regroup-turkish", async () => {
+    await regroupAll(/turkish/i);
+    await recomputeRepresentatives();
+    clearDiscoverCache();
+  });
   await step("retry-unmatched", retryUnmatched);
   await step("reclean-channels", recleanChannelNames);
   // The TMDB passes write rows through upsertContent (groupKeyFor), so their groups are
@@ -659,7 +665,7 @@ async function runFixups(): Promise<void> {
  * (groupKeyFor, stripReleaseNoise), in batched transactions. Representatives are picked
  * again right after (enrichContentMeta), so Discover shows one card per real title.
  */
-async function regroupAll(): Promise<void> {
+async function regroupAll(alsoRename?: RegExp): Promise<void> {
   const rows = (await ContentMeta.findAll({
     attributes: ["id", "type", "name", "year", "tmdbId", "groupKey", "trimmedName"],
     raw: true,
@@ -671,7 +677,7 @@ async function regroupAll(): Promise<void> {
     .map((r) => {
       const fresh = stripReleaseNoise(r.name);
       const old = r.trimmedName || "";
-      const trimmedName = channelOf(r.name) || fresh.length > old.length ? fresh : old;
+      const trimmedName = channelOf(r.name) || fresh.length > old.length || alsoRename?.test(r.name) ? fresh : old;
       return { id: r.id, groupKey: groupKeyFor(r.type, r.name, r.year, r.tmdbId), trimmedName, old: r };
     })
     .filter((c) => c.groupKey !== c.old.groupKey || c.trimmedName !== (c.old.trimmedName || ""));
