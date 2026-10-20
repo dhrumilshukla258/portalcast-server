@@ -26,11 +26,12 @@
 // titles are applied at query time from the override generation, so hiding/unhiding a
 // title is reflected immediately without a rebuild.
 
+import { splitChannel } from "@/content/channelNames";
 import { QueryTypes } from "sequelize";
 import { sequelize } from "@/db";
 import { logger } from "@/infra/logger";
 
-export type TagKind = "genre" | "country" | "theme";
+export type TagKind = "genre" | "country" | "theme" | "network";
 type TypeKey = "all" | "movie" | "series";
 
 const TYPE_MOVIE = 1;
@@ -49,6 +50,7 @@ export interface DiscoverIndex {
     countries: { value: string; count: number }[];
     themes: { value: string; count: number }[];
     languages: { value: string; count: number }[];
+    networks: { value: string; count: number }[];
   }>;
   builtAt: number;
 }
@@ -119,11 +121,20 @@ async function buildIndex(): Promise<DiscoverIndex> {
     } else lang[r] = -1;
   }
 
-  const tables: Record<TagKind, string> = { genre: "content_genres", country: "content_countries", theme: "content_themes" };
-  const postings = { genre: new Map(), country: new Map(), theme: new Map() } as Record<TagKind, Map<string, Int32Array>>;
-  for (const kind of Object.keys(tables) as TagKind[]) {
-    const tagRows = await sequelize.query<{ contentId: string; value: string }>(
-      `SELECT contentId, value FROM ${tables[kind]} WHERE isRepresentative = 1`,
+  const tables: Record<Exclude<TagKind, "network">, string> = { genre: "content_genres", country: "content_countries", theme: "content_themes" };
+  const postings = { genre: new Map(), country: new Map(), theme: new Map(), network: new Map() } as Record<TagKind, Map<string, Int32Array>>;
+  // The channel a title airs on comes from its name ("Zee5 : Manemagalu"); only names with
+  // a separator can carry one, so the scan reads just those.
+  const channelRows = (await sequelize.query<{ id: string; name: string }>(
+    "SELECT id, name FROM content_meta WHERE isRepresentative = 1 AND (instr(name, ':') > 0 OR instr(name, '|') > 0 OR instr(name, ' - ') > 0)",
+    { type: QueryTypes.SELECT },
+  )).flatMap((row) => {
+    const channel = splitChannel(row.name).channel;
+    return channel ? [{ contentId: row.id, value: channel }] : [];
+  });
+  for (const kind of [...Object.keys(tables), "network"] as TagKind[]) {
+    const tagRows = kind === "network" ? channelRows : await sequelize.query<{ contentId: string; value: string }>(
+      `SELECT contentId, value FROM ${tables[kind as Exclude<TagKind, "network">]} WHERE isRepresentative = 1`,
       { type: QueryTypes.SELECT },
     );
     const lists = new Map<string, number[]>();
@@ -162,11 +173,12 @@ async function buildIndex(): Promise<DiscoverIndex> {
       genres: tagFacet("genre"),
       countries: tagFacet("country"),
       themes: tagFacet("theme"),
+      networks: tagFacet("network"),
       languages: langs.map((value, i) => ({ value, count: langCounts[i] })).filter((f) => f.count > 0).sort((a, b) => b.count - a.count),
     };
   }
 
-  logger.info(`[discoverIndex] built: ${n} titles, ${postings.genre.size} genres, ${postings.country.size} countries, ${postings.theme.size} themes in ${Date.now() - t0} ms`);
+  logger.info(`[discoverIndex] built: ${n} titles, ${postings.genre.size} genres, ${postings.country.size} countries, ${postings.theme.size} themes, ${postings.network.size} channels in ${Date.now() - t0} ms`);
   return { ids, type, lang, langs, langIndex, rankOf, postings, facets, builtAt: Date.now() };
 }
 

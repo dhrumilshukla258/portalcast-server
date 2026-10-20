@@ -255,6 +255,19 @@ async function fetchMeta(kind: "movie" | "tv", name: string, year?: string): Pro
   return buildMeta(detail, kind);
 }
 
+// ---- networks a show airs on (for channel logos) ---------------------------------------
+export interface TmdbNetwork { name: string; logo: string | null }
+
+export async function fetchTvNetworks(tmdbId: number): Promise<TmdbNetwork[] | null> {
+  const data = await tmdbGet(`/tv/${tmdbId}?language=en-US`);
+  if (!data || !Array.isArray(data.networks)) return null;
+  return data.networks.map((n: any) => ({
+    name: String(n.name || ""),
+    // w185 PNG: logos are transparent; TMDB serves .svg originals as .png at sized paths.
+    logo: n.logo_path ? `${IMG_BASE}/w185${String(n.logo_path).replace(/\.svg$/i, ".png")}` : null,
+  }));
+}
+
 // ---- one season's episodes -----------------------------------------------------------
 export interface TmdbEpisode {
   number: number;

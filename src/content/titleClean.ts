@@ -2,6 +2,8 @@
 // dub/language tags) before using a title for grouping (ContentMeta groupKey) or external
 // lookups (TMDB search) — one source of truth so both stay in sync.
 
+import { splitChannel } from "@/content/channelNames";
+
 // Portal-supplied names use inconsistent abbreviations/misspellings for the same language
 // ("ben", "bangla", "bengali" are all Bengali). Map every known variant to its canonical
 // name so "abc hindi", "abc hin", and "abc 4k hindi" all normalize to the same grouping key,
@@ -118,12 +120,16 @@ const VARIANT_RE = new RegExp(`\\b(${VARIANT_ALTERNATION})\\b`, "gi");
 // silently mutilated: "Maal - Tamil HD" -> "l" (via "Maa"), "Sunrise" -> "rise"
 // (via "Sun"), "Colorsplash" -> "plash" (via "Colors"), "Starship Troopers"
 // -> "ship troopers" (via "Star") — verified against real catalog data.
-const CHANNEL_PREFIX_RE = /^(Colors(?:\s+(?:Kannada|Tamil|Gujarati|Bangla|Marathi|Odia|Punjabi|Rishtey|Super|Infinity))?|Zee(?:\s+(?:TV|Telugu|Tamil|Kannada|Marathi|Bangla|Punjabi|Malayalam|Cafe|Cinema|News|Anmol|Bollywood|Classic|Action|World))?|Star(?:\s+(?:Plus|Vijay|Jalsha|Pravah|Suvarna|Maa|Bharat|Utsav|Gold|World|Movies|Sports))?|Sony(?:\s+(?:TV|SAB|Liv|Max|Aath|Rox|Marathi))?|Sun(?:\s+(?:TV|Bangla|Marathi|Neo|Life))?|Gemini(?:\s+(?:TV|Music|Movies))?|Maa(?:\s+(?:TV|Gold|Movies))?|ETV(?:\s+(?:Telugu|Plus|Andhra))?|Life\s+OK|Asianet|Vijay\s*TV|SAB\s*TV|Rishtey|Big\s+Magic|Aaj\s+Tak|Republic\s*TV|NDTV|CNN|BBC|Discovery|National\s+Geographic|Nat\s+Geo|HUM\s*TV|ARY\s*Digital|Har\s*Pal\s*Geo|MUN\s*TV|Dangal\s*TV|And\s*TV|MTV|Express\s*Tv|Urdu\s*Tv\s*Show|Urdu\s*1|Untold(?:\s+UK)?)\b\s*[:\-]?\s*/i;
+// A separator after the channel is required: without one, "Star Wars : The Clone Wars"
+// lost "Star" and "Colors of Love" lost "Colors" (found 2026-10-19).
+const CHANNEL_PREFIX_RE = /^(Colors(?:\s+(?:Kannada|Tamil|Gujarati|Bangla|Marathi|Odia|Punjabi|Rishtey|Super|Infinity))?|Zee(?:\s+(?:TV|Telugu|Tamil|Kannada|Marathi|Bangla|Punjabi|Malayalam|Cafe|Cinema|News|Anmol|Bollywood|Classic|Action|World))?|Star(?:\s+(?:Plus|Vijay|Jalsha|Pravah|Suvarna|Maa|Bharat|Utsav|Gold|World|Movies|Sports))?|Sony(?:\s+(?:TV|SAB|Liv|Max|Aath|Rox|Marathi))?|Sun(?:\s+(?:TV|Bangla|Marathi|Neo|Life))?|Gemini(?:\s+(?:TV|Music|Movies))?|Maa(?:\s+(?:TV|Gold|Movies))?|ETV(?:\s+(?:Telugu|Plus|Andhra))?|Life\s+OK|Asianet|Vijay\s*TV|SAB\s*TV|Rishtey|Big\s+Magic|Aaj\s+Tak|Republic\s*TV|NDTV|CNN|BBC|Discovery|National\s+Geographic|Nat\s+Geo|HUM\s*TV|ARY\s*Digital|Har\s*Pal\s*Geo|MUN\s*TV|Dangal\s*TV|And\s*TV|MTV|Express\s*Tv|Urdu\s*Tv\s*Show|Urdu\s*1|Untold(?:\s+UK)?)\b\s*[:\-|]\s*/i;
 
 // Strips known channel prefixes and quality/language/dub tags, preserving case and the
 // remaining title text as-is (for display or as a search query).
 export function stripReleaseNoise(name: string): string {
-  return name
+  // The curated channel list first ("Zee5 : X", "Udaya Tv : X", "NXT : X"), then the older
+  // prefix pattern, which also covers channel names written without a separator.
+  return splitChannel(name).title
     .replace(CHANNEL_PREFIX_RE, "")
     .replace(VARIANT_RE, "")
     // Removing a tag from "Title - Hindi" or "Title (ES)" leaves the separator behind

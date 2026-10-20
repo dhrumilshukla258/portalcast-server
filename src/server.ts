@@ -1,3 +1,4 @@
+import { refreshChannelLogos, resolveTmdbChannelLogos } from "./content/channels";
 import "dotenv/config";
 import { clientIp, isSecureRequest } from "./infra/clientIp";
 import { suspiciousRequestReason } from "./infra/requestHygiene";
@@ -400,6 +401,10 @@ const init = async () => {
 
   // In-memory Discover index (facets/browse): build now instead of on the first request.
   primeDiscoverIndex();
+  // Channel logos for Discover (content/channels.ts): portal logos now, TMDB network logos
+  // a minute later in the background (one-time, cached; retried weekly for misses).
+  refreshChannelLogos();
+  setTimeout(() => { resolveTmdbChannelLogos().catch(() => {}); }, 60_000).unref?.();
 
   // Warm the XtreamCache catalog in the background on startup (every /api/v2
   // movie/series route reads from it), then cleanup stale genres.

@@ -1,3 +1,5 @@
+import { stripReleaseNoise } from "@/content/titleClean";
+import { splitChannel, channelLogo } from "@/content/channels";
 import { ServerRoute } from "@hapi/hapi";
 import { withVideoInfo, getVideoInfo, ensureMediaInfoLoaded } from "@/content/mediaInfo";
 import { Op } from "sequelize";
@@ -30,6 +32,11 @@ function unauthorized(h: any) {
 // TMDB poster URLs already are. Map to that convention so results render through
 // the existing MainContentGrid/MediaCard without any special-casing.
 function toMediaItem(row: any, genresById: Map<string, string[]>, countriesById: Map<string, string[]>, origin: string): any {
+  // The channel in the name ("Zee5 : Manemagalu") is shown as a logo, not as text. Rows
+  // cleaned before the channel list existed still carry it in trimmedName, so a name with
+  // a channel is cleaned again here (stripReleaseNoise is a few regexes).
+  const network = splitChannel(row.name).channel;
+  const displayName = network ? stripReleaseNoise(row.name) || row.trimmedName || row.name : row.trimmedName || row.name;
   return {
     id: row.id,
     // row.id is "movie_{rawId}"/"series_{rawId}" — the webui strips the
@@ -40,8 +47,10 @@ function toMediaItem(row: any, genresById: Map<string, string[]>, countriesById:
     // catalog "ABC - Hindi Dub") — precomputed once at enrichment/migration
     // time (see ContentMeta.ts), falls back to the raw name for any row that
     // predates the column somehow slipping through the migration.
-    name: row.trimmedName || row.name,
-    title: row.trimmedName || row.name,
+    name: displayName,
+    title: displayName,
+    network: network || undefined,
+    network_logo: channelLogo(network, origin) || undefined,
     // row.poster is TMDB (image.tmdb.org) when enrichment found a match, but
     // falls back to the raw portal stream_icon/cover otherwise (see
     // metaEnrichment.ts's resolveMeta) — proxiedImageUrl passes TMDB through
@@ -105,6 +114,8 @@ export const discoverRoutes: ServerRoute[] = [
         countries: f.countries,
         themes: f.themes,
         languages: f.languages,
+        // Channels shows air on, with their logos (from the live channel list).
+        networks: f.networks.map((n) => ({ ...n, logo: channelLogo(n.value, getPublicOrigin(request)) || undefined })),
       };
     },
   },
@@ -138,6 +149,7 @@ export const discoverRoutes: ServerRoute[] = [
       const tags: BrowseQuery["tags"] = genreValues.map((value) => ({ kind: "genre" as const, value }));
       if (q.country) tags.push({ kind: "country", value: String(q.country) });
       if (q.theme) tags.push({ kind: "theme", value: String(q.theme) });
+      if (q.network) tags.push({ kind: "network", value: String(q.network) });
       const [idx, hidden] = await Promise.all([getDiscoverIndex(), getHiddenContentKeySet()]);
       const { ids, total } = browseIndex(idx, {
         type, language: q.language ? String(q.language) : undefined, tags, hidden, page, pageSize: PAGE_SIZE,

@@ -1,3 +1,4 @@
+import { splitChannel } from "@/content/channelNames";
 import { Transaction } from "sequelize";
 import { xtreamCache, catchupScan } from "@/services/xtreamCache";
 import { readGenres } from "@/infra/storage";
@@ -612,7 +613,7 @@ let isEnriching = false;
 // the regular enrichment pass, so a server upgrade repairs existing rows without a manual
 // re-enrichment of the whole catalog.
 const FIXUP_KEY = "meta_fixup_generation";
-const FIXUP_GENERATION = 1;
+const FIXUP_GENERATION = 2;
 
 async function runFixups(): Promise<void> {
   const row = await SystemConfig.findByPk(FIXUP_KEY);
@@ -623,6 +624,7 @@ async function runFixups(): Promise<void> {
     await regroupByTmdbId();
     await retryUnmatched();
   }
+  if (done < 2) await recleanChannelNames();
   await SystemConfig.upsert({ key: FIXUP_KEY, value: FIXUP_GENERATION });
 }
 
@@ -680,6 +682,57 @@ async function retryUnmatched(): Promise<void> {
     if (tried % 200 === 0 && tried > 0) logger.info(`[MetaEnrich] retry: ${tried} tried, ${matched} matched`);
   }
   logger.info(`[MetaEnrich] retry of unmatched titles done: ${tried} tried, ${matched} newly matched (of ${rows.length} unmatched)`);
+}
+
+/**
+ * Generation 2: names with a channel in front ("Zee5 : Manemagalu") get their cleaned name
+ * and, for unmatched rows, their group recomputed without it, and are searched on TMDB
+ * again by the bare title.
+ */
+async function recleanChannelNames(): Promise<void> {
+  const rows = (await ContentMeta.findAll({
+    attributes: ["id", "type", "name", "year", "tmdbId", "poster", "portalCategoryId", "trimmedName"],
+    raw: true,
+  })) as any[];
+  let recleaned = 0;
+  let matched = 0;
+  for (const row of rows) {
+    const trimmed = stripReleaseNoise(row.name);
+    const hasChannel = !!splitChannel(row.name).channel;
+    if (trimmed === row.trimmedName && !hasChannel) continue;
+    recleaned++;
+    // Matched rows, and unmatched ones without a channel (the old pattern had mangled
+    // "Star Wars ..." / "Colors of Love"): only the cleaned name and the name-based group.
+    if (row.tmdbId || !hasChannel) {
+      await ContentMeta.update(
+        row.tmdbId ? { trimmedName: trimmed } : { trimmedName: trimmed, groupKey: groupKeyFor(row.type, row.name, row.year, null) },
+        { where: { id: row.id } },
+      );
+      continue;
+    }
+    const kind = row.type === "movie" ? "movie" : "tv";
+    const portalId = String(row.id).replace(/^(movie|series)_/, "");
+    const cacheKey = kind === "movie" ? `tmdb_movie_${portalId}` : `tmdb_tv_${portalId}`;
+    try {
+      await xtreamCache.delete(cacheKey);
+      const [genres, countries] = await Promise.all([
+        ContentGenre.findAll({ where: { contentId: row.id }, attributes: ["value"], raw: true }),
+        ContentCountry.findAll({ where: { contentId: row.id }, attributes: ["value"], raw: true }),
+      ]);
+      const resolved = await resolveMeta(
+        kind, cacheKey, row.name, row.year || "",
+        (genres as any[]).map((g) => g.value).filter((v) => v !== UNCATEGORIZED_GENRE),
+        (countries as any[]).map((c) => c.value),
+        row.poster || null,
+      );
+      if (resolved.tmdbId) matched++;
+      // Also rewrites trimmedName and groupKey from the new cleaning.
+      await upsertContent(row.id, row.type, row.name, resolved, row.portalCategoryId || "");
+    } catch (e: any) {
+      logger.error(`[MetaEnrich] reclean ${row.name}: ${e.message}`);
+    }
+  }
+  logger.info(`[MetaEnrich] names re-cleaned: ${recleaned} rows, ${matched} channel titles newly matched on TMDB`);
 }
 
 export async function enrichContentMeta(options: { includeBackdropBackfill?: boolean } = {}): Promise<void> {
