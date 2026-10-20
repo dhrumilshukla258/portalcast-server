@@ -702,11 +702,11 @@ async function fixYearMismatches(): Promise<void> {
     attributes: ["id", "type", "name", "year", "portalCategoryId"],
     raw: true,
   })) as any[];
-  const wrong = rows.filter((r) => {
+  const suspect = rows.filter((r) => {
     const ty = titleYearOf(r.name);
     return ty !== null && /^\d{4}$/.test(String(r.year || "")) && Math.abs(Number(r.year) - ty) > 1;
   });
-  if (wrong.length === 0) return;
+  if (suspect.length === 0) return;
   // The portal's own data for the fallback (the stored poster/genres are the wrong title's).
   const portal = new Map<string, any>();
   for (const [kind, prefix, idKey] of [["movie", "vod_streams_", "stream_id"], ["series", "series_list_", "series_id"]] as const) {
@@ -716,6 +716,19 @@ async function fixYearMismatches(): Promise<void> {
       for (const item of (await xtreamCache.get<any[]>(`${prefix}${g.id}`)) ?? []) portal.set(`${kind}_${item[idKey]}`, item);
     }
   }
+  // The match stands when the portal's own year field agrees with TMDB: then the number in
+  // the name is what is off (part of the title, an upload year...) — 212 of 313 on the live
+  // catalog, e.g. "Streisand: Live in Concert 2006" (portal and TMDB: 2009). Only titles
+  // whose name AND portal year both disagree ("Karz 2002" matched to the 1980 Karz) are
+  // searched again.
+  const portalYear = (item: any): number | null => {
+    const m = /(?:19|20)\d{2}/.exec(String(item?.year ?? item?.releaseDate ?? item?.releasedate ?? ""));
+    return m ? Number(m[0]) : null;
+  };
+  const wrong = suspect.filter((r) => {
+    const py = portalYear(portal.get(r.id));
+    return py === null || Math.abs(py - Number(r.year)) > 1;
+  });
   let rematched = 0, cleared = 0;
   for (const row of wrong) {
     const kind = row.type === "movie" ? "movie" : "tv";
@@ -741,7 +754,7 @@ async function fixYearMismatches(): Promise<void> {
       logger.error(`[MetaEnrich] year fix ${row.name}: ${e.message}`);
     }
   }
-  logger.info(`[MetaEnrich] year mismatches: ${wrong.length} re-checked, ${rematched} matched the right entry, ${cleared} back to portal data`);
+  logger.info(`[MetaEnrich] year mismatches: ${suspect.length} found, ${suspect.length - wrong.length} kept (portal year agrees with TMDB), ${wrong.length} re-checked: ${rematched} matched the right entry, ${cleared} back to portal data`);
 }
 
 /**
