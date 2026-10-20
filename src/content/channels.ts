@@ -32,11 +32,17 @@ function norm(s: string): string {
   return s.toLowerCase().replace(NOISE_RE, " ").replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+let live: Set<string> | null = null;
+
 async function loadLogos(): Promise<void> {
-  const rows = await sequelize.query<{ name: string; logo: string | null }>(
-    "SELECT name, logo FROM channels WHERE logo IS NOT NULL AND logo != ''",
+  const all = await sequelize.query<{ name: string; logo: string | null }>(
+    "SELECT name, logo FROM channels",
     { type: QueryTypes.SELECT },
   );
+  // Which catalog channels really are in the Live TV list (the Channel filter offers only those).
+  const names = new Set(all.map((r) => norm(r.name)));
+  live = new Set(Object.entries(CHANNELS).filter(([c, a]) => [c, ...a].some((x) => names.has(norm(x)))).map(([c]) => c));
+  const rows = all.filter((r) => r.logo);
   // normalized channel name -> [score, logo]; higher score wins
   const best = new Map<string, [number, string]>();
   for (const r of rows) {
@@ -121,6 +127,12 @@ export async function resolveTmdbChannelLogos(): Promise<void> {
   } finally {
     tmdbRunning = false;
   }
+}
+
+/** True when the channel is in the Live TV list (false until that list has been read once). */
+export function isLiveChannel(channel: string): boolean {
+  if (!live || Date.now() - logosAt > LOGO_TTL_MS) refreshChannelLogos();
+  return live?.has(channel) ?? false;
 }
 
 /** Warm (or refresh) the logo map without waiting for it. */
