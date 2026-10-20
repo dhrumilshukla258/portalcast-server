@@ -43,7 +43,14 @@ export const CHANNELS: Record<string, string[]> = {
   "Zee Punjabi": ["zee punjabi"],
   "Zee Malayalam": ["zee malayalam", "zee keralam"],
   "Zee Bangla": ["zee bangla", "zee bengali"],
-  "Zee5": ["zee5", "zee 5"],
+  // Streaming services, written the same way ("Zee5 : X"). Not in Live TV, so they are cleaned
+  // and badged but never offered as a Channel filter. "Amazon"/"Prime" are left out on
+  // purpose: "Amazon Empire", "Prime Suspect", "Primeval" are titles.
+  "Zee5": ["zee5 originals", "zee5 marathi", "zee5", "zee 5"],
+  "SonyLIV": ["sony liv", "sonyliv", "sony live"],
+  "JioHotstar": ["jiohotstar", "hotstar", "jiocinema", "jio cinema"],
+  "Voot": ["voot tv", "voot"],
+  "Aha": ["aha"],
   "Sony TV": ["sony tv", "set entertainment", "sony entertainment television", "sony"],
   "Sony SAB": ["sony sab", "sab tv"],
   "Sony Marathi": ["sony marathi"],

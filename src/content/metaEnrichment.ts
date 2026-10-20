@@ -654,6 +654,13 @@ async function runFixups(): Promise<void> {
     await recomputeRepresentatives();
     clearDiscoverCache();
   });
+  // Streaming-service prefixes ("Zee5 Originals : X", "Sony Liv : X", "Hotstar : X") joined
+  // the channel list: re-clean and regroup those few rows.
+  await step("reclean-services", async () => {
+    await regroupAll(/zee\s?5|sony\s?liv|hotstar|jio\s?cinema|voot|^\s*aha\s*:/i);
+    await recomputeRepresentatives();
+    clearDiscoverCache();
+  });
   await step("retry-unmatched", retryUnmatched);
   await step("reclean-channels", recleanChannelNames);
   // The TMDB passes write rows through upsertContent (groupKeyFor), so their groups are
