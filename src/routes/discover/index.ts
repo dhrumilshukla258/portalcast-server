@@ -85,6 +85,9 @@ function toMediaItem(row: any, genresById: Map<string, string[]>, countriesById:
     actors: row.cast || undefined,
     director: row.director || undefined,
     description: row.overview || undefined,
+    // A score from a handful of votes says little: TMDB's needs 5 or more (TVmaze's has no
+    // count and is sent as is).
+    rating_tmdb: row.rating > 0 && (row.ratingCount == null || row.ratingCount >= 5) ? Number(row.rating).toFixed(1) : undefined,
   };
 }
 

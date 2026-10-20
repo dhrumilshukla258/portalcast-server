@@ -233,7 +233,7 @@ export async function initDB() {
     logger.info("Database models synced.");
 
     // sync() never alters an existing table (see above): add missing columns by hand.
-    await ensureColumns("content_meta", [["overview", "TEXT"]]);
+    await ensureColumns("content_meta", [["overview", "TEXT"], ["rating", "FLOAT"], ["ratingCount", "INTEGER"]]);
     await ensureColumns("users", [
       ["openSubtitlesUsername", "VARCHAR(255)"],
       ["openSubtitlesPasswordEnc", "TEXT"],

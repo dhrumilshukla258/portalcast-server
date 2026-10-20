@@ -123,6 +123,14 @@ export class ContentMeta extends Model {
   @Column(DataType.TEXT)
   declare overview: string;
 
+  // User score 0-10: TMDB's vote average (ratingCount = its votes), else TVmaze's average
+  // (ratingCount null). Discover sends it as rating_tmdb when it rests on enough votes.
+  @Column(DataType.FLOAT)
+  declare rating: number;
+
+  @Column(DataType.INTEGER)
+  declare ratingCount: number;
+
   // Exactly one row per groupKey is flagged true (recomputed by
   // recomputeRepresentatives() in metaEnrichment.ts) — the "best" variant
   // (prefers TMDB-sourced, then most complete data) shown as the single card

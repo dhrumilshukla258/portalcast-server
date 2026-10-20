@@ -48,6 +48,12 @@ Both the name **and** the TMDB id must agree. Grouping by TMDB id alone merged 2
 - **A year written in the name must agree within one year**, unless TMDB's title is exactly our whole title (`"Blade Runner 2049"`, `"Fear Street: 1994"`, `"Wonder Woman 1984"` are trusted as is). Without this, `"Karz 2002"` matched the 1980 Karz and `"Wonder Woman 1973"` the 2017 film.
 - Loosened queries (year or tail removed) accept an exact name match only.
 
+Stored per title besides art and tags: `overview`, `cast`, `director` (a series stores its **creators** there, TMDB `created_by`; clients label it "Created by"), and `rating` + `ratingCount` (TMDB vote average and votes). Discover sends `rating_tmdb` when the score rests on 5+ votes.
+
+## TVmaze (series TMDB does not know)
+
+After each enrichment pass `enrichFromTvmaze()` (`src/content/tvmaze.ts`) looks up unmatched series once each (cache key `tvmaze_series_<id>`) on the public TVmaze API, no key, at most 20 calls per 10 s. A show is accepted only under the **exact** same title, and then only when it is the one exact match (and did not premiere after our year), or, among several, its channel or year (within one) fits. It fills empty description, cast, creators, poster and rating only. Most regional daily soaps are not on TVmaze; expect roughly one unmatched series in eight to gain a description.
+
 ## Episodes
 
 Episode lists are filled from TMDB's season data: still, overview, runtime, and a real title for placeholder names. The season number comes from the season list the client fetched just before (remembered in memory) or `seasonNumber=`. Episodes never go through the series search.
@@ -63,6 +69,7 @@ Episode lists are filled from TMDB's season data: still, overview, runtime, and 
 | `backfill-credits` | fill empty cast/director/overview from the cached TMDB data and portal plots (nothing fetched) |
 | `fix-year-mismatches` | re-search titles whose name year and portal year both disagree with TMDB; else back to portal data |
 | `seal-progress-links-2` | seal upstream stream links stored in watch progress (see [[skill-stream-tokens]]) |
+| `backfill-ratings-creators` | fetch TMDB details again by id for matched rows without a rating (or series without creators): writes rating, creators, empty cast/overview |
 | `retry-unmatched`, `reclean-channels` | search TMDB again for unmatched titles the newer queries can find |
 
 **Before adding a step that rewrites rows**: dry-run it on a copy of a real database and compare counts (empty names, changed groups, overwritten fields). Rewrite only what the new rule is meant to change; fill empty fields rather than overwrite.

@@ -1,3 +1,4 @@
+import { findTvmazeShow } from "@/content/tvmaze";
 import { sealCmd, isUpstreamLink } from "@/infra/sealedCmd";
 import { channelOf } from "@/content/titleClean";
 import { Op, Transaction } from "sequelize";
@@ -90,6 +91,8 @@ interface Resolved {
   cast: string | null;
   director: string | null;
   overview: string | null;
+  rating: number | null;
+  ratingCount: number | null;
 }
 
 /** The portal's own plot, when it is a real sentence ("-" and blanks are not). */
@@ -121,7 +124,7 @@ async function resolveMeta(
   // a poster-only legacy entry would permanently leave that title without them (xtreamCache
   // entries don't expire on plain .get() reads) — treat a legacy-shaped hit as a miss and
   // re-fetch fresh instead of degrading quietly.
-  const isLegacyShape = tmdb && !("_not_found" in tmdb) && (!("originalLanguage" in tmdb) || !("releaseYear" in tmdb));
+  const isLegacyShape = tmdb && !("_not_found" in tmdb) && (!("originalLanguage" in tmdb) || !("releaseYear" in tmdb) || !("rating" in tmdb));
   if (!tmdb || isLegacyShape) {
     const fetched = kind === "movie" ? await fetchMovieMeta(name, year) : await fetchTVMeta(name, year);
     tmdb = fetched || { _not_found: true };
@@ -149,6 +152,8 @@ async function resolveMeta(
       cast: tmdb.cast,
       director: tmdb.director,
       overview: tmdb.overview || fallbackOverview,
+      rating: tmdb.rating ?? null,
+      ratingCount: tmdb.ratingCount ?? null,
     };
   }
 
@@ -166,6 +171,8 @@ async function resolveMeta(
     cast: null,
     director: null,
     overview: fallbackOverview,
+    rating: null,
+    ratingCount: null,
   };
 }
 
@@ -204,6 +211,9 @@ async function upsertContent(contentId: string, type: ContentType, name: string,
       cast: resolved.cast,
       director: resolved.director,
       overview: resolved.overview,
+      // Only when known: a cached TMDB result from before ratings were stored has none, and
+      // must not blank a rating the backfill already wrote.
+      ...(resolved.rating != null ? { rating: resolved.rating, ratingCount: resolved.ratingCount } : {}),
     }, { transaction });
     await replaceTags(ContentGenre, contentId, resolved.genres, transaction);
     await replaceTags(ContentCountry, contentId, resolved.countries, transaction);
@@ -688,6 +698,7 @@ async function runFixups(): Promise<void> {
   await step("seal-progress-links-2", sealProgressLinks);
   await step("backfill-credits", backfillCreditsAndOverview);
   await step("fix-year-mismatches", fixYearMismatches);
+  await step("backfill-ratings-creators", backfillRatingsAndCreators);
   await step("retry-unmatched", retryUnmatched);
   await step("reclean-channels", recleanChannelNames);
   // The TMDB passes write rows through upsertContent (groupKeyFor), so their groups are
@@ -785,6 +796,79 @@ export async function sealProgressLinks(): Promise<void> {
     sealed++;
   }
   logger.info(`[MetaEnrich] progress records: sealed the stream link in ${sealed} of ${rows.length}`);
+}
+
+/**
+ * Ratings were not stored, and series had no creators (only a "Director" credit was read,
+ * which a series rarely has: 16% of series had one, 2026-10-20). Every TMDB-matched row
+ * without a rating (or a series without creators) has its TMDB details fetched again by its
+ * id; only the rating, creators, and empty cast / overview are written. About 100k rows, a few
+ * hours in the background; a restart resumes with the rows still missing.
+ */
+async function backfillRatingsAndCreators(): Promise<void> {
+  const rows = (await ContentMeta.findAll({
+    where: { tmdbId: { [Op.ne]: null } },
+    attributes: ["id", "type", "tmdbId", "cast", "director", "overview", "rating"],
+    raw: true,
+  })) as any[];
+  const todo = rows.filter((r) => r.rating == null || (r.type === "series" && !r.director));
+  let filled = 0;
+  for (let i = 0; i < todo.length; i++) {
+    const r = todo[i];
+    try {
+      const meta = await fetchMetaByTmdbId(r.type === "series" ? "tv" : "movie", Number(r.tmdbId));
+      if (meta) {
+        const patch: Record<string, string | number> = {};
+        if (meta.rating != null) { patch.rating = meta.rating; patch.ratingCount = meta.ratingCount ?? 0; }
+        if (r.type === "series" && !r.director && meta.director) patch.director = meta.director;
+        if (!r.cast && meta.cast) patch.cast = meta.cast;
+        if (!r.overview && meta.overview) patch.overview = meta.overview;
+        if (Object.keys(patch).length) { await ContentMeta.update(patch, { where: { id: r.id } }); filled++; }
+      }
+    } catch (e: any) {
+      logger.error(`[MetaEnrich] creators ${r.id}: ${e.message}`);
+    }
+    // TMDB allows ~40 requests/s; 8/s leaves room for the app's own lookups.
+    await sleep(120);
+    if ((i + 1) % 2000 === 0) logger.info(`[MetaEnrich] ratings/creators: ${i + 1}/${todo.length} checked, ${filled} filled`);
+  }
+  logger.info(`[MetaEnrich] ratings/creators: ${filled} of ${todo.length} titles filled in`);
+}
+
+/**
+ * Series TMDB does not know get a description, cast and creators from TVmaze when it has the
+ * show under the exact same title (content/tvmaze.ts). Runs after every enrichment pass; a
+ * series is looked up once (cache key tvmaze_series_<id>), and only empty fields are filled.
+ */
+async function enrichFromTvmaze(): Promise<void> {
+  const rows = (await ContentMeta.findAll({
+    where: { type: "series", tmdbId: null, isRepresentative: true },
+    attributes: ["id", "name", "trimmedName", "year", "cast", "director", "overview", "poster", "rating"],
+    raw: true,
+  })) as any[];
+  const todo = rows.filter((r) => !r.overview || !r.cast);
+  let looked = 0, matched = 0;
+  for (const r of todo) {
+    const key = `tvmaze_series_${r.id}`;
+    if (await xtreamCache.get<any>(key)) continue;
+    looked++;
+    try {
+      const show = await findTvmazeShow(stripReleaseNoise(r.name) || r.trimmedName || r.name, r.year, channelOf(r.name));
+      await xtreamCache.set(key, show ? { id: show.id } : { _not_found: true });
+      if (!show) continue;
+      const patch: Record<string, string | number> = {};
+      if (r.rating == null && show.rating != null) patch.rating = show.rating;
+      if (!r.overview && show.summary) patch.overview = show.summary;
+      if (!r.cast && show.cast) patch.cast = show.cast;
+      if (!r.director && show.creators) patch.director = show.creators;
+      if (!r.poster && show.poster) patch.poster = show.poster;
+      if (Object.keys(patch).length) { await ContentMeta.update(patch, { where: { id: r.id } }); matched++; }
+    } catch (e: any) {
+      logger.error(`[TVmaze] ${r.name}: ${e.message}`);
+    }
+    if (looked % 500 === 0) logger.info(`[TVmaze] ${looked} looked up, ${matched} filled`);
+  }
+  if (looked) logger.info(`[TVmaze] done: ${looked} series looked up, ${matched} filled in (of ${todo.length} without description or cast)`);
 }
 
 /**
@@ -978,6 +1062,7 @@ export async function enrichContentMeta(options: { includeBackdropBackfill?: boo
   try {
     // Fix-ups first: the regroup step repairs Discover within minutes of startup.
     await runFixups();
+    await enrichFromTvmaze();
     await enrichMovies();
     await enrichSeries();
     await backfillPortalCategoryIds();

@@ -52,6 +52,9 @@ export interface TmdbMeta {
   // for what TMDB confirms is the same title — this is the authoritative
   // value to group by once a TMDB match exists.
   releaseYear: string | null;
+  // TMDB's user score (0-10, one decimal) and how many votes it rests on.
+  rating: number | null;
+  ratingCount: number | null;
 }
 
 interface Credits {
@@ -112,6 +115,12 @@ function pickBestBackdrop(detail: any): { path: string | null; isHd: boolean } {
 
 function buildMeta(detail: any, kind: "movie" | "tv"): TmdbMeta {
   const credits = extractCredits(detail.credits);
+  // A series has creators, rarely a "Director" credit: store the creators in the same
+  // field (clients label it "Created by" for series).
+  if (kind === "tv") {
+    const creators = (detail.created_by || []).map((c: any) => c?.name).filter(Boolean).join(", ");
+    if (creators) credits.director = creators;
+  }
   const trailerKey = extractTrailerKey(detail.videos);
   const genres = (detail.genres || []).map((g: any) => g.name).filter(Boolean);
   const backdrop = pickBestBackdrop(detail);
@@ -130,6 +139,8 @@ function buildMeta(detail: any, kind: "movie" | "tv"): TmdbMeta {
     backdrop:   backdrop.path      ? `${IMG_BASE}/original${backdrop.path}`            : null,
     backdropHd: backdrop.path && backdrop.isHd ? `${IMG_BASE}/original${backdrop.path}` : null,
     overview: detail.overview || null,
+    rating: detail.vote_count > 0 && detail.vote_average > 0 ? Math.round(detail.vote_average * 10) / 10 : null,
+    ratingCount: detail.vote_count > 0 ? detail.vote_count : null,
     cast: credits.cast,
     director: credits.director,
     trailerKey,
