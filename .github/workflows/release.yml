@@ -61,14 +61,15 @@ jobs:
           mkdir -p build && cd build
           base="https://nodejs.org/dist/${NODE_VERSION}"
           name="node-${NODE_VERSION}-${{ matrix.node }}"
-          if [[ "${{ matrix.node }}" == win-* ]]; then
-            curl -fsSLO "$base/$name.zip"; unzip -q "$name.zip"
-          else
-            ext=tar.gz; [[ "${{ matrix.node }}" == linux-* ]] && ext=tar.xz
-            curl -fsSLO "$base/$name.$ext"; tar -xf "$name.$ext"
-          fi
+          if [[ "${{ matrix.node }}" == win-* ]]; then ext=zip
+          elif [[ "${{ matrix.node }}" == linux-* ]]; then ext=tar.xz
+          else ext=tar.gz; fi
+          curl -fsSLO "$base/$name.$ext"
+          if [[ "$ext" == zip ]]; then unzip -q "$name.zip"; else tar -xf "$name.$ext"; fi
           curl -fsSL "$base/SHASUMS256.txt" -o SHASUMS256.txt
-          grep -E " ${name}\.(zip|tar\.gz|tar\.xz)$" SHASUMS256.txt > expected.txt
+          # Only the archive actually downloaded: the list has both .tar.gz and .tar.xz lines,
+          # and checking the one not downloaded failed the step.
+          grep -F " $name.$ext" SHASUMS256.txt > expected.txt
           if command -v sha256sum >/dev/null; then sha256sum -c expected.txt; else shasum -a 256 -c expected.txt; fi
           echo "NODE_DIR=$PWD/$name" >> "$GITHUB_ENV"
 
@@ -100,7 +101,9 @@ jobs:
           mkdir -p dist-pkg
           if ! command -v iscc >/dev/null && [ ! -f "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" ]; then choco install innosetup -y --no-progress; fi
           ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
-          "$ISCC" "/DAppVersion=${PORTALCAST_VERSION}" "/DBundleDir=$(cygpath -w "$PWD/build/portalcast-server")" "/DOutDir=$(cygpath -w "$PWD/dist-pkg")" packaging/windows/portalcast.iss
+          # Git Bash turns arguments starting with "/" into paths ("/DAppVersion=…" reached
+          # ISCC as a second script file): no conversion for this call.
+          MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*" "$ISCC" "/DAppVersion=${PORTALCAST_VERSION}" "/DBundleDir=$(cygpath -w "$PWD/build/portalcast-server")" "/DOutDir=$(cygpath -w "$PWD/dist-pkg")" packaging/windows/portalcast.iss
           (cd build && 7z a -tzip "../dist-pkg/portalcast-server-${PORTALCAST_VERSION}-windows-x64.zip" portalcast-server >/dev/null)
 
       - name: Package (.dmg)
