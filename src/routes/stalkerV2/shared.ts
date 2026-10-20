@@ -1,3 +1,4 @@
+import { normalizeTitleKey, stripReleaseNoise } from "@/content/titleClean";
 import { searchCatalog } from "@/content/searchIndex";
 import axios from "axios";
 import { Readable } from "stream";
@@ -161,7 +162,21 @@ export function stripUpstreamFields(item: any, origin?: string): any {
 
 export async function enrichArtworkFromTmdb(items: any[], kind: "movie" | "series", origin?: string): Promise<any[]> {
   const enriched = await enrichArtworkFromTmdbRaw(items, kind, origin);
-  return enriched.map((it) => stripUpstreamFields(it, origin));
+  return enriched.map((it) => withTitleKey(stripUpstreamFields(it, origin)));
+}
+
+/**
+ * `title_key` (the server's grouping key) and `clean_name` (name without channel prefix
+ * or language/quality tags) on every catalog item, so clients group a title's versions
+ * the same way Discover does (Search: "ABC Hindi" + "ABC Tamil 4K" = one result) without
+ * keeping their own copy of titleClean.ts, which drifted (the TV's still cut "Star Wars"
+ * to "Wars"). Clients keep showing the portal's own name everywhere else.
+ */
+function withTitleKey(item: any): any {
+  if (!item || typeof item !== "object") return item;
+  const name = String(item.name || item.title || "");
+  if (!name) return item;
+  return { ...item, title_key: normalizeTitleKey(name), clean_name: stripReleaseNoise(name) || name };
 }
 
 async function enrichArtworkFromTmdbRaw(items: any[], kind: "movie" | "series", origin?: string): Promise<any[]> {
