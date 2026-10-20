@@ -180,6 +180,15 @@ async function search(kind: "movie" | "tv", query: string, year?: string): Promi
 // convincing result wins. The raw cleaned title is always tried first so a title that
 // really ends in a year ("Death Race 2000", "Blade Runner 2049") is matched as itself.
 const TRAILING_YEAR_RE = /\s*[(\[]?((?:19|20)\d{2})[)\]]?\s*$/;
+
+/**
+ * The year a portal wrote at the end of a name ("Wonder Woman 1973", "Fire_1996",
+ * "Naseeb -1997", "Stereo HD 2023"), after release noise is removed; null when none.
+ */
+export function titleYearOf(name: string): number | null {
+  const m = /(?:^|[\s_\-(\[])((?:19|20)\d{2})[)\]]?\s*$/.exec(cleanTitle(name));
+  return m ? Number(m[1]) : null;
+}
 // ': Season 40 To Current' / ' - Season13 TO Current' / ' : Season : 47 & 48' — only when
 // digits follow, so 'Love in the Season' is left alone.
 const SEASON_SUFFIX_RE = /\s*[:\-–|]?\s*\bseasons?(?=[\s:\d]|$)\s*:?\s*(?=.*\d).*$/i;
@@ -221,7 +230,7 @@ function normName(s: string): string {
 }
 
 /** The result that best fits the query: name match first, then year, then popularity. */
-export function pickResult(results: any[], q: TitleQuery, kind: "movie" | "tv"): any | null {
+export function pickResult(results: any[], q: TitleQuery, kind: "movie" | "tv", titleYear: number | null = null): any | null {
   const want = normName(q.query);
   let best: any = null;
   let bestScore = -Infinity;
@@ -230,8 +239,14 @@ export function pickResult(results: any[], q: TitleQuery, kind: "movie" | "tv"):
     const exact = names.includes(want);
     const starts = !exact && names.some((n) => n.startsWith(`${want} `) || want.startsWith(`${n} `));
     if (q.strict && !exact) continue;
-    let score = exact ? 100 : starts ? 60 : 20;
     const ry = String((kind === "movie" ? r.release_date : r.first_air_date) || "").slice(0, 4);
+    // A year written in the name must agree (within a year) unless it is part of the title
+    // itself ("Blade Runner 2049"). Without this, "Wonder Woman 1973" took the 2017 film,
+    // "Karz 2002" the 1980 one and "IIFA Awards 2019" a 2023 entry (2026-10-20).
+    if (titleYear && !names.some((n) => n.includes(String(titleYear)))) {
+      if (!ry || Math.abs(Number(ry) - titleYear) > 1) continue;
+    }
+    let score = exact ? 100 : starts ? 60 : 20;
     if (q.year && ry) {
       const d = Math.abs(Number(q.year) - Number(ry));
       score += d === 0 ? 30 : d === 1 ? 15 : d <= 3 ? 5 : -10;
@@ -244,8 +259,9 @@ export function pickResult(results: any[], q: TitleQuery, kind: "movie" | "tv"):
 
 async function fetchMeta(kind: "movie" | "tv", name: string, year?: string): Promise<TmdbMeta | null> {
   let r: any = null;
+  const titleYear = titleYearOf(name);
   for (const q of tmdbQueries(name, year)) {
-    r = pickResult(await search(kind, q.query, q.year), q, kind);
+    r = pickResult(await search(kind, q.query, q.year), q, kind, titleYear);
     if (r) break;
   }
   if (!r) return null;

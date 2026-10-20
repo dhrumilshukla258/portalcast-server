@@ -1,5 +1,5 @@
 import { channelOf } from "@/content/titleClean";
-import { Transaction } from "sequelize";
+import { Op, Transaction } from "sequelize";
 import { xtreamCache, catchupScan } from "@/services/xtreamCache";
 import { readGenres } from "@/infra/storage";
 import { logger } from "@/infra/logger";
@@ -13,7 +13,7 @@ import { UserProgress } from "@/models/UserProgress";
 import { SystemConfig } from "@/models/SystemConfig";
 import { clearDiscoverCache } from "@/services/discoverCache";
 import { normalizeTitleKey, stripReleaseNoise } from "@/content/titleClean";
-import { tmdbQueries } from "@/content/tmdb";
+import { tmdbQueries, titleYearOf } from "@/content/tmdb";
 
 /**
  * The key language/format variants of one title share: the cleaned name plus, when TMDB
@@ -683,10 +683,65 @@ async function runFixups(): Promise<void> {
     clearDiscoverCache();
   });
   await step("backfill-credits", backfillCreditsAndOverview);
+  await step("fix-year-mismatches", fixYearMismatches);
   await step("retry-unmatched", retryUnmatched);
   await step("reclean-channels", recleanChannelNames);
   // The TMDB passes write rows through upsertContent (groupKeyFor), so their groups are
   // already right; recomputeRepresentatives at the end of enrichContentMeta picks again.
+}
+
+/**
+ * Titles whose own year ("Wonder Woman 1973") is more than a year from the year of the TMDB
+ * entry they were matched to (316 on the live catalog, 2026-10-20): searched again with the
+ * year rule (tmdb.ts pickResult). They get the right entry or, failing that, the portal's own
+ * poster, genres and plot, with the wrong cast/description cleared.
+ */
+async function fixYearMismatches(): Promise<void> {
+  const rows = (await ContentMeta.findAll({
+    where: { tmdbId: { [Op.ne]: null } },
+    attributes: ["id", "type", "name", "year", "portalCategoryId"],
+    raw: true,
+  })) as any[];
+  const wrong = rows.filter((r) => {
+    const ty = titleYearOf(r.name);
+    return ty !== null && /^\d{4}$/.test(String(r.year || "")) && Math.abs(Number(r.year) - ty) > 1;
+  });
+  if (wrong.length === 0) return;
+  // The portal's own data for the fallback (the stored poster/genres are the wrong title's).
+  const portal = new Map<string, any>();
+  for (const [kind, prefix, idKey] of [["movie", "vod_streams_", "stream_id"], ["series", "series_list_", "series_id"]] as const) {
+    const genres = await readGenres(kind === "movie" ? "movie" : "series");
+    for (const g of genres) {
+      if (!g.id || g.id === "*") continue;
+      for (const item of (await xtreamCache.get<any[]>(`${prefix}${g.id}`)) ?? []) portal.set(`${kind}_${item[idKey]}`, item);
+    }
+  }
+  let rematched = 0, cleared = 0;
+  for (const row of wrong) {
+    const kind = row.type === "movie" ? "movie" : "tv";
+    const portalId = String(row.id).replace(/^(movie|series)_/, "");
+    const cacheKey = kind === "movie" ? `tmdb_movie_${portalId}` : `tmdb_tv_${portalId}`;
+    const item = portal.get(row.id);
+    try {
+      await xtreamCache.delete(cacheKey);
+      await xtreamCache.delete(`tmdb_web_${row.type === "movie" ? "movie" : "series"}_${portalId}`);
+      const resolved = await resolveMeta(
+        kind,
+        cacheKey,
+        row.name,
+        String(titleYearOf(row.name) ?? ""),
+        splitList(item?.genres_str ?? item?.genre),
+        splitList(item?.country),
+        item?.stream_icon || item?.cover || null,
+        portalPlot(item),
+      );
+      if (resolved.tmdbId) rematched++; else cleared++;
+      await upsertContent(row.id, row.type, row.name, resolved, row.portalCategoryId || "");
+    } catch (e: any) {
+      logger.error(`[MetaEnrich] year fix ${row.name}: ${e.message}`);
+    }
+  }
+  logger.info(`[MetaEnrich] year mismatches: ${wrong.length} re-checked, ${rematched} matched the right entry, ${cleared} back to portal data`);
 }
 
 /**

@@ -176,7 +176,12 @@ function withTitleKey(item: any): any {
   if (!item || typeof item !== "object") return item;
   const name = String(item.name || item.title || "");
   if (!name) return item;
-  return { ...item, title_key: normalizeTitleKey(name), clean_name: stripReleaseNoise(name) || name };
+  // A year glued to the name that is the title's own year ("Kim's Convenience 2016", year
+  // 2016) is not part of the name; titles ending in another year ("Blade Runner 2049") keep it.
+  const cleaned = stripReleaseNoise(name) || name;
+  const year = String(item.year || item.releaseDate || "").slice(0, 4);
+  const noYear = /^\d{4}$/.test(year) ? cleaned.replace(new RegExp(`[\\s_\\-]*[(\\[]?${year}[)\\]]?\\s*$`), "").trim() : cleaned;
+  return { ...item, title_key: normalizeTitleKey(name), clean_name: noYear || cleaned };
 }
 
 async function enrichArtworkFromTmdbRaw(items: any[], kind: "movie" | "series", origin?: string): Promise<any[]> {
