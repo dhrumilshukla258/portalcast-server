@@ -1,3 +1,4 @@
+import { setting } from "@/config/settings";
 import nodemailer from "nodemailer";
 import { logger } from "@/infra/logger";
 
@@ -5,17 +6,17 @@ import { logger } from "@/infra/logger";
  * Sends an email notification to the ADMIN_EMAIL when a new user registers and is pending approval.
  */
 export async function sendAdminApprovalRequest(name: string, email: string): Promise<void> {
-  const adminEmail = process.env.ADMIN_EMAIL;
+  const adminEmail = setting<string>("adminEmail");
   if (!adminEmail) {
     logger.warn("SMTP Warning: ADMIN_EMAIL is not configured. Approval email skipped.");
     return;
   }
 
-  const host = process.env.SMTP_HOST;
-  const port = Number(process.env.SMTP_PORT || 587);
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-  const from = process.env.SMTP_FROM || `"Portalcast" <${user}>`;
+  const host = setting<string>("smtpHost");
+  const port = setting<number>("smtpPort");
+  const user = setting<string>("smtpUser");
+  const pass = setting<string>("smtpPass");
+  const from = setting<string>("smtpFrom") || `"Portalcast" <${user}>`;
 
   if (!host || !user || !pass) {
     logger.warn("SMTP Warning: Mail server host/user/pass is not configured. Approval email skipped.");
@@ -59,11 +60,11 @@ export async function sendAdminApprovalRequest(name: string, email: string): Pro
 }
 
 export async function sendUserApprovedEmail(name: string, email: string): Promise<void> {
-  const host = process.env.SMTP_HOST;
-  const port = Number(process.env.SMTP_PORT || 587);
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-  const from = process.env.SMTP_FROM || `"Portalcast" <${user}>`;
+  const host = setting<string>("smtpHost");
+  const port = setting<number>("smtpPort");
+  const user = setting<string>("smtpUser");
+  const pass = setting<string>("smtpPass");
+  const from = setting<string>("smtpFrom") || `"Portalcast" <${user}>`;
 
   if (!host || !user || !pass) {
     logger.warn("SMTP Warning: Mail server host/user/pass is not configured. User approval email skipped.");
@@ -114,11 +115,11 @@ export async function sendUserApprovedEmail(name: string, email: string): Promis
 }
 
 export async function sendPasswordResetEmail(name: string, email: string, resetLink: string): Promise<void> {
-  const host = process.env.SMTP_HOST;
-  const port = Number(process.env.SMTP_PORT || 587);
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-  const from = process.env.SMTP_FROM || `"Portalcast" <${user}>`;
+  const host = setting<string>("smtpHost");
+  const port = setting<number>("smtpPort");
+  const user = setting<string>("smtpUser");
+  const pass = setting<string>("smtpPass");
+  const from = setting<string>("smtpFrom") || `"Portalcast" <${user}>`;
 
   if (!host || !user || !pass) {
     console.warn("SMTP Warning: Mail server host/user/pass is not configured. Password reset email skipped.");

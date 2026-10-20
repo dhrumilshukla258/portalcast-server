@@ -1,3 +1,4 @@
+import { setting } from "@/config/settings";
 import { ServerRoute } from "@hapi/hapi";
 import { issueRefreshToken, rotateRefreshToken, revokeRefreshToken, revokeAllForUser } from "../../services/RefreshTokens";
 import { recordFromRequest } from "../../services/SecurityEvents";
@@ -13,7 +14,7 @@ import { verifyPassword, hashPassword } from "../../auth/password";
 import { sendAdminApprovalRequest, sendPasswordResetEmail } from "../../auth/email";
 import { getPublicOrigin } from "../../infra/publicUrl";
 
-const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+const client = new OAuth2Client();
 
 // Helper to generate 6-character user friendly codes (e.g. AB-CDE)
 function generateUserCode(): string {
@@ -49,7 +50,7 @@ export const authRoutes: ServerRoute[] = [
         try {
           const ticket = await client.verifyIdToken({
             idToken,
-            audience: process.env.GOOGLE_CLIENT_ID,
+            audience: setting<string>("googleClientId"),
           });
           googlePayload = ticket.getPayload();
         } catch (err: any) {
@@ -67,8 +68,8 @@ export const authRoutes: ServerRoute[] = [
         const avatarUrl = googlePayload.picture || null;
 
         // Check if user is Admin
-        const adminEmailStr = process.env.ADMIN_EMAIL || "";
-        const adminEmailsList = (process.env.ADMIN_EMAILS || "").split(",").map(e => e.trim().toLowerCase());
+        const adminEmailStr = setting<string>("adminEmail");
+        const adminEmailsList = setting<string[]>("adminEmails").map(e => e.toLowerCase());
         const isAdmin = email === adminEmailStr.toLowerCase() || adminEmailsList.includes(email);
 
         let user = await User.findOne({ where: { email } });
@@ -178,8 +179,8 @@ export const authRoutes: ServerRoute[] = [
         const clientType = payload.clientType || "web";
 
         // Check for Admin credentials configured in .env
-        const adminEmail = (process.env.ADMIN_EMAIL || "").toLowerCase().trim();
-        const adminEmailsList = (process.env.ADMIN_EMAILS || "").split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
+        const adminEmail = setting<string>("adminEmail").toLowerCase().trim();
+        const adminEmailsList = setting<string[]>("adminEmails").map(e => e.toLowerCase());
         // If no admin email is configured at all, the admin password alone
         // grants admin access (bootstrap mode for fresh deployments).
         const noAdminEmailConfigured = !adminEmail && adminEmailsList.length === 0;
@@ -605,7 +606,7 @@ export const authRoutes: ServerRoute[] = [
     // uses it), so the webui fetches it here instead of having it baked in at build time.
     method: "GET",
     path: "/api/auth/google/client-id",
-    handler: () => ({ clientId: process.env.GOOGLE_CLIENT_ID || null }),
+    handler: () => ({ clientId: setting<string>("googleClientId") || null }),
   },
   {
     // Sign-out: revokes this refresh token's session on the server (clients also clear

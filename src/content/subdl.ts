@@ -6,9 +6,9 @@
 // path never used). Nothing from the archive is written to disk or executed; the text
 // is converted to WebVTT and stored in subtitle_files like OpenSubtitles results.
 
+import { setting } from "@/config/settings";
 import axios from "axios";
 import { unzipSync } from "fflate";
-import { subdlApiKey } from "@/config/server";
 import { stripReleaseNoise } from "@/content/titleClean";
 import { logger } from "@/infra/logger";
 import type { SubtitleResult } from "@/content/opensubtitles";
@@ -22,7 +22,7 @@ const PATH_RE = /^\/subtitle\/[\w.-]{1,120}\.zip$/;
 /** ISO 639-1 -> SubDL language code (uppercase two letters). */
 const toSubdlLang = (lang?: string) => (lang || "en").slice(0, 2).toUpperCase();
 
-export function isSubdlEnabled(apiKey: string = subdlApiKey): boolean {
+export function isSubdlEnabled(apiKey: string = setting<string>("subdlKey")): boolean {
   return !!apiKey;
 }
 
@@ -36,7 +36,7 @@ export async function searchSubdl(params: {
   season?: number;
   episode?: number;
   language?: string;
-}, apiKey: string = subdlApiKey): Promise<SubtitleResult[]> {
+}, apiKey: string = setting<string>("subdlKey")): Promise<SubtitleResult[]> {
   if (!apiKey) return [];
   const query: Record<string, string> = {
     api_key: apiKey,
@@ -73,7 +73,7 @@ export async function searchSubdl(params: {
 }
 
 /** The subtitle text inside a SubDL zip (first .srt/.vtt entry), or null. */
-export async function downloadSubdlText(path: string, apiKey: string = subdlApiKey): Promise<string | null> {
+export async function downloadSubdlText(path: string, apiKey: string = setting<string>("subdlKey")): Promise<string | null> {
   if (!apiKey || !isValidSubdlPath(path)) return null;
   try {
     const res = await axios.get(`${DOWNLOAD_BASE}${path}`, {

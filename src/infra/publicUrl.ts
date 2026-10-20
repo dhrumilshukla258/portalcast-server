@@ -1,3 +1,4 @@
+import { setting } from "@/config/settings";
 import { Request } from "@hapi/hapi";
 import { serverProtocol } from "@/config/server";
 import { logger } from "@/infra/logger";
@@ -10,8 +11,20 @@ import { logger } from "@/infra/logger";
 //   2. X-Forwarded-Proto / X-Forwarded-Host headers set by the reverse proxy
 //   3. The Host header of the incoming request
 
-function parseBaseUrl(): { proto: "http" | "https"; host: string } | null {
-  const raw = process.env.PUBLIC_BASE_URL;
+let parsedFor: string | null = null;
+let parsed: { proto: "http" | "https"; host: string } | null = null;
+
+/** The configured public base URL (Admin → Settings or PUBLIC_BASE_URL), parsed once per value. */
+function baseUrlOverride(): { proto: "http" | "https"; host: string } | null {
+  const raw = setting<string>("publicBaseUrl") || "";
+  if (raw !== parsedFor) {
+    parsedFor = raw;
+    parsed = parseBaseUrl(raw);
+  }
+  return parsed;
+}
+
+function parseBaseUrl(raw: string): { proto: "http" | "https"; host: string } | null {
   if (!raw) return null;
   try {
     const u = new URL(raw);
@@ -22,10 +35,9 @@ function parseBaseUrl(): { proto: "http" | "https"; host: string } | null {
   }
 }
 
-const baseUrlOverride = parseBaseUrl();
 
 export function getPublicProto(request: Request): "http" | "https" {
-  if (baseUrlOverride) return baseUrlOverride.proto;
+  { const o = baseUrlOverride(); if (o) return o.proto; }
   const fwd = request.headers["x-forwarded-proto"];
   if (typeof fwd === "string" && fwd.length > 0) {
     return fwd.split(",")[0].trim() === "https" ? "https" : "http";
@@ -34,7 +46,7 @@ export function getPublicProto(request: Request): "http" | "https" {
 }
 
 export function getPublicHost(request: Request): string {
-  if (baseUrlOverride) return baseUrlOverride.host;
+  { const o = baseUrlOverride(); if (o) return o.host; }
   const fwd = request.headers["x-forwarded-host"];
   if (typeof fwd === "string" && fwd.length > 0) {
     return fwd.split(",")[0].trim();

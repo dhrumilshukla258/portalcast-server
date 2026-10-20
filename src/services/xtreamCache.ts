@@ -404,7 +404,7 @@ function refreshVodStreamsInBackground(categoryId: string, cached: any[]): void 
       },
       (item) => existingMovieIds.has(String(item.id)) || existingSeriesIds.has(String(item.id)),
     );
-    const newItems = newRaw.filter((i: any) => i[seriesFlag] != 1);
+    const newItems = newRaw.filter((i: any) => i[seriesFlag()] != 1);
     if (newItems.length === 0) {
       await xtreamCache.set(cacheKey, cached);
       return;
@@ -437,7 +437,7 @@ async function getOrRefreshVodStreamsInner(categoryId: string): Promise<any[]> {
     return res?.js?.data || [];
   });
   if (allRawVod.length === 0) return [];
-  const vodItems = allRawVod.filter((i: any) => i[seriesFlag] != 1);
+  const vodItems = allRawVod.filter((i: any) => i[seriesFlag()] != 1);
   const result = vodItems.map((m, idx) => mapVodItem(m, idx + 1, categoryId));
   await xtreamCache.set(cacheKey, result);
   return result;
@@ -471,7 +471,7 @@ function refreshSeriesListInBackground(categoryId: string, cached: any[], isNati
       },
       (item) => existingSeriesIds.has(String(item.id)) || existingMovieIds.has(String(item.id)),
     );
-    const newItems = isNativeSeries ? newRaw : newRaw.filter((i: any) => i[seriesFlag] == 1);
+    const newItems = isNativeSeries ? newRaw : newRaw.filter((i: any) => i[seriesFlag()] == 1);
     if (newItems.length === 0) {
       await xtreamCache.set(cacheKey, cached);
       return;
@@ -513,7 +513,7 @@ async function getOrRefreshSeriesListInner(categoryId: string): Promise<any[]> {
       const res = await provider.getMovies({ category: categoryId, page });
       return res?.js?.data || [];
     });
-    seriesItems = allRaw.filter((i: any) => i[seriesFlag] == 1);
+    seriesItems = allRaw.filter((i: any) => i[seriesFlag()] == 1);
   }
   if (allRaw.length === 0) return [];
   const result = seriesItems.map((s, idx) => mapSeriesItem(s, idx + 1, categoryId));
@@ -550,8 +550,8 @@ export async function warmSeriesCache(): Promise<boolean> {
           },
           isKnown,
         );
-        const newSeries = isNativeSeries ? newRaw : newRaw.filter((i: any) => i[seriesFlag] == 1);
-        const newMovies = isNativeSeries ? [] : newRaw.filter((i: any) => i[seriesFlag] != 1);
+        const newSeries = isNativeSeries ? newRaw : newRaw.filter((i: any) => i[seriesFlag()] == 1);
+        const newMovies = isNativeSeries ? [] : newRaw.filter((i: any) => i[seriesFlag()] != 1);
 
         if (newSeries.length === 0 && newMovies.length === 0) {
           if (!isNativeSeries && cachedMovies.length > 0) {
@@ -635,7 +635,7 @@ export async function warmSeriesInfoCache(): Promise<void> {
           const candidates = allItems.filter((s: any) => !s.is_episode && s.id);
           seasons = candidates.filter((s: any) => s.season_number || s.season_name);
         }
-        const seriesItem = allItems.find((i: any) => i[seriesFlag]) || allItems[0];
+        const seriesItem = allItems.find((i: any) => i[seriesFlag()]) || allItems[0];
 
         logger.info(`[XtreamSeriesInfo] ${cacheKey}: ${allItems.length} items, ${seasons.length} seasons (first keys: ${allItems[0] ? Object.keys(allItems[0]).slice(0, 8).join(",") : "none"})`);
 
@@ -807,7 +807,7 @@ export async function catchupScan(options: CatchupScanOptions = {}): Promise<boo
 
           for (const item of items) {
             const id       = String(item.id);
-            const isSeries = item[seriesFlag] == 1;
+            const isSeries = item[seriesFlag()] == 1;
             seenPortalIds.add(`${isSeries ? "s" : "m"}:${id}`);
 
             const isNew = isSeries ? !existingSeriesIds.has(id) : !existingMovieIds.has(id);
@@ -867,7 +867,7 @@ export async function catchupScan(options: CatchupScanOptions = {}): Promise<boo
 
         for (const item of allPortalItems) {
           const id       = String(item.id);
-          const isSeries = item[seriesFlag] == 1;
+          const isSeries = item[seriesFlag()] == 1;
           if (isSeries) {
             portalSeriesIds.add(id);
             if (!existingSeriesIds.has(id)) toAddSeries.push(item);
@@ -1089,8 +1089,8 @@ export async function warmVodCache(): Promise<boolean> {
           },
           isKnown,
         );
-        const newMovies = newRaw.filter((i: any) => i[seriesFlag] != 1);
-        const newSeries = newRaw.filter((i: any) => i[seriesFlag] == 1);
+        const newMovies = newRaw.filter((i: any) => i[seriesFlag()] != 1);
+        const newSeries = newRaw.filter((i: any) => i[seriesFlag()] == 1);
 
         if (newMovies.length === 0 && newSeries.length === 0) {
           // vod_streams up to date — but check if series were ever discovered for this category
@@ -1101,7 +1101,7 @@ export async function warmVodCache(): Promise<boolean> {
               const res = await provider.getMovies({ category: genre.id, page });
               return res?.js?.data || [];
             });
-            const seriesItems = allItems.filter((i: any) => i[seriesFlag] == 1);
+            const seriesItems = allItems.filter((i: any) => i[seriesFlag()] == 1);
             if (seriesItems.length > 0) {
               await xtreamCache.set(seriesKey, seriesItems.map((s: any, idx: number) => mapSeriesItem(s, idx + 1, genre.id)));
               await upsertGenre(genre, "series");

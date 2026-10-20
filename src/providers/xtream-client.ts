@@ -1,3 +1,4 @@
+import { setting } from "@/config/settings";
 import {
   ArrayData,
   Channel,
@@ -96,7 +97,7 @@ function decodeBase64Title(s: string): string {
   }
 }
 
-const PROVIDER_TIMEOUT = parseInt(process.env.PROVIDER_TIMEOUT || "120000", 10);
+const PROVIDER_TIMEOUT = () => setting<number>("providerTimeoutMs");
 
 export class XtreamClient implements IProvider {
   private baseUrl: string;
@@ -184,7 +185,7 @@ export class XtreamClient implements IProvider {
           Accept: "*/*",
           "Accept-Encoding": "gzip, deflate, br",
         },
-        timeout: PROVIDER_TIMEOUT,
+        timeout: PROVIDER_TIMEOUT(),
       })
       .then((response) => {
         this.breaker.recordSuccess();

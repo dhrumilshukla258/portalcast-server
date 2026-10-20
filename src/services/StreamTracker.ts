@@ -1,3 +1,4 @@
+import { setting } from "@/config/settings";
 // Tracks "who is watching what right now" across the three proxy paths
 // (generic proxy, live HLS, VOD transcode). HLS/live playback is fundamentally
 // a stream of short-lived HTTP requests (playlist refresh every few seconds,
@@ -32,7 +33,7 @@ export interface StreamSession {
 // How long a session can go quiet (no request) before it's considered ended.
 // Needs to be generous enough to survive a player buffering ahead and pausing
 // requests for a while, not just tuned to the fastest-case segment interval.
-const IDLE_TIMEOUT_MS = Number(process.env.STREAM_IDLE_TIMEOUT_MS) || 60_000;
+const IDLE_TIMEOUT_MS = () => setting<number>("streamIdleTimeoutMs");
 const SWEEP_INTERVAL_MS = 10_000;
 
 class StreamTracker {
@@ -43,7 +44,7 @@ class StreamTracker {
   }
 
   private sweep() {
-    const cutoff = Date.now() - IDLE_TIMEOUT_MS;
+    const cutoff = Date.now() - IDLE_TIMEOUT_MS();
     for (const [key, session] of this.sessions.entries()) {
       if (session.lastSeen < cutoff) this.sessions.delete(key);
     }

@@ -1,3 +1,4 @@
+import { setting } from "@/config/settings";
 import { initialConfig } from "@/config/server";
 import {
   ArrayData,
@@ -34,7 +35,7 @@ function getRequestLimit(): Promise<LimitFunction> {
   }
   return requestLimitPromise;
 }
-const PROVIDER_TIMEOUT = parseInt(process.env.PROVIDER_TIMEOUT || "120000", 10);
+const PROVIDER_TIMEOUT = () => setting<number>("providerTimeoutMs");
 
 // Best-effort classification from the Stalker portal's own request params. Note:
 // this portal's protocol uses type:"vod" for both movie AND series listing
@@ -67,7 +68,7 @@ async function httpRequest<T = any>(
       params,
       method: options.method || "GET",
       headers: options.headers,
-      timeout: PROVIDER_TIMEOUT,
+      timeout: PROVIDER_TIMEOUT(),
     })
     .then((res) => {
       if (res.status !== 200) {
@@ -289,7 +290,7 @@ export class StalkerAPI implements IProvider {
         "Content-Type": options?.contentType || "application/json",
         Referrer: options?.referrer || this.getBaseUrl(),
       },
-      timeout: PROVIDER_TIMEOUT,
+      timeout: PROVIDER_TIMEOUT(),
       validateStatus: options?.validateStatus || ((status) => status === 200),
       withCredentials: options?.withCredentials || true,
     };

@@ -1,8 +1,9 @@
+import { setting } from "@/config/settings";
 import { logger } from "@/infra/logger";
 
-const FAILURE_THRESHOLD = parseInt(process.env.CB_FAILURE_THRESHOLD || "5", 10);
-const FAILURE_WINDOW_MS = parseInt(process.env.CB_FAILURE_WINDOW_MS || "60000", 10);
-const COOLDOWN_MS = parseInt(process.env.CB_COOLDOWN_MS || "30000", 10);
+const FAILURE_THRESHOLD = () => setting<number>("cbFailureThreshold");
+const FAILURE_WINDOW_MS = () => setting<number>("cbFailureWindowMs");
+const COOLDOWN_MS = () => setting<number>("cbCooldownMs");
 
 export class CircuitBreaker {
   private failures = 0;
@@ -16,7 +17,7 @@ export class CircuitBreaker {
 
   isOpen(): boolean {
     if (!this.opened) return false;
-    if (Date.now() - this.lastFailureAt > COOLDOWN_MS) {
+    if (Date.now() - this.lastFailureAt > COOLDOWN_MS()) {
       // Cooldown elapsed — half-open: allow one probe request
       this.opened = false;
       this.failures = 0;
@@ -36,16 +37,16 @@ export class CircuitBreaker {
 
   recordFailure(): void {
     const now = Date.now();
-    if (now - this.lastFailureAt > FAILURE_WINDOW_MS) {
+    if (now - this.lastFailureAt > FAILURE_WINDOW_MS()) {
       // Outside the window — reset counter
       this.failures = 0;
     }
     this.failures++;
     this.lastFailureAt = now;
-    if (!this.opened && this.failures >= FAILURE_THRESHOLD) {
+    if (!this.opened && this.failures >= FAILURE_THRESHOLD()) {
       this.opened = true;
       logger.warn(
-        `[CircuitBreaker:${this.name}] Opened after ${this.failures} failures — fast-failing for ${COOLDOWN_MS / 1000}s`,
+        `[CircuitBreaker:${this.name}] Opened after ${this.failures} failures — fast-failing for ${COOLDOWN_MS() / 1000}s`,
       );
     }
   }

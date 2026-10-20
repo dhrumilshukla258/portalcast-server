@@ -1,3 +1,4 @@
+import { setting } from "@/config/settings";
 import { sealCmd } from "@/infra/sealedCmd";
 import { ServerRoute } from "@hapi/hapi";
 import { sniffRasterImage } from "@/infra/sniffImage";
@@ -5,7 +6,6 @@ import crypto from "crypto";
 import { recordFromRequest } from "@/services/SecurityEvents";
 import axios from "axios";
 import { subtitleKeysFor, forgetSubtitleKeys } from "@/content/subtitleKeys";
-import { openSubtitlesApiKey, subdlApiKey } from "@/config/server";
 import { logger } from "@/infra/logger";
 import { User } from "../../models/User";
 import { UserProgress } from "../../models/UserProgress";
@@ -336,8 +336,8 @@ export const userRoutes: ServerRoute[] = [
         username: user.openSubtitlesUsername || null,
         // Keys are never returned, only whether they are set (own) or provided by the server.
         hasOwnApiKey: Boolean(user.openSubtitlesApiKeyEnc),
-        serverHasApiKey: Boolean(openSubtitlesApiKey),
-        subdl: { hasOwnApiKey: Boolean(user.subdlApiKeyEnc), serverHasApiKey: Boolean(subdlApiKey) },
+        serverHasApiKey: Boolean(setting<string>("openSubtitlesKey")),
+        subdl: { hasOwnApiKey: Boolean(user.subdlApiKeyEnc), serverHasApiKey: Boolean(setting<string>("subdlKey")) },
       };
     },
   },
@@ -360,7 +360,7 @@ export const userRoutes: ServerRoute[] = [
 
       const user = await User.findByPk(userPayload.userId);
       if (!user) return h.response({ error: "User not found" }).code(404);
-      const keyToUse = ownKey || (user.openSubtitlesApiKeyEnc ? (await subtitleKeysFor(user.id)).openSubtitles : openSubtitlesApiKey);
+      const keyToUse = ownKey || (user.openSubtitlesApiKeyEnc ? (await subtitleKeysFor(user.id)).openSubtitles : setting<string>("openSubtitlesKey"));
 
       if (username && password) {
         // Verify the credentials actually work before storing them — an

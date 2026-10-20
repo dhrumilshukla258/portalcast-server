@@ -5,15 +5,17 @@
 // the next. Each day takes the newest titles not yet checked; titles are checked again after
 // 90 days (scores settle after release). Keys go only to OMDb and are never logged.
 
+import { setting } from "@/config/settings";
 import axios from "axios";
 import { Op } from "sequelize";
 import { ContentMeta } from "@/models/ContentMeta";
-import { omdbApiKeys, omdbDailyLimit } from "@/config/server";
 import { logger } from "@/infra/logger";
 
 const RECHECK_MS = 90 * 24 * 60 * 60 * 1000;
 
 export async function enrichFromOmdb(): Promise<void> {
+  const omdbApiKeys = setting<string[]>("omdbKeys");
+  const omdbDailyLimit = setting<number>("omdbDailyLimit");
   if (omdbApiKeys.length === 0 || omdbDailyLimit === 0) return;
   const rows = (await ContentMeta.findAll({
     where: {

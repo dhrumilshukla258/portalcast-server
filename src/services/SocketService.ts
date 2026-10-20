@@ -1,3 +1,4 @@
+import { setting } from "@/config/settings";
 import { Server as SocketIOServer, Socket } from "socket.io";
 import { Server } from "http";
 import { logger, setLogBroadcaster } from "@/infra/logger";
@@ -19,7 +20,7 @@ class SocketService {
   public init(httpServer: Server) {
     this.io = new SocketIOServer(httpServer, {
       cors: {
-        origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(",") : false,
+        origin: setting<string[]>("allowedOrigins").length ? setting<string[]>("allowedOrigins") : false,
         methods: ["GET", "POST"],
       },
     });

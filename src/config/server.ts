@@ -1,3 +1,4 @@
+import { setting } from "@/config/settings";
 import fs from "fs";
 import { AppConfig, Config } from "@/types/domain";
 import { ConfigProfile } from "@/models/ConfigProfile";
@@ -66,20 +67,10 @@ const AppConfigDefault: AppConfig = {
 export const initialConfig: Config = { ...ConfigDefault };
 export const appConfig: AppConfig = { ...AppConfigDefault };
 
-// Field name on VOD items that marks them as series (value == 1 means series)
-export const seriesFlag = process.env.SERIES_FLAG || "is_series";
-
-export const tmdbApiToken = process.env.TMDB_API_READ_TOKEN || "";
-/**
- * Optional OMDb keys (omdbapi.com), comma-separated: Rotten Tomatoes + Metacritic scores
- * (content/omdb.ts). Each key is used up to OMDB_DAILY_LIMIT calls a day, then the next.
- */
-export const omdbApiKeys = (process.env.OMDB_API_KEY || "").split(",").map((k) => k.trim()).filter(Boolean);
-export const omdbDailyLimit = Math.max(0, Number(process.env.OMDB_DAILY_LIMIT ?? 900) || 0);
-
-export const openSubtitlesApiKey = process.env.OPENSUBTITLES_API_KEY || "";
-/** Free key from subdl.com: second subtitle source (content/subdl.ts). */
-export const subdlApiKey = process.env.SUBDL_API_KEY || "";
+// Field name on VOD items that marks them as series (value == 1 means series). A setting
+// (Admin → Settings), so it is read on every use. Service keys (TMDB, OMDb, OpenSubtitles,
+// SubDL) are settings too: read them with setting("tmdbToken") etc. (config/settings.ts).
+export const seriesFlag = (): string => setting<string>("seriesFlag");
 
 export function getInitialConfig() {
   return initialConfig;

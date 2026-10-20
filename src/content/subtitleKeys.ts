@@ -2,9 +2,9 @@
 // set them (Settings > Subtitle accounts), else the server's (env). Users' keys are stored
 // encrypted (auth/crypto.ts) and never sent back to clients.
 
+import { setting } from "@/config/settings";
 import { User } from "@/models/User";
 import { decryptSecret } from "@/auth/crypto";
-import { openSubtitlesApiKey, subdlApiKey } from "@/config/server";
 import { logger } from "@/infra/logger";
 
 export interface SubtitleKeys {
@@ -37,7 +37,7 @@ export async function subtitleKeysFor(userId?: number): Promise<SubtitleKeys> {
       cache.set(userId, { at: Date.now(), keys: own });
     }
   }
-  return { openSubtitles: own.openSubtitles || openSubtitlesApiKey, subdl: own.subdl || subdlApiKey };
+  return { openSubtitles: own.openSubtitles || setting<string>("openSubtitlesKey"), subdl: own.subdl || setting<string>("subdlKey") };
 }
 
 export function forgetSubtitleKeys(userId: number): void {

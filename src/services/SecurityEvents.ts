@@ -9,6 +9,7 @@
 // every request shares the proxy's address, so auto-bans are disabled in that case (they
 // would lock everyone out); events are still recorded.
 
+import { setting } from "@/config/settings";
 import { Op } from "sequelize";
 import type { Request } from "@hapi/hapi";
 import { SecurityEvent } from "@/models/SecurityEvent";
@@ -34,7 +35,8 @@ export type SecurityKind =
   | "suspicious_request"     // traversal / injection-shaped path or query, oversized URL
   | "unknown_api_path"       // probing for routes that do not exist
   | "ip_banned"
-  | "ip_unbanned";
+  | "ip_unbanned"
+  | "setting_changed";       // an admin saved or reset a setting (never counts toward a ban)
 
 export interface SecurityEventInput {
   kind: SecurityKind;
@@ -47,8 +49,8 @@ export interface SecurityEventInput {
 
 // ---- tuning -----------------------------------------------------------------------
 const FAIL_WINDOW_MS = 15 * 60 * 1000;
-const BAN_AFTER_FAILURES = Number(process.env.SECURITY_BAN_AFTER || 20);
-const BAN_MS = Number(process.env.SECURITY_BAN_MINUTES || 60) * 60 * 1000;
+const BAN_AFTER_FAILURES = () => setting<number>("banAfterFailures");
+const BAN_MS = () => setting<number>("banMinutes") * 60 * 1000;
 const RETENTION_DAYS = 30;
 const FLUSH_MS = 2000;
 const MEMORY_RECENT = 500;
@@ -86,7 +88,7 @@ function scheduleFlush(): void {
 /** Auto-bans only when the address is meaningful (see file comment). */
 function canBan(ip: string): boolean {
   if (!ip || ip === "unknown") return false;
-  if (trustedProxiesConfigured) return !isTrustedProxy(ip);
+  if (trustedProxiesConfigured()) return !isTrustedProxy(ip);
   // No proxy configured: a private remote address is most likely the proxy itself.
   return !isPrivateOrLoopback(ip);
 }
@@ -108,7 +110,7 @@ export function record(event: SecurityEventInput): void {
     const list = (failures.get(e.ip) ?? []).filter((t) => at - t < FAIL_WINDOW_MS);
     list.push(at);
     failures.set(e.ip, list);
-    if (list.length >= BAN_AFTER_FAILURES && !isBanned(e.ip)) {
+    if (list.length >= BAN_AFTER_FAILURES() && !isBanned(e.ip)) {
       ban(e.ip, `${list.length} failures in ${FAIL_WINDOW_MS / 60000} min (last: ${e.kind})`);
       failures.delete(e.ip);
     }
@@ -124,7 +126,7 @@ export function recordFromRequest(request: Request, kind: SecurityKind, detail?:
   });
 }
 
-export function ban(ip: string, reason: string, ms: number = BAN_MS): void {
+export function ban(ip: string, reason: string, ms: number = BAN_MS()): void {
   const until = Date.now() + ms;
   bans.set(normalizeIp(ip), { until, reason });
   logger.warn(`[security] banned ${ip} for ${Math.round(ms / 60000)} min: ${reason}`);
@@ -166,7 +168,7 @@ export async function summary(hours = 24) {
   const byIp: Record<string, number> = {};
   for (const r of rows) { byKind[r.kind] = (byKind[r.kind] ?? 0) + 1; byIp[r.ip] = (byIp[r.ip] ?? 0) + 1; }
   const topIps = Object.entries(byIp).sort((a, b) => b[1] - a[1]).slice(0, 20).map(([ip, count]) => ({ ip, count }));
-  return { hours, total: rows.length, byKind, topIps, bans: listBans(), autoBan: { enabled: true, afterFailures: BAN_AFTER_FAILURES, windowMinutes: FAIL_WINDOW_MS / 60000, banMinutes: BAN_MS / 60000, trustedProxiesConfigured } };
+  return { hours, total: rows.length, byKind, topIps, bans: listBans(), autoBan: { enabled: true, afterFailures: BAN_AFTER_FAILURES(), windowMinutes: FAIL_WINDOW_MS / 60000, banMinutes: BAN_MS() / 60000, trustedProxiesConfigured: trustedProxiesConfigured() } };
 }
 
 export async function purgeOld(): Promise<number> {

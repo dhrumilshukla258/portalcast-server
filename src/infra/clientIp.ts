@@ -11,10 +11,10 @@
 //                               RFC1918 address (Docker, a proxy on the same host/LAN)
 //   TRUSTED_PROXIES=10.0.0.5,172.18.0.0/16   explicit addresses or CIDRs
 
+import { setting } from "@/config/settings";
 import type { Request } from "@hapi/hapi";
 import net from "net";
 
-const spec = (process.env.TRUSTED_PROXIES || "").trim();
 
 type Matcher = (ip: string) => boolean;
 
@@ -57,16 +57,28 @@ function cidrMatcher(entry: string): Matcher | null {
   return null; // IPv6 CIDRs: list the exact address instead
 }
 
-const matchers: Matcher[] = spec === ""
-  ? []
-  : spec.toLowerCase() === "private"
-    ? [isPrivateIp]
-    : spec.split(",").map((e) => cidrMatcher(e.trim())).filter((m): m is Matcher => m !== null);
+// Rebuilt only when the setting's text changes (Admin → Settings, or TRUSTED_PROXIES).
+let builtFor: string | null = null;
+let matchers: Matcher[] = [];
+function currentMatchers(): Matcher[] {
+  const spec = String(setting<string>("trustedProxies") || "").trim();
+  if (spec !== builtFor) {
+    builtFor = spec;
+    matchers = spec === ""
+      ? []
+      : spec.toLowerCase() === "private"
+        ? [isPrivateIp]
+        : spec.split(",").map((e) => cidrMatcher(e.trim())).filter((m): m is Matcher => m !== null);
+  }
+  return matchers;
+}
 
-export const trustedProxiesConfigured = matchers.length > 0;
+export function trustedProxiesConfigured(): boolean {
+  return currentMatchers().length > 0;
+}
 
 export function isTrustedProxy(ip: string): boolean {
-  return matchers.some((m) => m(ip));
+  return currentMatchers().some((m) => m(ip));
 }
 
 /**
@@ -75,7 +87,7 @@ export function isTrustedProxy(ip: string): boolean {
  */
 export function clientIp(request: Request): string {
   const remote = normalizeIp(request.info.remoteAddress || "");
-  if (!trustedProxiesConfigured || !isTrustedProxy(remote)) return remote;
+  if (!trustedProxiesConfigured() || !isTrustedProxy(remote)) return remote;
   const header = request.headers["x-forwarded-for"] as string | string[] | undefined;
   const chain = (Array.isArray(header) ? header.join(",") : header || "")
     .split(",")
@@ -91,7 +103,7 @@ export function clientIp(request: Request): string {
 export function isSecureRequest(request: Request): boolean {
   if (request.server.info.protocol === "https") return true;
   const remote = normalizeIp(request.info.remoteAddress || "");
-  if (!trustedProxiesConfigured || !isTrustedProxy(remote)) return false;
+  if (!trustedProxiesConfigured() || !isTrustedProxy(remote)) return false;
   const proto = request.headers["x-forwarded-proto"];
   return String(Array.isArray(proto) ? proto[0] : proto || "").split(",")[0].trim().toLowerCase() === "https";
 }

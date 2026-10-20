@@ -1,7 +1,8 @@
+import { setting } from "@/config/settings";
 import axios, { AxiosInstance, AxiosError } from "axios";
 import http from "http";
 import https from "https";
-import { appConfig } from "@/config/server";
+import { onSettingChange } from "@/config/settings";
 import { logger } from "@/infra/logger";
 
 const httpAgent = new http.Agent({ keepAlive: true });
@@ -10,12 +11,15 @@ const httpsAgent = new https.Agent({ keepAlive: true });
 const httpClient: AxiosInstance = axios.create({
   httpAgent,
   httpsAgent,
-  timeout: appConfig.api.timeout,
+  timeout: setting<number>("apiTimeoutMs"),
 
   validateStatus: (status) => status !== 429,
 });
 
-const MAX_RETRIES = appConfig.api.retries;
+const MAX_RETRIES = () => setting<number>("apiRetries");
+onSettingChange((key) => {
+  if (key === "apiTimeoutMs") httpClient.defaults.timeout = setting<number>("apiTimeoutMs");
+});
 const RETRY_DELAY = 1000;
 
 httpClient.interceptors.response.use(
@@ -29,7 +33,7 @@ httpClient.interceptors.response.use(
                       error.code === "ERR_CANCELED";
     const isTimeout = error.code === "ECONNABORTED" || error.code === "ETIMEDOUT" || error.message?.toLowerCase().includes("timeout");
 
-    if (!config || config.responseType === "stream" || config.skipRetry || isAborted || isTimeout || config.__retryCount >= MAX_RETRIES) {
+    if (!config || config.responseType === "stream" || config.skipRetry || isAborted || isTimeout || config.__retryCount >= MAX_RETRIES()) {
       return Promise.reject(error);
     }
 
@@ -49,7 +53,7 @@ httpClient.interceptors.response.use(
         : error.message;
 
       logger.warn(
-        `[HttpClient] Request failed: ${errorMessage}. Retrying (${config.__retryCount}/${MAX_RETRIES}) in ${delay}ms...`,
+        `[HttpClient] Request failed: ${errorMessage}. Retrying (${config.__retryCount}/${MAX_RETRIES()}) in ${delay}ms...`,
       );
 
       await new Promise((resolve) => setTimeout(resolve, delay));

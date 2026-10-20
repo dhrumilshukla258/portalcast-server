@@ -30,6 +30,8 @@ import { discoverRoutes } from "./routes/discover";
 import { socketService } from "./services/SocketService";
 
 import { initDB } from "./db";
+import { loadSettings, setting } from "./config/settings";
+import { settingsRoutes } from "./routes/admin/settings";
 import { migrateToProfiles, loadActiveProfileFromDB } from "./config/server";
 import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres } from "./services/xtreamCache";
 import { enrichContentMeta, sweepStaleContent } from "./content/metaEnrichment";
@@ -50,17 +52,19 @@ const init = async () => {
   if (!process.env.ADMIN_PASSWORD) {
     logger.warn("ADMIN_PASSWORD is not set — admin login is disabled (returns 503).");
   }
-  if (!process.env.ADMIN_EMAIL && !process.env.ADMIN_EMAILS) {
-    const msg = "ADMIN_EMAIL is not set — any email + ADMIN_PASSWORD logs in as admin (bootstrap mode). Set ADMIN_EMAIL to lock this down.";
+  await initDB();
+  // Settings saved in the admin page (config/settings.ts), before anything reads them.
+  await loadSettings();
+
+  if (!setting<string>("adminEmail") && setting<string[]>("adminEmails").length === 0) {
+    const msg = "No admin email is set — any email + ADMIN_PASSWORD logs in as admin (bootstrap mode). Set the admin email in Admin → Settings, or ADMIN_EMAIL, to lock this down.";
     if (process.env.NODE_ENV === "production") {
       logger.error(`SECURITY: ${msg}`);
-      logger.error("Refusing to start in production without ADMIN_EMAIL. Set ADMIN_EMAIL or ADMIN_EMAILS to continue.");
+      logger.error("Refusing to start in production without an admin email. Set ADMIN_EMAIL (or ADMIN_EMAILS) to continue.");
       process.exit(1);
     }
     logger.warn(`SECURITY WARNING: ${msg}`);
   }
-
-  await initDB();
 
   await migrateToProfiles();
 
@@ -102,6 +106,7 @@ const init = async () => {
   server.route(streamFailureRoutes);
   server.route(mediaInfoRoutes);
   server.route(securityRoutes);
+  server.route(settingsRoutes);
   server.route(adminRoutes);
   server.route(authRoutes);
   server.route(userRoutes);
@@ -109,8 +114,9 @@ const init = async () => {
   server.route(discoverRoutes);
 
   // Rate limiter for unauthenticated public endpoints (stream/media routes)
-  const RL_MAX = parseInt(process.env.RATE_LIMIT_MAX || "120", 10); // requests per window
-  const RL_WINDOW = parseInt(process.env.RATE_LIMIT_WINDOW_MS || "60000", 10); // window in ms
+  // Limits are settings (Admin → Settings), read on every request.
+  const RL_MAX = () => setting<number>("rateLimitMax"); // requests per window
+  const RL_WINDOW = () => setting<number>("rateLimitWindowMs"); // window in ms
   const rlMap = new Map<string, { count: number; windowStart: number }>();
 
   // Separate, much stricter bucket for the admin login endpoint — it's
@@ -123,19 +129,19 @@ const init = async () => {
   // isn't the concern, someone script-brute-forcing a weak password is. A
   // dedicated 5-attempts-per-5-minutes bucket per IP makes that impractical
   // without touching the streaming limiter's tuning at all.
-  const ADMIN_LOGIN_RL_MAX = parseInt(process.env.ADMIN_LOGIN_RATE_LIMIT_MAX || "5", 10);
-  const ADMIN_LOGIN_RL_WINDOW = parseInt(process.env.ADMIN_LOGIN_RATE_LIMIT_WINDOW_MS || "300000", 10); // 5 min
+  const ADMIN_LOGIN_RL_MAX = () => setting<number>("adminLoginRateLimitMax");
+  const ADMIN_LOGIN_RL_WINDOW = () => setting<number>("adminLoginRateLimitWindowMs"); // 5 min by default
   const adminLoginRlMap = new Map<string, { count: number; windowStart: number }>();
 
   setInterval(() => {
     const now = Date.now();
     for (const [key, entry] of rlMap) {
-      if (now - entry.windowStart > RL_WINDOW) rlMap.delete(key);
+      if (now - entry.windowStart > RL_WINDOW()) rlMap.delete(key);
     }
     for (const [key, entry] of adminLoginRlMap) {
-      if (now - entry.windowStart > ADMIN_LOGIN_RL_WINDOW) adminLoginRlMap.delete(key);
+      if (now - entry.windowStart > ADMIN_LOGIN_RL_WINDOW()) adminLoginRlMap.delete(key);
     }
-  }, RL_WINDOW);
+  }, 60_000);
 
   server.ext("onPreResponse", (_request, h) => h.continue);
 
@@ -174,11 +180,11 @@ const init = async () => {
 
     if (isThrottledAuthEndpoint) {
       // Refresh is routine (every hour per device): a wider bucket than password tries.
-      const max = p === "/api/auth/refresh" ? ADMIN_LOGIN_RL_MAX * 12 : ADMIN_LOGIN_RL_MAX;
+      const max = p === "/api/auth/refresh" ? ADMIN_LOGIN_RL_MAX() * 12 : ADMIN_LOGIN_RL_MAX();
       const key = `${p}:${ip}`;
       const now = Date.now();
       const entry = adminLoginRlMap.get(key);
-      if (!entry || now - entry.windowStart > ADMIN_LOGIN_RL_WINDOW) {
+      if (!entry || now - entry.windowStart > ADMIN_LOGIN_RL_WINDOW()) {
         adminLoginRlMap.set(key, { count: 1, windowStart: now });
       } else {
         entry.count++;
@@ -203,11 +209,11 @@ const init = async () => {
       const key = `${isLiveStream ? "live" : isVodStream ? "vod" : "img"}:${ip}`;
       const now = Date.now();
       const entry = rlMap.get(key);
-      if (!entry || now - entry.windowStart > RL_WINDOW) {
+      if (!entry || now - entry.windowStart > RL_WINDOW()) {
         rlMap.set(key, { count: 1, windowStart: now });
       } else {
         entry.count++;
-        const max = isImage ? RL_MAX * 5 : RL_MAX;
+        const max = isImage ? RL_MAX() * 5 : RL_MAX();
         if (entry.count > max) {
           if (entry.count === max + 1) recordFromRequest(request, "stream_throttled", isImage ? "images" : undefined);
           return h.response({ error: "Too Many Requests" }).code(429).takeover();

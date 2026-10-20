@@ -1,5 +1,5 @@
+import { setting } from "@/config/settings";
 import axios from "axios";
-import { tmdbApiToken } from "@/config/server";
 import { stripReleaseNoise } from "@/content/titleClean";
 import { countryLabel } from "@/content/countryNames";
 
@@ -14,6 +14,7 @@ function cleanTitle(name: string): string {
 }
 
 async function tmdbGet(path: string): Promise<any | null> {
+  const tmdbApiToken = setting<string>("tmdbToken");
   if (!tmdbApiToken) return null;
   try {
     const { data } = await axios.get(`${TMDB_BASE}${path}`, {

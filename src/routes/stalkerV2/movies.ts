@@ -351,7 +351,7 @@ export const movieRoutes: ServerRoute[] = [
 
         // At top level exclude series so only movies show
         if (Number(movieId) === 0) {
-          firstPageData = firstPageData.filter((item: any) => item[seriesFlag] != 1);
+          firstPageData = firstPageData.filter((item: any) => item[seriesFlag()] != 1);
         }
 
         // A direct movieId lookup (not a season/episode drill-down) that came

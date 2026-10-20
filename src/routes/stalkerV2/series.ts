@@ -158,7 +158,7 @@ export const seriesRoutes: ServerRoute[] = [
             const srcItems = (await xtreamCache.get<any[]>(`series_list_${ov.original_category_id}`)) ?? [];
             const srcItem = srcItems.find((i: any) => String(i.series_id) === itemId);
             if (!srcItem) continue;
-            allItems.push({ ...srcItem, id: itemId, name: ov.display_name ?? srcItem.name, [seriesFlag]: 1 });
+            allItems.push({ ...srcItem, id: itemId, name: ov.display_name ?? srcItem.name, [seriesFlag()]: 1 });
           }
           const offset = (startApiPage - 1) * itemsPerApiPage;
           const pageData = allItems.slice(offset, offset + itemsPerApiPage);
@@ -204,7 +204,7 @@ export const seriesRoutes: ServerRoute[] = [
             const pageData = list.slice(offset, offset + itemsPerApiPage).map((s: any) => ({
               ...s,
               id: String(s.series_id),
-              [seriesFlag]: 1,
+              [seriesFlag()]: 1,
               screenshot_uri: s.screenshot_uri || s.cover || "",
               description: s.description || s.plot || "",
               actors: s.actors || s.cast || "",
@@ -241,7 +241,7 @@ export const seriesRoutes: ServerRoute[] = [
               .map((s: any) => ({
                 ...s,
                 id: String(s.series_id),
-                [seriesFlag]: 1,
+                [seriesFlag()]: 1,
                 screenshot_uri: s.screenshot_uri || s.cover || "",
                 description: s.description || s.plot || "",
                 actors: s.actors || s.cast || "",
@@ -287,8 +287,8 @@ export const seriesRoutes: ServerRoute[] = [
         const rawData = res?.js?.data ?? [];
         let firstPageData = Number(movieId) === 0
           ? (isNativeSeries
-              ? rawData.map((item: any) => ({ ...item, [seriesFlag]: 1 }))
-              : rawData.filter((item: any) => item[seriesFlag] == 1))
+              ? rawData.map((item: any) => ({ ...item, [seriesFlag()]: 1 }))
+              : rawData.filter((item: any) => item[seriesFlag()] == 1))
           : rawData;
 
         // For episode-level requests refresh cmd via create_link — mirrors the

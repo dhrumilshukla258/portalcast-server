@@ -1,3 +1,4 @@
+import { setting } from "@/config/settings";
 import { enrichFromOmdb } from "@/content/omdb";
 import { syncImdbRatings } from "@/content/imdbRatings";
 import { findTvmazeShow } from "@/content/tvmaze";
@@ -855,6 +856,7 @@ async function backfillRatingsAndCreators(): Promise<void> {
  * series is looked up once (cache key tvmaze_series_<id>), and only empty fields are filled.
  */
 async function enrichFromTvmaze(): Promise<void> {
+  if (!setting<boolean>("tvmazeEnabled")) return;
   const rows = (await ContentMeta.findAll({
     where: { type: "series", tmdbId: null, isRepresentative: true },
     attributes: ["id", "name", "trimmedName", "year", "cast", "director", "overview", "poster", "rating"],
