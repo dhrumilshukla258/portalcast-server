@@ -144,7 +144,7 @@ export class StalkerAPI implements IProvider {
       const tokenRecord = await Token.findOne({ where: { isValid: true } });
       if (tokenRecord?.token) {
         logger.info(
-          `[StalkerAPI] Restored valid token from DB: ${tokenRecord.token}`,
+          `[StalkerAPI] Restored valid token from DB (…${String(tokenRecord.token).slice(-4)})`,
         );
         this.cache.set("auth_token", tokenRecord.token, 3600);
       }
