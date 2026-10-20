@@ -118,7 +118,7 @@ export const proxy: ServerRoute[] = [
     handler: async (request, h) => {
       const entry = streamTokenFromRequest(request);
       if (!entry) {
-        if ((request.query as any)?.t) recordFromRequest(request, "stream_token_invalid");
+        if ((request.query as any)?.t && !request.app?.streamTokenWrongNetwork) recordFromRequest(request, "stream_token_invalid");
         return h.response({ error: "Unauthorized" }).code(401);
       }
 
@@ -146,7 +146,7 @@ export const proxy: ServerRoute[] = [
     handler: async (request, h) => {
       const entry = streamTokenFromRequest(request);
       if (!entry) {
-        if ((request.query as any)?.t) recordFromRequest(request, "stream_token_invalid");
+        if ((request.query as any)?.t && !request.app?.streamTokenWrongNetwork) recordFromRequest(request, "stream_token_invalid");
         return h.response({ error: "Unauthorized" }).code(401);
       }
 

@@ -28,6 +28,7 @@ export type SecurityKind =
   | "refresh_reuse"          // a rotated-away refresh token was replayed (stolen token)
   | "pairing_code_invalid"   // wrong TV pairing code
   | "stream_token_invalid"   // bad/expired stream token on a media route
+  | "stream_token_wrong_network" // a valid stream link used from another network (not bannable)
   | "stream_throttled"       // media rate limit hit
   | "image_proxy_blocked"    // image proxy pointed at a private/loopback address
   | "upload_rejected"        // avatar upload was not an image

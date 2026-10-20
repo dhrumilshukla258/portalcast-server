@@ -12,7 +12,7 @@ import { ReqRefDefaults, ResponseToolkit } from "@hapi/hapi/lib/types";
 import { stalkerApi } from "@/providers/stalker";
 import { logger } from "@/infra/logger";
 import { streamTracker } from "@/services/StreamTracker";
-import { mintOrReuseStreamToken, streamTokenFromRequest, resolveStreamToken, inheritTokenMeta, type StreamTokenMeta } from "@/services/StreamTokens";
+import { mintOrReuseStreamToken, streamTokenFromRequest, resolveStreamTokenFor, inheritTokenMeta, type StreamTokenMeta } from "@/services/StreamTokens";
 import { recordFailure, recordSuccess } from "@/services/StreamFailures";
 import { segmentKey, primeSegment, readSegment, type CachedSegment } from "@/services/segmentCache";
 
@@ -300,7 +300,7 @@ export const liveRoutes: ServerRoute[] = [
     handler: async (request, h) => {
       const entry = streamTokenFromRequest(request);
       if (!entry) {
-        if ((request.query as any)?.t) recordFromRequest(request, "stream_token_invalid");
+        if ((request.query as any)?.t && !request.app?.streamTokenWrongNetwork) recordFromRequest(request, "stream_token_invalid");
         return h.response({ error: "Unauthorized" }).code(401);
       }
       const res: any = await serveLivePlaylist(request, h, entry);
@@ -413,7 +413,7 @@ async function servePlayerSegment(request: any, h: any) {
       token = token.slice(0, -3);
     }
 
-    const entry = resolveStreamToken(token);
+    const entry = resolveStreamTokenFor(request, token);
     if (!entry) {
       return h.response("Invalid or expired token").code(403);
     }
