@@ -141,6 +141,11 @@ export class ContentMeta extends Model {
   @Column(DataType.INTEGER)
   declare imdbVotes: number;
 
+  // When the ratings backfill got TMDB's answer for this title (even one without a rating
+  // or IMDb id), so a restart does not ask again.
+  @Column(DataType.DATE)
+  declare ratingsCheckedAt: Date;
+
   // From OMDb by IMDb id (omdb.ts), when OMDB_API_KEY is set: "94%" and 0-100.
   @Column(DataType.STRING)
   declare rtRating: string;

@@ -814,13 +814,14 @@ export async function sealProgressLinks(): Promise<void> {
 async function backfillRatingsAndCreators(): Promise<void> {
   const rows = (await ContentMeta.findAll({
     where: { tmdbId: { [Op.ne]: null } },
-    attributes: ["id", "type", "tmdbId", "cast", "director", "overview", "rating", "imdbId", "year", "isRepresentative"],
+    attributes: ["id", "type", "tmdbId", "cast", "director", "overview", "rating", "imdbId", "year", "isRepresentative", "ratingsCheckedAt"],
     raw: true,
   })) as any[];
   // Newest titles first (what people open first), the card shown in Discover before its
-  // other versions.
+  // other versions. A title TMDB already answered for (ratingsCheckedAt) is not asked again
+  // after a restart, even when TMDB had no rating or IMDb id for it.
   const todo = rows
-    .filter((r) => r.rating == null || !r.imdbId || (r.type === "series" && !r.director))
+    .filter((r) => !r.ratingsCheckedAt && (r.rating == null || !r.imdbId || (r.type === "series" && !r.director)))
     .sort((a, b) => (Number(b.year) || 0) - (Number(a.year) || 0) || Number(!!b.isRepresentative) - Number(!!a.isRepresentative));
   let filled = 0;
   for (let i = 0; i < todo.length; i++) {
@@ -828,13 +829,15 @@ async function backfillRatingsAndCreators(): Promise<void> {
     try {
       const meta = await fetchMetaByTmdbId(r.type === "series" ? "tv" : "movie", Number(r.tmdbId));
       if (meta) {
-        const patch: Record<string, string | number> = {};
+        // Recorded only when TMDB answered: a failed request is tried again next run.
+        const patch: Record<string, string | number | Date> = { ratingsCheckedAt: new Date() };
         if (meta.rating != null) { patch.rating = meta.rating; patch.ratingCount = meta.ratingCount ?? 0; }
         if (meta.imdbId) patch.imdbId = meta.imdbId;
         if (r.type === "series" && !r.director && meta.director) patch.director = meta.director;
         if (!r.cast && meta.cast) patch.cast = meta.cast;
         if (!r.overview && meta.overview) patch.overview = meta.overview;
-        if (Object.keys(patch).length) { await ContentMeta.update(patch, { where: { id: r.id } }); filled++; }
+        if (Object.keys(patch).length > 1) filled++;
+        await ContentMeta.update(patch, { where: { id: r.id } });
       }
     } catch (e: any) {
       logger.error(`[MetaEnrich] creators ${r.id}: ${e.message}`);
