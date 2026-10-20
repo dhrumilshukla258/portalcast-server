@@ -24,6 +24,9 @@ export const CHANNELS: Record<string, string[]> = {
   "Bol Entertainment": ["bol entertainment"],
   "SAB TV Pakistan": ["sab tv pakistan"],
   "Urdu 1": ["urdu 1", "urdu one"],
+  // Not one real channel but a generic "Urdu TV" label portals use for Pakistani dramas;
+  // shown as a badge all the same. Only a filter if Live TV has a channel by that name.
+  "Urdu TV": ["urdu tv show", "urdu tv", "urdu show"],
   "Play Entertainment": ["play entertainment tv", "play entertainment", "play tv"],
   "Aur Life": ["aur life"],
   "Aaj Entertainment": ["aaj entertainment"],
