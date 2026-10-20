@@ -58,7 +58,7 @@ Every title shows **one** rating, chosen by the server (`bestRating()` in `route
 2. **TMDB** (5+ votes), when IMDb has none.
 3. **TVmaze**, for a series TMDB does not know.
 
-Detail pages add the critics' scores **Rotten Tomatoes** and **Metacritic** (`rt_rating`, `metascore`) when OMDb has them (`content/omdb.ts`, by IMDb id only). This needs `OMDB_API_KEY` (free key: 1,000 calls a day; `OMDB_DAILY_LIMIT`, default 900). Never-checked titles go first, newest year first; scores are re-checked after 90 days. Without a key nothing runs.
+Detail pages add the critics' scores **Rotten Tomatoes** and **Metacritic** (`rt_rating`, `metascore`) when OMDb has them (`content/omdb.ts`, by IMDb id only). This needs `OMDB_API_KEY`: one key or several comma-separated (`key1,key2`). A free key allows 1,000 calls a day; each key is used up to `OMDB_DAILY_LIMIT` (default 900) or until OMDb refuses it, then the next. Logs name keys by position, never by value. Never-checked titles go first, newest year first; scores are re-checked after 90 days. Without a key nothing runs.
 
 ## TVmaze (series TMDB does not know)
 

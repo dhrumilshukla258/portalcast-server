@@ -70,8 +70,11 @@ export const appConfig: AppConfig = { ...AppConfigDefault };
 export const seriesFlag = process.env.SERIES_FLAG || "is_series";
 
 export const tmdbApiToken = process.env.TMDB_API_READ_TOKEN || "";
-/** Optional OMDb key (omdbapi.com): Rotten Tomatoes + Metacritic scores (content/omdb.ts). */
-export const omdbApiKey = process.env.OMDB_API_KEY || "";
+/**
+ * Optional OMDb keys (omdbapi.com), comma-separated: Rotten Tomatoes + Metacritic scores
+ * (content/omdb.ts). Each key is used up to OMDB_DAILY_LIMIT calls a day, then the next.
+ */
+export const omdbApiKeys = (process.env.OMDB_API_KEY || "").split(",").map((k) => k.trim()).filter(Boolean);
 export const omdbDailyLimit = Math.max(0, Number(process.env.OMDB_DAILY_LIMIT ?? 900) || 0);
 
 export const openSubtitlesApiKey = process.env.OPENSUBTITLES_API_KEY || "";
