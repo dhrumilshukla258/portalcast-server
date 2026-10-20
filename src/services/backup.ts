@@ -18,6 +18,25 @@ export function backupFolder(): string {
   return configured ? path.resolve(configured) : path.join(dataDir, "backups");
 }
 
+/**
+ * A one-off copy before a one-way change to stored data (e.g. encrypting provider
+ * credentials, which an older server build could not read back). Never rotated away.
+ */
+export async function backupBeforeChange(label: string): Promise<string | null> {
+  try {
+    const dir = backupFolder();
+    fs.mkdirSync(dir, { recursive: true });
+    const target = path.join(dir, `portalcast-before-${label}-${new Date().toISOString().slice(0, 10)}.db`);
+    if (fs.existsSync(target)) return target;
+    await sequelize.query("VACUUM INTO ?", { replacements: [target] });
+    logger.info(`[backup] copy saved before ${label}: ${target}`);
+    return target;
+  } catch (e: any) {
+    logger.error(`[backup] could not save a copy before ${label}: ${e?.message ?? e}`);
+    return null;
+  }
+}
+
 export async function backupDatabase(): Promise<string> {
   const keep = setting<number>("backupKeep");
   if (keep <= 0) return "backups are off (keep = 0)";

@@ -104,6 +104,14 @@ export async function migrateToProfiles() {
 export async function encryptStoredCredentials() {
   try {
     const profiles = await ConfigProfile.findAll();
+    if (!profiles.some((p) => hasPlainCredentials(p.getDataValue("config")))) return;
+    // One-way change (an older build cannot read encrypted credentials): keep a copy first,
+    // and stop if the copy fails rather than change data we cannot roll back.
+    const { backupBeforeChange } = await import("@/services/backup");
+    if (!(await backupBeforeChange("credential-encryption"))) {
+      logger.error("[security] provider credentials left unencrypted this start: the safety copy failed");
+      return;
+    }
     let n = 0;
     for (const p of profiles) {
       if (!hasPlainCredentials(p.getDataValue("config"))) continue;
