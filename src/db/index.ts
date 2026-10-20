@@ -236,6 +236,9 @@ export async function initDB() {
     await ensureColumns("content_meta", [["overview", "TEXT"], ["rating", "FLOAT"], ["ratingCount", "INTEGER"],
       ["imdbId", "VARCHAR(255)"], ["imdbRating", "FLOAT"], ["imdbVotes", "INTEGER"],
       ["rtRating", "VARCHAR(255)"], ["metascore", "INTEGER"], ["omdbCheckedAt", "DATETIME"]]);
+    // The daily IMDb ratings update and OMDb match rows by IMDb id: without an index each
+    // of ~100k updates would scan the whole table.
+    await sequelize.query("CREATE INDEX IF NOT EXISTS `idx_content_meta_imdbId` ON `content_meta` (`imdbId`);");
     await ensureColumns("users", [
       ["openSubtitlesUsername", "VARCHAR(255)"],
       ["openSubtitlesPasswordEnc", "TEXT"],

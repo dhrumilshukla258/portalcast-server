@@ -52,7 +52,7 @@ Stored per title besides art and tags: `overview`, `cast`, `director` (a series 
 
 ## Ratings
 
-Every title shows **one** rating, chosen by the server (`bestRating()` in `routes/discover/index.ts`) and sent as `rating_best` + `rating_source`:
+Every title shows **one** rating, chosen by the server (`bestRating()` in `content/titleRatings.ts`) and sent as `rating_best` + `rating_source`. All versions of a title (one `groupKey`: "ABC HD", "ABC - Hindi", "ABC Dub") show the same rating and details, merged across the group by `groupDataFor()`; Discover cards and the Movies / Series list items (`enrichArtworkFromTmdb` in `routes/stalkerV2/shared.ts`) both carry them, filling the portal's empty description/cast/director. The order:
 
 1. **IMDb** (20+ votes): the most voters and the score people know. Loaded from IMDb's free daily file `title.ratings.tsv.gz` at most once a day (`content/imdbRatings.ts`, personal non-commercial use), matched by the IMDb id TMDB gave us. IMDb has no free API and its pages may not be scraped; the webui links the score to the title's IMDb page.
 2. **TMDB** (5+ votes), when IMDb has none.

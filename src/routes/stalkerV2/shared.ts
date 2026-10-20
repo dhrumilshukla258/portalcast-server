@@ -1,3 +1,5 @@
+import { logger } from "@/infra/logger";
+import { groupDataFor, ratingFields } from "@/content/titleRatings";
 import { sealCmd } from "@/infra/sealedCmd";
 import { normalizeTitleKey, stripReleaseNoise } from "@/content/titleClean";
 import { searchCatalog } from "@/content/searchIndex";
@@ -166,7 +168,44 @@ export function stripUpstreamFields(item: any, origin?: string): any {
 
 export async function enrichArtworkFromTmdb(items: any[], kind: "movie" | "series", origin?: string): Promise<any[]> {
   const enriched = await enrichArtworkFromTmdbRaw(items, kind, origin);
-  return enriched.map((it) => withTitleKey(stripUpstreamFields(it, origin)));
+  const withGroup = await withGroupData(enriched, kind);
+  return withGroup.map((it) => withTitleKey(stripUpstreamFields(it, origin)));
+}
+
+/** content_meta id of a catalog item ("movie_<stream_id>", "series_<series_id>"). */
+function contentIdOf(item: any, kind: "movie" | "series"): string | null {
+  const raw = kind === "movie" ? item?.stream_id ?? item?.id : item?.series_id ?? item?.id;
+  return raw != null && raw !== "" ? `${kind}_${raw}` : null;
+}
+
+/**
+ * The same rating and details Discover shows, from the title's whole group (every version:
+ * "ABC HD", "ABC - Hindi", "ABC Dub"), on Movies / Series list items. The portal's own text
+ * stays when it has some; empty description / cast / director are filled. A lookup failure
+ * leaves the items as they were.
+ */
+async function withGroupData(items: any[], kind: "movie" | "series"): Promise<any[]> {
+  let data: Map<string, Record<string, any>>;
+  try {
+    data = await groupDataFor(items.map((it) => contentIdOf(it, kind)).filter((x): x is string => !!x));
+  } catch (e: any) {
+    logger.warn(`[catalog] group data lookup failed: ${e?.message ?? e}`);
+    return items;
+  }
+  if (data.size === 0) return items;
+  const blank = (v: any) => v == null || v === "" || v === "-" || v === "No description available";
+  return items.map((it) => {
+    const id = contentIdOf(it, kind);
+    const g = id ? data.get(id) : undefined;
+    if (!g) return it;
+    return {
+      ...it,
+      ...ratingFields(g),
+      description: blank(it.description) ? g.overview || it.description : it.description,
+      actors: blank(it.actors) ? g.cast || it.actors : it.actors,
+      director: blank(it.director) ? g.director || it.director : it.director,
+    };
+  });
 }
 
 /**
