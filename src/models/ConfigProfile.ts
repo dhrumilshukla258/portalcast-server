@@ -1,3 +1,4 @@
+import { encryptConfig, decryptConfig } from "@/config/providerSecrets";
 import { Table, Column, Model, DataType, PrimaryKey, AutoIncrement, Unique, Default } from "sequelize-typescript";
 import { Config } from "@/types/domain";
 
@@ -18,7 +19,17 @@ export class ConfigProfile extends Model {
     @Column(DataType.TEXT)
     declare description?: string;
 
-    @Column(DataType.JSON)
+    // Provider credentials are encrypted at rest (config/providerSecrets.ts); code that
+    // reads `profile.config` gets them decrypted.
+    @Column({
+        type: DataType.JSON,
+        get(this: ConfigProfile) {
+            return decryptConfig(this.getDataValue("config"));
+        },
+        set(this: ConfigProfile, value: Config) {
+            this.setDataValue("config", encryptConfig(value));
+        },
+    })
     declare config: Config;
 
     @Default(false)

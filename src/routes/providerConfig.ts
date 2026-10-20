@@ -1,3 +1,4 @@
+import { maskConfig, unmaskConfig } from "@/config/providerSecrets";
 import { ServerRoute } from "@hapi/hapi";
 import { sniffRasterImage } from "@/infra/sniffImage";
 import { recordFromRequest } from "@/services/SecurityEvents";
@@ -46,7 +47,8 @@ export const configRoutes: ServerRoute[] = [
     path: "/api/config",
     handler: async (request, h) => {
       if (!requireAdmin(request)) return h.response({ error: "Forbidden" }).code(403);
-      return initialConfig;
+      // The password goes out as a placeholder; sending it back keeps the stored one.
+      return maskConfig(initialConfig);
     },
   },
   {
@@ -55,8 +57,8 @@ export const configRoutes: ServerRoute[] = [
     handler: async (request, h) => {
       if (!requireAdmin(request)) return h.response({ error: "Forbidden" }).code(403);
       try {
-        const newConfig = request.payload as any;
         const activeProfile = await ConfigProfile.findOne({ where: { isActive: true } });
+        const newConfig = unmaskConfig(request.payload as any, activeProfile?.config);
         let finalConfig = activeProfile ? { ...activeProfile.config } : newConfig;
 
         if (activeProfile) {

@@ -36,7 +36,8 @@ async function probeMetadata(url: string): Promise<MediaMetadata> {
   const cached = metadataCache.get<MediaMetadata>(url);
   if (cached) return cached;
 
-  logger.info(`[Subtitles] Probing: ${url}`);
+  // Never log the address: an upstream link can carry the portal's credentials.
+  logger.info(`[Subtitles] Probing the active stream for embedded tracks`);
   const { stdout } = await execFileAsync("ffprobe", [
     "-user_agent", "VLC/3.0.16 LibVLC/3.0.16",
     "-probesize", "5000000",
@@ -73,14 +74,22 @@ async function probeMetadata(url: string): Promise<MediaMetadata> {
 }
 
 // These routes probe/extract embedded subtitle tracks from progressive
-// (non-HLS) video files for the web player. Unlike every other stream route,
-// the resource here can't be pre-tokenized server-side — the client is the
-// one that knows which file it's currently playing, and ffprobe/ffmpeg need
-// the actual byte stream (not a title) to find what's inside the container.
-// So `url=` stays caller-supplied, and the required `?t=` token — the same
-// one already minted for the active playback session — serves purely as
-// proof the caller is an authenticated identity, same pattern used by the
-// old HLS transcode proxy's master.m3u8 route before it was removed.
+// (non-HLS) video files for the web player. The file is the one the `?t=`
+// stream token was minted for (the token's resource), never an address the
+// client sends: a caller-supplied `url=` let any signed-in user make the
+// server open arbitrary addresses, including ones inside the home network.
+// Older webuis still send `url=`; it is accepted and ignored.
+function tokenResource(entry: { resource?: string } | null | undefined): string | null {
+  const r = entry?.resource;
+  if (!r) return null;
+  try {
+    assertHttpUrl(r);
+    return r;
+  } catch {
+    return null;
+  }
+}
+
 export const subtitleRoutes: ServerRoute[] = [
   {
     method: "GET",
@@ -89,11 +98,9 @@ export const subtitleRoutes: ServerRoute[] = [
       const entry = streamTokenFromRequest(request);
       if (!entry) return h.response({ error: "Unauthorized" }).code(401);
 
-      const { url } = request.query as { url?: string };
-      if (!url) return h.response({ error: "Missing url" }).code(400);
+      const raw = tokenResource(entry);
+      if (!raw) return h.response({ error: "This stream has no file to probe" }).code(400);
       try {
-        const raw = Buffer.from(url, "base64").toString("utf-8");
-        assertHttpUrl(raw);
         return h.response(await probeMetadata(raw));
       } catch (e: any) {
         logger.error(`[Subtitles] /media/info error: ${e.message}`);
@@ -108,13 +115,14 @@ export const subtitleRoutes: ServerRoute[] = [
       const entry = streamTokenFromRequest(request);
       if (!entry) return h.response("Unauthorized").code(401);
 
-      const { url, track } = request.query as { url?: string; track?: string };
-      if (!url || track === undefined) return h.response("Missing params").code(400);
+      const { track } = request.query as { track?: string };
+      if (track === undefined) return h.response("Missing params").code(400);
+      const raw = tokenResource(entry);
+      if (!raw) return h.response("This stream has no file").code(400);
+      const idx = parseInt(track, 10);
+      if (!Number.isInteger(idx) || idx < 0 || idx > 64) return h.response("Bad track").code(400);
 
       try {
-        const raw = Buffer.from(url, "base64").toString("utf-8");
-        assertHttpUrl(raw);
-        const idx = parseInt(track, 10);
         const args = [
           "-user_agent", "VLC/3.0.16 LibVLC/3.0.16",
           "-i", raw,

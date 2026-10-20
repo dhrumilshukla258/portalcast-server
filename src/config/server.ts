@@ -1,3 +1,4 @@
+import { hasPlainCredentials } from "@/config/providerSecrets";
 import { setting } from "@/config/settings";
 import fs from "fs";
 import { AppConfig, Config } from "@/types/domain";
@@ -96,6 +97,24 @@ export async function migrateToProfiles() {
     }
   } catch (err) {
     logger.error({ err }, "Error during profile migration");
+  }
+}
+
+/** Re-saves profiles whose provider credentials are still stored unencrypted. */
+export async function encryptStoredCredentials() {
+  try {
+    const profiles = await ConfigProfile.findAll();
+    let n = 0;
+    for (const p of profiles) {
+      if (!hasPlainCredentials(p.getDataValue("config"))) continue;
+      p.config = p.config; // the model's setter encrypts
+      p.changed("config", true);
+      await p.save();
+      n++;
+    }
+    if (n) logger.info(`[security] encrypted provider credentials in ${n} profile(s)`);
+  } catch (err) {
+    logger.error({ err }, "Could not encrypt stored provider credentials");
   }
 }
 

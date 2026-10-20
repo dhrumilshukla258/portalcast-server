@@ -1,3 +1,4 @@
+import { maskProfile, unmaskConfig } from "@/config/providerSecrets";
 import { ServerRoute } from "@hapi/hapi";
 import { logger } from "@/infra/logger";
 import { ConfigProfile } from "@/models/ConfigProfile";
@@ -26,7 +27,7 @@ export const profileRoutes: ServerRoute[] = [
         const profiles = await ConfigProfile.findAll({
           order: [["createdAt", "DESC"]],
         });
-        return profiles;
+        return profiles.map(maskProfile);
       } catch (error) {
         logger.error({ err: error }, "Error fetching profiles");
         return h.response({ error: "Failed to fetch profiles" }).code(500);
@@ -47,7 +48,7 @@ export const profileRoutes: ServerRoute[] = [
           return h.response({ error: "Profile not found" }).code(404);
         }
 
-        return profile;
+        return maskProfile(profile);
       } catch (error) {
         logger.error({ err: error }, "Error fetching profile");
         return h.response({ error: "Failed to fetch profile" }).code(500);
@@ -83,11 +84,12 @@ export const profileRoutes: ServerRoute[] = [
         const profile = await saveProfileToDB({
           name: safeName,
           description: payload.description,
-          config: payload.config,
+          // A form seeded from the active profile sends the password placeholder: keep that password.
+          config: unmaskConfig(payload.config, (await ConfigProfile.findOne({ where: { isActive: true } }))?.config),
           isEnabled: payload.isEnabled,
         });
 
-        return h.response(profile).code(201);
+        return h.response(maskProfile(profile)).code(201);
       } catch (error) {
         logger.error({ err: error }, "Error creating profile");
         return h.response({ error: "Failed to create profile" }).code(500);
@@ -126,7 +128,7 @@ export const profileRoutes: ServerRoute[] = [
 
         if (payload.description !== undefined)
           profile.description = payload.description;
-        if (payload.config !== undefined) profile.config = payload.config;
+        if (payload.config !== undefined) profile.config = unmaskConfig(payload.config, profile.config);
         if (payload.isEnabled !== undefined)
           profile.isEnabled = payload.isEnabled;
 
@@ -243,7 +245,7 @@ export const profileRoutes: ServerRoute[] = [
         profile.isEnabled = true;
         await profile.save();
 
-        return { message: `Profile "${profile.name}" enabled`, profile };
+        return { message: `Profile "${profile.name}" enabled`, profile: maskProfile(profile) };
       } catch (error) {
         logger.error({ err: error }, "Error enabling profile");
         return h.response({ error: "Failed to enable profile" }).code(500);
@@ -276,7 +278,7 @@ export const profileRoutes: ServerRoute[] = [
         profile.isEnabled = false;
         await profile.save();
 
-        return { message: `Profile "${profile.name}" disabled`, profile };
+        return { message: `Profile "${profile.name}" disabled`, profile: maskProfile(profile) };
       } catch (error) {
         logger.error({ err: error }, "Error disabling profile");
         return h.response({ error: "Failed to disable profile" }).code(500);

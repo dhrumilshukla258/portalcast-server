@@ -32,7 +32,7 @@ import { socketService } from "./services/SocketService";
 import { initDB } from "./db";
 import { loadSettings, setting } from "./config/settings";
 import { settingsRoutes } from "./routes/admin/settings";
-import { migrateToProfiles, loadActiveProfileFromDB } from "./config/server";
+import { migrateToProfiles, loadActiveProfileFromDB, encryptStoredCredentials } from "./config/server";
 import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres } from "./services/xtreamCache";
 import { enrichContentMeta, sweepStaleContent } from "./content/metaEnrichment";
 import { fetchAndCacheEpg } from "./content/epg";
@@ -67,6 +67,7 @@ const init = async () => {
   }
 
   await migrateToProfiles();
+  await encryptStoredCredentials();
 
   await loadActiveProfileFromDB();
   // Explicitly initialize provider after loading the active profile from DB,
