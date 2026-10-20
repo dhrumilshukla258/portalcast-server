@@ -90,6 +90,13 @@ export const CHANNELS: Record<string, string[]> = {
   "MTV": ["mtv"],
 };
 
+/**
+ * Entries that are not TV channels: streaming platforms and the generic "Urdu TV". They are
+ * listed in Discover's "Channel / Platform" filter without the Live TV check (they never are
+ * in Live TV); real channels are listed only when Live TV has them.
+ */
+export const PLATFORMS: ReadonlySet<string> = new Set(["Zee5", "SonyLIV", "JioHotstar", "Voot", "Aha", "Sun NXT", "Urdu TV"]);
+
 const ALIASES = Object.entries(CHANNELS)
   .flatMap(([canonical, aliases]) => aliases.map((a) => ({ alias: a, canonical })))
   .sort((a, b) => b.alias.length - a.alias.length); // longest first: "star vijay tamil" before "star vijay"

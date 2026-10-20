@@ -1,5 +1,6 @@
 import { stripReleaseNoise, channelOf } from "@/content/titleClean";
 import { channelLogo, isLiveChannel } from "@/content/channels";
+import { PLATFORMS } from "@/content/channelNames";
 import { ServerRoute } from "@hapi/hapi";
 import { withVideoInfo, getVideoInfo, ensureMediaInfoLoaded } from "@/content/mediaInfo";
 import { Op } from "sequelize";
@@ -121,9 +122,10 @@ export const discoverRoutes: ServerRoute[] = [
         themes: f.themes,
         languages: f.languages,
         // Channels shows air on, with their logos (from the live channel list).
-        // Only channels that exist in Live TV; a show from an app (Zee5) or a channel the
-        // portal does not carry keeps its clean name and badge but is not a filter.
-        networks: f.networks.filter((n) => isLiveChannel(n.value)).map((n) => ({ ...n, logo: channelLogo(n.value, getPublicOrigin(request)) || undefined })),
+        // "Channel / Platform": TV channels that exist in Live TV, plus streaming platforms and
+        // the generic "Urdu TV" (never in Live TV). A channel the portal does not carry keeps
+        // its clean name and badge but is not offered.
+        networks: f.networks.filter((n) => isLiveChannel(n.value) || PLATFORMS.has(n.value)).map((n) => ({ ...n, logo: channelLogo(n.value, getPublicOrigin(request)) || undefined })),
       };
     },
   },
