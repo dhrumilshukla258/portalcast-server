@@ -53,6 +53,9 @@ jobs:
       - name: Install, build, prune
         run: |
           npm ci
+          # sqlite3's prebuilt Linux binary needs glibc 2.38 (the runner, Debian 12 and
+          # Raspberry Pi OS have older): build it here instead, so it runs on glibc >= 2.35.
+          if [[ "$RUNNER_OS" == "Linux" ]]; then npm rebuild sqlite3 --build-from-source; fi
           npm run build
           npm prune --omit=dev
 
