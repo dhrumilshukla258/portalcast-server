@@ -120,17 +120,23 @@ const VARIANT_RE = new RegExp(`\\b(${VARIANT_ALTERNATION})\\b`, "gi");
 // silently mutilated: "Maal - Tamil HD" -> "l" (via "Maa"), "Sunrise" -> "rise"
 // (via "Sun"), "Colorsplash" -> "plash" (via "Colors"), "Starship Troopers"
 // -> "ship troopers" (via "Star") — verified against real catalog data.
-// A separator after the channel is required: without one, "Star Wars : The Clone Wars"
-// lost "Star" and "Colors of Love" lost "Colors" (found 2026-10-19).
-const CHANNEL_PREFIX_RE = /^(Colors(?:\s+(?:Kannada|Tamil|Gujarati|Bangla|Marathi|Odia|Punjabi|Rishtey|Super|Infinity))?|Zee(?:\s+(?:TV|Telugu|Tamil|Kannada|Marathi|Bangla|Punjabi|Malayalam|Cafe|Cinema|News|Anmol|Bollywood|Classic|Action|World))?|Star(?:\s+(?:Plus|Vijay|Jalsha|Pravah|Suvarna|Maa|Bharat|Utsav|Gold|World|Movies|Sports))?|Sony(?:\s+(?:TV|SAB|Liv|Max|Aath|Rox|Marathi))?|Sun(?:\s+(?:TV|Bangla|Marathi|Neo|Life))?|Gemini(?:\s+(?:TV|Music|Movies))?|Maa(?:\s+(?:TV|Gold|Movies))?|ETV(?:\s+(?:Telugu|Plus|Andhra))?|Life\s+OK|Asianet|Vijay\s*TV|SAB\s*TV|Rishtey|Big\s+Magic|Aaj\s+Tak|Republic\s*TV|NDTV|CNN|BBC|Discovery|National\s+Geographic|Nat\s+Geo|HUM\s*TV|ARY\s*Digital|Har\s*Pal\s*Geo|MUN\s*TV|Dangal\s*TV|And\s*TV|MTV|Express\s*Tv|Urdu\s*Tv\s*Show|Urdu\s*1|Untold(?:\s+UK)?)\b\s*[:\-|]\s*/i;
+// A ":" or "|" after the channel is required: without one "Star Wars : The Clone Wars"
+// lost "Star" and "Colors of Love" lost "Colors"; " - " is a film's language/year tag
+// ("Dangal - Telugu"), not a channel separator (found 2026-10-19/20).
+const CHANNEL_PREFIX_RE = /^(Colors(?:\s+(?:Kannada|Tamil|Gujarati|Bangla|Marathi|Odia|Punjabi|Rishtey|Super|Infinity))?|Zee(?:\s+(?:TV|Telugu|Tamil|Kannada|Marathi|Bangla|Punjabi|Malayalam|Cafe|Cinema|News|Anmol|Bollywood|Classic|Action|World))?|Star(?:\s+(?:Plus|Vijay|Jalsha|Pravah|Suvarna|Maa|Bharat|Utsav|Gold|World|Movies|Sports))?|Sony(?:\s+(?:TV|SAB|Liv|Max|Aath|Rox|Marathi))?|Sun(?:\s+(?:TV|Bangla|Marathi|Neo|Life))?|Gemini(?:\s+(?:TV|Music|Movies))?|Maa(?:\s+(?:TV|Gold|Movies))?|ETV(?:\s+(?:Telugu|Plus|Andhra))?|Life\s+OK|Asianet|Vijay\s*TV|SAB\s*TV|Rishtey|Big\s+Magic|Aaj\s+Tak|Republic\s*TV|NDTV|CNN|BBC|Discovery|National\s+Geographic|Nat\s+Geo|HUM\s*TV|ARY\s*Digital|Har\s*Pal\s*Geo|MUN\s*TV|Dangal\s*TV|And\s*TV|MTV|Express\s*Tv|Urdu\s*Tv\s*Show|Urdu\s*1|Untold(?:\s+UK)?)\b\s*([:|\-])?\s*/i;
 
 // Strips known channel prefixes and quality/language/dub tags, preserving case and the
 // remaining title text as-is (for display or as a search query).
-export function stripReleaseNoise(name: string): string {
-  // The curated channel list first ("Zee5 : X", "Udaya Tv : X", "NXT : X"), then the older
-  // prefix pattern, which also covers channel names written without a separator.
-  return splitChannel(name).title
-    .replace(CHANNEL_PREFIX_RE, "")
+// A one-word channel ("Star", "Colors", "Dangal") counts only before ":" or "|" ("Star Wars",
+// "Dangal - Telugu" are titles); a full multi-word channel name ("Colors Marathi Swamini",
+// "Star Vijay SPB Oru Kaaviyam") is taken off with or without a separator.
+function stripChannelPrefix(name: string): string {
+  return name.replace(CHANNEL_PREFIX_RE, (match, prefix: string, sep?: string) =>
+    sep === ":" || sep === "|" || /\s/.test(String(prefix).trim()) ? "" : match);
+}
+
+function stripNoise(name: string): string {
+  return stripChannelPrefix(name)
     .replace(VARIANT_RE, "")
     // Removing a tag from "Title - Hindi" or "Title (ES)" leaves the separator behind
     // ("Title -" / "Title ()") — without cleaning it up, two titles differing only by
@@ -140,6 +146,26 @@ export function stripReleaseNoise(name: string): string {
     .replace(/\s+/g, " ")
     .replace(/^[\s\-:|,]+|[\s\-:|,]+$/g, "")
     .trim();
+}
+
+/**
+ * Channel prefix ("Zee5 : X", from the curated list) and quality/language/dub tags removed.
+ * The channel is only taken off when a real title is left behind; otherwise the name is
+ * cleaned as if it had no channel.
+ */
+export function stripReleaseNoise(name: string): string {
+  const split = splitChannel(name);
+  if (split.channel) {
+    const rest = stripNoise(split.title);
+    if (rest) return rest;
+  }
+  return stripNoise(name);
+}
+
+/** The channel a title airs on, when its name starts with one and a real title follows. */
+export function channelOf(name: string): string | null {
+  const split = splitChannel(name);
+  return split.channel && stripNoise(split.title) ? split.channel : null;
 }
 
 // Same as stripReleaseNoise, but also lowercases — used as a grouping key where case

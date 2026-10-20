@@ -1,5 +1,5 @@
-import { stripReleaseNoise } from "@/content/titleClean";
-import { splitChannel, channelLogo, isLiveChannel } from "@/content/channels";
+import { stripReleaseNoise, channelOf } from "@/content/titleClean";
+import { channelLogo, isLiveChannel } from "@/content/channels";
 import { ServerRoute } from "@hapi/hapi";
 import { withVideoInfo, getVideoInfo, ensureMediaInfoLoaded } from "@/content/mediaInfo";
 import { Op } from "sequelize";
@@ -35,7 +35,7 @@ function toMediaItem(row: any, genresById: Map<string, string[]>, countriesById:
   // The channel in the name ("Zee5 : Manemagalu") is shown as a logo, not as text. Rows
   // cleaned before the channel list existed still carry it in trimmedName, so a name with
   // a channel is cleaned again here (stripReleaseNoise is a few regexes).
-  const network = splitChannel(row.name).channel;
+  const network = channelOf(row.name);
   const displayName = network ? stripReleaseNoise(row.name) || row.trimmedName || row.name : row.trimmedName || row.name;
   return {
     id: row.id,

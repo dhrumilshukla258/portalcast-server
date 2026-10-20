@@ -26,7 +26,7 @@
 // titles are applied at query time from the override generation, so hiding/unhiding a
 // title is reflected immediately without a rebuild.
 
-import { splitChannel } from "@/content/channelNames";
+import { channelOf } from "@/content/titleClean";
 import { QueryTypes } from "sequelize";
 import { sequelize } from "@/db";
 import { logger } from "@/infra/logger";
@@ -129,7 +129,7 @@ async function buildIndex(): Promise<DiscoverIndex> {
     "SELECT id, name FROM content_meta WHERE isRepresentative = 1 AND (instr(name, ':') > 0 OR instr(name, '|') > 0 OR instr(name, ' - ') > 0)",
     { type: QueryTypes.SELECT },
   )).flatMap((row) => {
-    const channel = splitChannel(row.name).channel;
+    const channel = channelOf(row.name);
     return channel ? [{ contentId: row.id, value: channel }] : [];
   });
   for (const kind of [...Object.keys(tables), "network"] as TagKind[]) {

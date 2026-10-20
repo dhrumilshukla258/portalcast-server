@@ -32,7 +32,7 @@ export const CHANNELS: Record<string, string[]> = {
   "Colors": ["colors tv", "colors"],
   "Colors Kannada": ["colors kannada"],
   "Colors Marathi": ["colors marathi"],
-  "Colors Gujarati": ["colors gujarati"],
+  "Colors Gujarati": ["colors gujarati", "colors gujrati"],
   "Colors Tamil": ["colors tv tamil", "colors tamil"],
   "Colors Bangla": ["colors bangla"],
   "Zee TV": ["zee tv"],
@@ -65,9 +65,12 @@ const ALIASES = Object.entries(CHANNELS)
   .sort((a, b) => b.alias.length - a.alias.length); // longest first: "star vijay tamil" before "star vijay"
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-// "<channel> : title", "<channel> - title", "<channel> | title". A separator is required, so a
-// title that merely starts with a channel's words ("Colors of Love", "Sunrise") is untouched.
-const PREFIX_RE = new RegExp(`^\\s*(${ALIASES.map((a) => escape(a.alias)).join("|")})\\s*(?::|\\||\\s-\\s)\\s*(.+)$`, "i");
+// "<channel> : title" or "<channel> | title". The separator is required, so a title that merely
+// starts with a channel's words ("Colors of Love", "Sunrise") is untouched; " - " is NOT one:
+// that is how portals tag a film's language or year ("Dangal - Telugu", "Dangal - 2016",
+// "Colors - Mal", "Gemini - (ES)" are films, and read as channels they lost their names).
+const PREFIX_RE = new RegExp(`^\\s*(${ALIASES.map((a) => escape(a.alias)).join("|")})\\s*[:|]\\s*(.+)$`, "i");
+const ONLY_YEAR_RE = /^[\s(\[]*(?:19|20)\d{2}[\s)\]]*$/;
 const CANONICAL = new Map(ALIASES.map((a) => [a.alias, a.canonical]));
 
 export interface ChannelSplit {
@@ -78,7 +81,7 @@ export interface ChannelSplit {
 /** "Zee5 : Manemagalu" -> { channel: "Zee5", title: "Manemagalu" }; no channel -> title as given. */
 export function splitChannel(name: string): ChannelSplit {
   const m = PREFIX_RE.exec(String(name || ""));
-  if (!m || !m[2].trim()) return { channel: null, title: String(name || "") };
+  if (!m || !m[2].trim() || ONLY_YEAR_RE.test(m[2])) return { channel: null, title: String(name || "") };
   return { channel: CANONICAL.get(m[1].toLowerCase()) ?? m[1], title: m[2].trim() };
 }
 

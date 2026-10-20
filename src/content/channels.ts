@@ -8,7 +8,7 @@
 // franchises ("Star Wars : ...", "Avatar : ...", "Batman : ...") and real titles
 // ("Jack Carr Investigates: ..."). Aliases are the spellings seen on real portals.
 
-import { splitChannel } from "@/content/channelNames";
+import { channelOf } from "@/content/titleClean";
 import { fetchTvNetworks } from "@/content/tmdb";
 import { xtreamCache } from "@/services/xtreamCache";
 import { QueryTypes } from "sequelize";
@@ -102,7 +102,7 @@ export async function resolveTmdbChannelLogos(): Promise<void> {
     );
     const showsOf = new Map<string, number[]>();
     for (const r of rows) {
-      const c = splitChannel(r.name).channel;
+      const c = channelOf(r.name);
       if (!c || !due.includes(c)) continue;
       const list = showsOf.get(c) || [];
       if (list.length < 3 && !list.includes(Number(r.tmdbId))) list.push(Number(r.tmdbId));

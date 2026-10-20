@@ -1,4 +1,4 @@
-import { splitChannel } from "@/content/channelNames";
+import { channelOf } from "@/content/titleClean";
 import { Transaction } from "sequelize";
 import { xtreamCache, catchupScan } from "@/services/xtreamCache";
 import { readGenres } from "@/infra/storage";
@@ -16,13 +16,19 @@ import { normalizeTitleKey, stripReleaseNoise } from "@/content/titleClean";
 import { tmdbQueries } from "@/content/tmdb";
 
 /**
- * The key language/format variants of one title share. A TMDB match groups by TMDB id,
- * so "Kim's Convenience" and "Kim's Convenience 2016" (whose name alone never produced
- * the same key) are one title with two versions; unmatched rows fall back to the
- * cleaned name plus year.
+ * The key language/format variants of one title share: the cleaned name plus, when TMDB
+ * matched it, the TMDB id (else the year). Both must agree, so "Kim's Convenience" and
+ * "Kim's Convenience 2016" (same name once the glued-on year is gone, same TMDB show) are
+ * one title with two versions, while two different titles that an old search wrongly gave
+ * the same TMDB id ("Officer" and "An Officer and a Gentleman") stay separate. Grouping by
+ * TMDB id alone merged 2,456 such groups on the live catalog (2026-10-20).
  */
+const TRAILING_YEAR = /[\s_\-]*[(\[]?(?:19|20)\d{2}[)\]]?\s*$/;
 export function groupKeyFor(type: ContentType, name: string, year: string | null | undefined, tmdbId?: number | null): string {
-  return tmdbId ? `${type}:tmdb:${tmdbId}` : `${type}:${normalizeTitleKey(name)}:${year || ""}`;
+  if (!tmdbId) return `${type}:${normalizeTitleKey(name)}:${year || ""}`;
+  const key = normalizeTitleKey(name);
+  const noYear = key.replace(TRAILING_YEAR, "").trim() || key;
+  return `${type}:${noYear}:tmdb${tmdbId}`;
 }
 
 // Single catch-all genre tag for titles whose only "genre" signal is a
@@ -613,27 +619,51 @@ let isEnriching = false;
 // the regular enrichment pass, so a server upgrade repairs existing rows without a manual
 // re-enrichment of the whole catalog.
 const FIXUP_KEY = "meta_fixup_generation";
-const FIXUP_GENERATION = 2;
+const FIXUP_GENERATION = 3;
 
 async function runFixups(): Promise<void> {
   const row = await SystemConfig.findByPk(FIXUP_KEY);
   const done = Number(row?.value ?? 0);
   if (done >= FIXUP_GENERATION) return;
   logger.info(`[MetaEnrich] running catalog fix-ups ${done + 1}..${FIXUP_GENERATION}`);
-  if (done < 1) {
-    await regroupByTmdbId();
-    await retryUnmatched();
-  }
+  // Generation 1 used to regroup by TMDB id alone (regroupByTmdbId); that merged different
+  // titles, so it no longer runs and generation 3 recomputes every group with groupKeyFor.
+  if (done < 1) await retryUnmatched();
   if (done < 2) await recleanChannelNames();
+  if (done < 3) await regroupAll();
   await SystemConfig.upsert({ key: FIXUP_KEY, value: FIXUP_GENERATION });
 }
 
-/** Generation 1: rows with a TMDB id group by it (see groupKeyFor). */
-async function regroupByTmdbId(): Promise<void> {
-  const [, meta] = await ContentMeta.sequelize!.query(
-    "UPDATE content_meta SET groupKey = type || ':tmdb:' || tmdbId WHERE tmdbId IS NOT NULL AND groupKey NOT LIKE '%:tmdb:%'",
-  );
-  logger.info(`[MetaEnrich] regrouped ${(meta as any)?.changes ?? "?"} rows by TMDB id`);
+/**
+ * Generation 3: every row's group and cleaned name recomputed with the current rules
+ * (groupKeyFor, stripReleaseNoise), in batched transactions. Representatives are picked
+ * again right after (enrichContentMeta), so Discover shows one card per real title.
+ */
+async function regroupAll(): Promise<void> {
+  const rows = (await ContentMeta.findAll({
+    attributes: ["id", "type", "name", "year", "tmdbId", "groupKey", "trimmedName"],
+    raw: true,
+  })) as any[];
+  // The cleaned name is only rewritten where today's rules are meant to change it: a title
+  // with a channel in front, or a name the old prefix pattern had cut short ("Wars" ->
+  // "Star Wars"). Other rows keep theirs, so no older cleaning rule is applied anew.
+  const changes = rows
+    .map((r) => {
+      const fresh = stripReleaseNoise(r.name);
+      const old = r.trimmedName || "";
+      const trimmedName = channelOf(r.name) || fresh.length > old.length ? fresh : old;
+      return { id: r.id, groupKey: groupKeyFor(r.type, r.name, r.year, r.tmdbId), trimmedName, old: r };
+    })
+    .filter((c) => c.groupKey !== c.old.groupKey || c.trimmedName !== (c.old.trimmedName || ""));
+  const BATCH = 500;
+  for (let i = 0; i < changes.length; i += BATCH) {
+    await ContentMeta.sequelize!.transaction(async (transaction) => {
+      for (const c of changes.slice(i, i + BATCH)) {
+        await ContentMeta.update({ groupKey: c.groupKey, trimmedName: c.trimmedName }, { where: { id: c.id }, transaction });
+      }
+    });
+  }
+  logger.info(`[MetaEnrich] regrouped: ${changes.length} of ${rows.length} rows got a new group or cleaned name`);
 }
 
 /**
@@ -698,7 +728,7 @@ async function recleanChannelNames(): Promise<void> {
   let matched = 0;
   for (const row of rows) {
     const trimmed = stripReleaseNoise(row.name);
-    const hasChannel = !!splitChannel(row.name).channel;
+    const hasChannel = !!channelOf(row.name);
     if (trimmed === row.trimmedName && !hasChannel) continue;
     recleaned++;
     // Matched rows, and unmatched ones without a channel (the old pattern had mangled
