@@ -1,3 +1,4 @@
+import { sealCmd } from "@/infra/sealedCmd";
 import { ServerRoute } from "@hapi/hapi";
 import { sniffRasterImage } from "@/infra/sniffImage";
 import crypto from "crypto";
@@ -195,7 +196,8 @@ export const userRoutes: ServerRoute[] = [
           mediaId: String(mediaId),
           progress: Number(progress || 0),
           completed: !!completed,
-          meta: meta ?? {}
+          // An upstream stream link a client sends along is stored sealed, never readable.
+          meta: meta && typeof meta === "object" && "cmd" in meta ? { ...meta, cmd: sealCmd(meta.cmd) } : meta ?? {}
         });
 
         return { success: true };

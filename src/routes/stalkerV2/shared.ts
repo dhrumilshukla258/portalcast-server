@@ -1,3 +1,4 @@
+import { sealCmd } from "@/infra/sealedCmd";
 import { normalizeTitleKey, stripReleaseNoise } from "@/content/titleClean";
 import { searchCatalog } from "@/content/searchIndex";
 import axios from "axios";
@@ -157,6 +158,9 @@ export function stripUpstreamFields(item: any, origin?: string): any {
   if (!item || typeof item !== "object") return item;
   const { stream_icon: _si, direct_source: _ds, cover, ...rest } = item;
   if (typeof cover === "string" && cover) rest.cover = proxiedImageUrl(cover, origin);
+  // An upstream stream link (a portal's create_link answer, its CDN URL) is sealed: the
+  // client can hand it back for playback but never read or play it (infra/sealedCmd.ts).
+  if (rest.cmd !== undefined) rest.cmd = sealCmd(rest.cmd, origin);
   return rest;
 }
 

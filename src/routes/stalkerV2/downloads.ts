@@ -1,4 +1,5 @@
-﻿import { ServerRoute } from "@hapi/hapi";
+﻿import { unsealCmd } from "@/infra/sealedCmd";
+import { ServerRoute } from "@hapi/hapi";
 import {
   writeJSON,
   readChannels,
@@ -69,7 +70,7 @@ export const downloadRoutes: ServerRoute[] = [
           id,
           series,
           isSeries: isSeries === "1" || isSeries === "true",
-          cmd,
+          cmd: unsealCmd(cmd) || undefined,
           title,
         },
         userLabel

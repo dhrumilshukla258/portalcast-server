@@ -1,4 +1,5 @@
-﻿import { ServerRoute } from "@hapi/hapi";
+﻿import { unsealCmd } from "@/infra/sealedCmd";
+import { ServerRoute } from "@hapi/hapi";
 import {
   writeJSON,
   readChannels,
@@ -434,8 +435,9 @@ export const movieRoutes: ServerRoute[] = [
           id = "",
           download = 0,
           token,
-          cmd,
         } = request.query;
+        // A sealed upstream link (infra/sealedCmd.ts) is opened here; never echoed back.
+        const cmd = unsealCmd(request.query.cmd) || undefined;
         const { title, category } = request.query as { title?: string; category?: string };
         const isSeries =
           series && series !== "0" && series !== "false" && series !== "";

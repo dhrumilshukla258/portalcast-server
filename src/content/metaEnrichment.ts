@@ -1,3 +1,4 @@
+import { sealCmd, isUpstreamLink } from "@/infra/sealedCmd";
 import { channelOf } from "@/content/titleClean";
 import { Op, Transaction } from "sequelize";
 import { xtreamCache, catchupScan } from "@/services/xtreamCache";
@@ -682,6 +683,7 @@ async function runFixups(): Promise<void> {
     await recomputeRepresentatives();
     clearDiscoverCache();
   });
+  await step("seal-progress-links", sealProgressLinks);
   await step("backfill-credits", backfillCreditsAndOverview);
   await step("fix-year-mismatches", fixYearMismatches);
   await step("retry-unmatched", retryUnmatched);
@@ -755,6 +757,25 @@ async function fixYearMismatches(): Promise<void> {
     }
   }
   logger.info(`[MetaEnrich] year mismatches: ${suspect.length} found, ${suspect.length - wrong.length} kept (portal year agrees with TMDB), ${wrong.length} re-checked: ${rematched} matched the right entry, ${cleared} back to portal data`);
+}
+
+/**
+ * Watch-progress records that stored a raw upstream stream link (23 on the live server,
+ * 2026-10-20: CDN links a browser had received for an episode): sealed in place, so
+ * resuming still works and nothing readable is left (infra/sealedCmd.ts).
+ */
+async function sealProgressLinks(): Promise<void> {
+  const rows = await UserProgress.findAll();
+  let sealed = 0;
+  for (const row of rows) {
+    const meta: any = row.meta;
+    if (!meta || !isUpstreamLink(meta.cmd)) continue;
+    row.meta = { ...meta, cmd: sealCmd(meta.cmd) };
+    row.changed("meta", true);
+    await row.save();
+    sealed++;
+  }
+  logger.info(`[MetaEnrich] progress records: sealed the stream link in ${sealed} of ${rows.length}`);
 }
 
 /**

@@ -1,4 +1,5 @@
-﻿import { ServerRoute, Request, ResponseToolkit } from "@hapi/hapi";
+﻿import { unsealCmd } from "@/infra/sealedCmd";
+import { ServerRoute, Request, ResponseToolkit } from "@hapi/hapi";
 import zlib from "zlib";
 import { promisify } from "util";
 import {
@@ -231,7 +232,7 @@ export const channelRoutes: ServerRoute[] = [
       try {
         const channelLink: any = await serverManager
           .getProvider()
-          .getChannelLink(request.query.cmd as any);
+          .getChannelLink(unsealCmd(request.query.cmd) as any);
 
         // getChannelLink resolves to the real upstream URL — never hand that
         // to the client directly (see /api/v2/movie-link for the same fix).
@@ -251,7 +252,7 @@ export const channelRoutes: ServerRoute[] = [
             // credentials, so it must never become a row's visible itemId.
             ...(channelId ? { itemType: "live" as const, itemId: String(channelId) } : {}),
             profileId: await getActiveProfileId(),
-            resolve: { cmd: String(request.query.cmd ?? "") },
+            resolve: { cmd: unsealCmd(request.query.cmd) },
           });
           if (channelLink.js) channelLink.js.cmd = tokenizedUrl;
           else channelLink.cmd = tokenizedUrl;
