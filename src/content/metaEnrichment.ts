@@ -683,7 +683,9 @@ async function runFixups(): Promise<void> {
     await recomputeRepresentatives();
     clearDiscoverCache();
   });
-  await step("seal-progress-links", sealProgressLinks);
+  // The first run read only object-shaped meta and sealed nothing: stored meta is JSON text.
+  await step("seal-progress-links", async () => {});
+  await step("seal-progress-links-2", sealProgressLinks);
   await step("backfill-credits", backfillCreditsAndOverview);
   await step("fix-year-mismatches", fixYearMismatches);
   await step("retry-unmatched", retryUnmatched);
@@ -764,13 +766,20 @@ async function fixYearMismatches(): Promise<void> {
  * 2026-10-20: CDN links a browser had received for an episode): sealed in place, so
  * resuming still works and nothing readable is left (infra/sealedCmd.ts).
  */
-async function sealProgressLinks(): Promise<void> {
+export async function sealProgressLinks(): Promise<void> {
   const rows = await UserProgress.findAll();
   let sealed = 0;
   for (const row of rows) {
-    const meta: any = row.meta;
-    if (!meta || !isUpstreamLink(meta.cmd)) continue;
-    row.meta = { ...meta, cmd: sealCmd(meta.cmd) };
+    // Comes back as JSON text on this table; parsed here, written back as an object (the
+    // column stringifies it once: writing the text back would encode it twice).
+    const stored: any = row.meta;
+    let meta: any = stored;
+    if (typeof stored === "string") {
+      try { meta = JSON.parse(stored); } catch { continue; }
+    }
+    if (!meta || typeof meta !== "object" || !isUpstreamLink(meta.cmd)) continue;
+    const next = { ...meta, cmd: sealCmd(meta.cmd) };
+    row.meta = next;
     row.changed("meta", true);
     await row.save();
     sealed++;
