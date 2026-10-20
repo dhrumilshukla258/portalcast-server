@@ -1,3 +1,5 @@
+import { registerJob, startJobs } from "./services/jobs";
+import { backupDatabase } from "./services/backup";
 import { refreshChannelLogos, resolveTmdbChannelLogos } from "./content/channels";
 import "dotenv/config";
 import { clientIp, isSecureRequest } from "./infra/clientIp";
@@ -68,6 +70,9 @@ const init = async () => {
 
   await migrateToProfiles();
   await encryptStoredCredentials();
+
+  // Background jobs (services/jobs.ts). The runner starts after the server is listening.
+  registerJob({ name: "backup", label: "Back up the database", dailyAtHour: 4, yieldToPlayback: true, run: backupDatabase });
 
   await loadActiveProfileFromDB();
   // Explicitly initialize provider after loading the active profile from DB,
@@ -399,6 +404,7 @@ const init = async () => {
   });
 
   await server.start();
+  startJobs();
 
   const { backgroundJobService } =
     await import("./services/BackgroundJobService");

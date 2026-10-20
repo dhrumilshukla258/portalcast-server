@@ -1,3 +1,4 @@
+import { uploadsDir } from "@/infra/paths";
 import { setting } from "@/config/settings";
 import { sealCmd } from "@/infra/sealedCmd";
 import { ServerRoute } from "@hapi/hapi";
@@ -19,11 +20,8 @@ import { socketService } from "@/services/SocketService";
 import fs from "fs/promises";
 import path from "path";
 
-// Store uploads in the same persistent volume as the database so they survive redeployments
-const dataDir = process.env.DATABASE_PATH
-  ? path.dirname(process.env.DATABASE_PATH)
-  : path.join(process.cwd(), "data");
-const uploadDir = path.join(dataDir, "uploads");
+// Uploads live in the data folder, beside the database, so they survive redeployments.
+const uploadDir = uploadsDir;
 
 const getActiveProfileId = async () => {
   const activeProfile = await ConfigProfile.findOne({

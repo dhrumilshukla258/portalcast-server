@@ -1,10 +1,9 @@
+import { serverSecret } from "@/infra/serverSecret";
 import crypto from "crypto";
 import type { Request } from "@hapi/hapi";
 
-if (!process.env.JWT_SECRET) {
-  throw new Error("JWT_SECRET environment variable must be set");
-}
-const JWT_SECRET: string = process.env.JWT_SECRET;
+// JWT_SECRET from the environment, else the key generated in the data folder (infra/serverSecret.ts).
+const JWT_SECRET: string = serverSecret;
 
 // Shapes seen across every createJWT() call site in this codebase:
 // - access token:  { userId, email, role }

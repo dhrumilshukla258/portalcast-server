@@ -1,3 +1,4 @@
+import { databasePath } from "../infra/paths";
 import fs from "fs";
 import { Sequelize } from "sequelize-typescript";
 import path from "path";
@@ -26,31 +27,9 @@ import { SecurityEvent } from "../models/SecurityEvent";
 import { RefreshToken } from "../models/RefreshToken";
 import { logger } from "../infra/logger";
 
-function resolveDatabasePath(): string {
-  const envPath = process.env.SQLITE_DB_PATH;
-  if (envPath) {
-    const resolved = path.resolve(envPath);
-    if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
-      return path.join(resolved, "database.db");
-    }
-    return resolved;
-  }
-  // Prefer existing db file for backwards compatibility
-  for (const candidate of [
-    path.join(process.cwd(), "database.db"),
-    path.join(process.cwd(), "database.sqlite"),
-  ]) {
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return path.join(process.cwd(), "database.db");
-}
-
-export const databasePath = resolveDatabasePath();
-
-const databaseDir = path.dirname(databasePath);
-if (!fs.existsSync(databaseDir)) {
-  fs.mkdirSync(databaseDir, { recursive: true });
-}
+// The database file and data folder are resolved in infra/paths.ts (shared with uploads,
+// the generated key file and backups).
+export { databasePath };
 
 export const sequelize = new Sequelize({
   dialect: "sqlite",

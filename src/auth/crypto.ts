@@ -1,14 +1,11 @@
+import { serverSecret } from "@/infra/serverSecret";
 import crypto from "crypto";
 
 // Reversible encryption for credentials we must hand back to a third party
 // verbatim (OpenSubtitles has no refresh-token flow — only re-login with the
-// original password). Key is derived from JWT_SECRET (already a required env
-// var) via SHA-256 rather than introducing a second required secret.
-const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET) {
-  throw new Error("JWT_SECRET environment variable must be set");
-}
-const KEY = crypto.createHash("sha256").update(JWT_SECRET).digest();
+// original password), saved settings and provider credentials. Key is derived
+// from the server secret (JWT_SECRET, or the generated key file) via SHA-256.
+const KEY = crypto.createHash("sha256").update(serverSecret).digest();
 
 export function encryptSecret(plaintext: string): string {
   const iv = crypto.randomBytes(12);

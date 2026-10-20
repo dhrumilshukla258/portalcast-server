@@ -11,6 +11,8 @@
 // `{ v: <value> }`, or `{ enc: <AES-GCM> }` for secrets (auth/crypto.ts, the same scheme
 // as users' subtitle keys). Secrets are never sent back to the admin page in full.
 
+import { serverSecretSource } from "@/infra/serverSecret";
+import { dataDir } from "@/infra/paths";
 import { SystemConfig } from "@/models/SystemConfig";
 import { encryptSecret, decryptSecret } from "@/auth/crypto";
 import { logger } from "@/infra/logger";
@@ -82,6 +84,10 @@ const DEFS: SettingDef[] = [
   { key: "cbCooldownMs", env: "CB_COOLDOWN_MS", type: "number", default: 30000, min: 1000, max: 3600000, group: "Provider tuning", label: "Circuit breaker: cooldown (ms)", apply: "live" },
   { key: "streamIdleTimeoutMs", env: "STREAM_IDLE_TIMEOUT_MS", type: "number", default: 60000, min: 5000, max: 3600000, group: "Provider tuning", label: "\"Now watching\" ends after idle (ms)", apply: "live" },
   { key: "epgBatchDelayMs", env: "EPG_FETCH_BATCH_DELAY_MS", type: "number", default: 500, min: 0, max: 60000, group: "Provider tuning", label: "Pause between guide batches (ms)", apply: "live" },
+
+  // Backups
+  { key: "backupFolder", type: "string", default: "", group: "Backups", label: "Backup folder", help: "Where the nightly database copy goes. Empty: the backups folder inside the data folder. A NAS folder mounted into the container is a good choice. The key file is never copied here.", apply: "live" },
+  { key: "backupKeep", type: "number", default: 7, min: 0, max: 365, group: "Backups", label: "Nightly backups to keep", help: "0 turns backups off.", apply: "live" },
 
   // Logging
   { key: "logLevel", env: "LOG_LEVEL", type: "string", default: "info", options: ["debug", "info", "warn", "error"], group: "Logging", label: "Log level", apply: "live" },
@@ -218,11 +224,11 @@ function mask(value: unknown): string {
 
 /** Shown read-only in the admin page: set in Docker or the environment only. */
 const FIXED = [
-  { key: "dataFolder", label: "Data folder (database)", value: () => process.env.SQLITE_DB_PATH || "./database.db", help: "Set in the compose file (SQLITE_DB_PATH)." },
+  { key: "dataFolder", label: "Data folder", value: () => dataDir, help: "Database, key file, uploads and backups. Set in the compose file (SQLITE_DB_PATH)." },
   { key: "port", label: "Port inside the container", value: () => String(Number(process.env.PORT) || 3000), help: "Set in the compose file; the port mapping there must match." },
   { key: "https", label: "HTTPS certificate", value: () => (process.env.TLS_CERT_PATH ? "set" : "not set (plain HTTP; a reverse proxy usually adds HTTPS)"), help: "TLS_CERT_PATH and TLS_KEY_PATH in the compose file." },
   { key: "threadPool", label: "Thread pool size", value: () => process.env.UV_THREADPOOL_SIZE || "4", help: "UV_THREADPOOL_SIZE; read before the server starts." },
-  { key: "jwtSecret", label: "Encryption and login key", value: () => (process.env.JWT_SECRET ? "set" : "not set"), help: "JWT_SECRET. Signs logins and encrypts saved secrets; changing it signs everyone out." },
+  { key: "jwtSecret", label: "Encryption and login key", value: () => (serverSecretSource === "environment" ? "set in the environment (JWT_SECRET)" : "generated, kept in the data folder (secret.key)"), help: "Signs logins and encrypts saved secrets; changing it signs everyone out and makes saved secrets unreadable. Keep a copy of secret.key somewhere safe." },
   { key: "adminPassword", label: "Recovery admin password", value: () => (process.env.ADMIN_PASSWORD ? "set" : "not set"), help: "ADMIN_PASSWORD. An emergency way in if a setting locks you out." },
 ];
 

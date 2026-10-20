@@ -1,3 +1,4 @@
+import { listJobs, runJobNow } from "@/services/jobs";
 import { ServerRoute } from "@hapi/hapi";
 import nodemailer from "nodemailer";
 import { requireAdmin } from "@/auth/jwt";
@@ -10,6 +11,25 @@ import { logger } from "@/infra/logger";
 // PUT accepts a new one, DELETE forgets the saved value. Every change is written to the
 // security log with the setting's name, never its value.
 export const settingsRoutes: ServerRoute[] = [
+  {
+    // Background jobs (services/jobs.ts): schedule, last result, "Run now".
+    method: "GET",
+    path: "/api/admin/jobs",
+    handler: (request, h) => {
+      if (!requireAdmin(request)) return h.response({ error: "Forbidden" }).code(403);
+      return { items: listJobs() };
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/admin/jobs/{name}/run",
+    handler: (request, h) => {
+      if (!requireAdmin(request)) return h.response({ error: "Forbidden" }).code(403);
+      const name = String(request.params.name);
+      if (!listJobs().some((j) => j.name === name)) return h.response({ error: "Unknown job" }).code(404);
+      return { started: runJobNow(name), items: listJobs() };
+    },
+  },
   {
     method: "GET",
     path: "/api/admin/settings",

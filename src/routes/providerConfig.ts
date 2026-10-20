@@ -1,3 +1,4 @@
+import { uploadsDir } from "@/infra/paths";
 import { maskConfig, unmaskConfig } from "@/config/providerSecrets";
 import { ServerRoute } from "@hapi/hapi";
 import { sniffRasterImage } from "@/infra/sniffImage";
@@ -18,11 +19,8 @@ import { Genre } from "@/models/Genre";
 import { EpgCache } from "@/models/EpgCache";
 import { ContentCache } from "@/models/ContentCache";
 
-// Store uploads in the same persistent volume as the database so they survive redeployments
-const dataDir = process.env.DATABASE_PATH
-  ? path.dirname(process.env.DATABASE_PATH)
-  : path.join(process.cwd(), "data");
-const uploadDir = path.join(dataDir, "uploads");
+// Uploads live in the data folder, beside the database, so they survive redeployments.
+const uploadDir = uploadsDir;
 
 export const configRoutes: ServerRoute[] = [
   {

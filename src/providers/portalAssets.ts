@@ -1,3 +1,4 @@
+import { serverSecret } from "@/infra/serverSecret";
 import crypto from "crypto";
 import { initialConfig } from "@/config/server";
 
@@ -61,7 +62,7 @@ export function proxiedImageUrl(url?: string, origin?: string): string {
   return origin ? `${origin}${relative}` : relative;
 }
 
-const IMAGE_PROXY_KEY = crypto.createHmac("sha256", process.env.JWT_SECRET || "portalcast").update("image-proxy").digest();
+const IMAGE_PROXY_KEY = crypto.createHmac("sha256", serverSecret).update("image-proxy").digest();
 
 export function imageProxySignature(u: string): string {
   return crypto.createHmac("sha256", IMAGE_PROXY_KEY).update(u).digest("base64url").slice(0, 22);
