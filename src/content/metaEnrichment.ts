@@ -661,6 +661,14 @@ async function runFixups(): Promise<void> {
     await recomputeRepresentatives();
     clearDiscoverCache();
   });
+  // More channels and their longer spellings (Surya TV, Flowers TV, "Star Suvarna Kannada",
+  // "Hum Tv Drama", ...) and the label prefixes ("Urdu Tv Show :", "Web Series :"): every row
+  // with a channel is re-cleaned by regroupAll; the labels are named here.
+  await step("reclean-channels-2", async () => {
+    await regroupAll(/^\s*(urdu\s+tv|urdu\s+show|web\s+series)\s*:/i);
+    await recomputeRepresentatives();
+    clearDiscoverCache();
+  });
   await step("retry-unmatched", retryUnmatched);
   await step("reclean-channels", recleanChannelNames);
   // The TMDB passes write rows through upsertContent (groupKeyFor), so their groups are

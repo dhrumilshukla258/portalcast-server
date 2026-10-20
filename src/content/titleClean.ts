@@ -139,7 +139,9 @@ function stripChannelPrefix(name: string): string {
 // ("Maternal Instinct - Turkish", 673 titles) or a label in front ("Turkish Drama : Hercai").
 // Not a general language word: "The Turkish Detective" keeps it.
 const TURKISH_TAG_RE = /\s*[-–(\[]\s*turkish\s*[)\]]?\s*$/i;
-const TURKISH_LABEL_RE = /^\s*turkish(?:\s+dramas?)?\s*:\s*/i;
+// Category labels portals put in front of a show's name: taken off, no badge (they are not
+// channels). "Urdu Tv Show : X", "Urdu TV : X", "Urdu Show : X", "Web Series : X".
+const TURKISH_LABEL_RE = /^\s*(?:turkish(?:\s+dramas?)?|urdu\s+tv\s+show|urdu\s+tv|urdu\s+show|web\s+series)\s*:\s*/i;
 
 function stripNoise(name: string): string {
   return stripChannelPrefix(name)
