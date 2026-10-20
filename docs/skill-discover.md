@@ -2,9 +2,9 @@
 
 Netflix-style genre/country/language/theme browse + "Because You Watched" recommendations, built on top of a TMDB-enriched catalog cache (`ContentMeta`) that sits alongside — not instead of — the existing portal-driven browse (StalkerV2/Xtream).
 
-Related: [[skill-database]], [[skill-xtream-provider]], [[skill-stalker-provider]], [[skill-content-lifecycle]] (proactive pruning of removed content, backdrop backfill scope)
+Related: [[skill-titles-and-tmdb]] (cleaning, grouping, TMDB matching, fix-up steps), [[skill-database]], [[skill-xtream-provider]], [[skill-stalker-provider]], [[skill-content-lifecycle]]
 
-**Status: in progress.** This doc reflects the code as of 2026-07-21; the feature is still being iterated on (see the perf-incident comments throughout the code — this has already been rewritten more than once under real data volume).
+**Current state (2026-10-20).** Facets, browse and recommendations are answered from an **in-memory index** (`src/content/discoverIndex.ts`): one pass over the representative rows at startup (about 1 s for 100k titles), posting lists per genre/country/theme/channel, rebuilt (debounced) after enrichment. The SQL-join history in *Performance* below is why it exists. Cards carry a cleaned `name`, `description`, `network`/`network_logo` (channel badge); facets carry `networks` (with logos) for **type=series only**, listing channels that exist in Live TV plus streaming platforms.
 
 ---
 
@@ -19,7 +19,7 @@ Four tables, all keyed off `ContentMeta.id` (`"movie_{stream_id}"` / `"series_{s
 
 Catalogs list the same real title multiple times per language/dub/quality variant (e.g. "ABC Tamil", "ABC South Dub", "ABC Telugu"). To show one card per title:
 
-- `groupKey = "{type}:{normalizeTitleKey(name)}:{year}"` — shared by every variant of the same title. Type- and year-prefixed so an unrelated same-titled movie/series (or a same-titled movie decades apart) never collides.
+- `groupKey` — shared by every variant of the same title: `{type}:{cleaned name}:tmdb{id}` for TMDB-matched rows (name **and** id must agree), `{type}:{cleaned name}:{year}` otherwise. See [[skill-titles-and-tmdb]] for why not the TMDB id alone.
 - `trimmedName = stripReleaseNoise(name)` — case-preserved cleaned title shown to users, computed once at enrichment time (not per-request).
 - `isRepresentative` — exactly one `true` row per `groupKey`, recomputed by `recomputeRepresentatives()` (prefers TMDB-sourced, then has a poster, then most recently enriched). Browse/facets/recommendations all filter on this flag; the rest of a group is reachable via `/api/v2/discover/variants`.
 
@@ -31,8 +31,9 @@ Fixes only apply going forward to newly enriched rows — existing `content_meta
 
 ## Enrichment pipeline (`src/content/metaEnrichment.ts`)
 
-`enrichContentMeta({ includeBackdropBackfill? })` — **manual trigger only**, never automatic (a full-catalog TMDB backfill takes hours at the throttled rate — `THROTTLE_MS = 350`). Runs, in order:
+`enrichContentMeta({ includeBackdropBackfill? })` — runs at startup and every 24 h (it only enriches rows without `enrichedAt`, so after the first full pass it is cheap); the admin endpoint below also triggers it, with the backdrop backfill. Runs, in order:
 
+0. `runFixups()` — one-time repair steps, each recorded once done ([[skill-titles-and-tmdb]]).
 1. `enrichMovies()` / `enrichSeries()` — walk every genre's cached `vod_streams_*`/`series_list_*` list, skip anything with `enrichedAt` already set, resolve TMDB meta (`resolveMeta()` — TMDB is the only source of `originalLanguage` and themes, so it's always attempted even when the provider already has genre/country), fall back to provider-supplied genre/country when TMDB has no match, then `upsertContent()` (one transaction per title — upsert + all 3 tag-table replacements, to avoid multiple SQLite lock acquisitions per title).
 2. `backfillPortalCategoryIds()` — one-time repair for rows enriched before that column existed.
 3. `backfillBackdrops()` — only when `includeBackdropBackfill` is passed; re-fetches HD backdrop by stored `tmdbId` for rows still missing one. Excluded from the default path because it can't distinguish "not tried" from "TMDB genuinely has none" — would otherwise refetch the same rows forever.
@@ -51,8 +52,8 @@ All under `/api/v2/discover/`, gated by the global Bearer-JWT `onPreHandler` in 
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/facets` | Distinct genre/country/theme/language values + counts, for the filter-chip UI |
-| `GET` | `/browse` | Paginated `ContentMeta` listing, filterable by any combination of `genre`/`country`/`language`/`theme`/`type` |
+| `GET` | `/facets` | Genre/country/theme/language values + counts; `networks` (channels/platforms, with logos) for `type=series` |
+| `GET` | `/browse` | Paginated listing (40), filterable by any combination of `genre`/`country`/`language`/`theme`/`network`/`type` |
 | `GET` | `/recommendations` | Per-user "Because You Watched" — genre-overlap ranking from the user's own `UserProgress`, no cross-user data |
 | `GET` | `/variants?id=` | All rows sharing the anchor row's `groupKey`, labeled by audio/subtitle language + quality tags |
 

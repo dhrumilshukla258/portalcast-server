@@ -82,6 +82,16 @@ All of these call `streamTokenFromRequest(request)` (or `resolveStreamToken(toke
 
 No exceptions remain — every stream-adjacent route requires a per-request token resolving to the exact resource being served.
 
+## Sealed upstream links (`src/infra/sealedCmd.ts`, 2026-10-20)
+
+A portal's `create_link` answer is a full upstream (CDN) URL, playable by whoever holds it. Clients sometimes need to hand such a value back (`cmd` on a movie/episode item → `movie-link`/`download-link`), so it is **sealed**: AES-GCM with the server key, prefix `sealed:`, opaque and tamper-proof.
+
+- `stripUpstreamFields()` seals any absolute `cmd` on every catalog item (our own URLs and relative paths pass through).
+- `movie-link`, `download-link`, `channel-link` call `unsealCmd()` on input; a forged value unseals to `""`.
+- `PUT /api/user/progress` stores a received link sealed; fix-up `seal-progress-links-2` sealed the ones stored before (23 on the live server).
+
+Rule: **no route may return an upstream URL unsealed.** New catalog routes get this for free through `stripUpstreamFields`; anything else must call `sealCmd()`.
+
 ## Non-stream unauthenticated route: `/api/images/{slug*}`
 
 Poster/logo relay to the active portal (`src/routes/stalkerV2/`) — the one route left unauthenticated, since `<img src>` can't attach a Bearer header or a token either. Originally it forwarded the `slug` path param straight into `http(s)://{portalHost}:{portalPort}/{slug}` with **no restriction**, which made it a general unauthenticated GET relay to the portal's entire HTTP surface (any path, any query string) — not actually pinned to images at all. Fixed by rejecting `..`/`?`/`#` in the path and requiring a real image extension (`png|jpe?g|webp|gif|svg|bmp|ico`). Deliberately *not* token-gated like everything else — posters are low-sensitivity (no credentials/streams exposed) and `<img>` tags can't carry a token without JS-mediated fetch+blob-URL plumbing, which was judged not worth it for this asset class (same tradeoff Netflix/Jellyfin make for poster art).

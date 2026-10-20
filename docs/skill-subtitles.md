@@ -56,6 +56,13 @@ These are regular `fetch()` calls from an already-authenticated web UI session, 
 
 ---
 
+## 3. SubDL, per-user keys, stored files (2026-10-19)
+
+- **Two sources, merged.** `/api/v2/subtitles/search` queries OpenSubtitles and SubDL (`src/content/subdl.ts`, zip archives unpacked with `fflate`) in parallel and caches the merged list for 24 h. Each result has a `downloadId`; `/download?id=` serves it.
+- **Keys.** Server keys (`OPENSUBTITLES_API_KEY`, `SUBDL_API_KEY`) or a user's own: `PUT /api/user/opensubtitles` accepts an `apiKey`, `PUT/DELETE /api/user/subdl` stores a SubDL key, both encrypted with `encryptSecret()`; `subtitleKeysFor(userId)` picks the user's key first.
+- **Only real subtitles are stored.** `toVtt()` (`src/content/subtitleText.ts`) returns `null` unless the text has a `start --> end` cue and no script-like tags; every accepted file is kept in `SubtitleFile` (key → WebVTT), so each one is downloaded from a provider once.
+- **Timing** is client-side: both apps keep a per-title delay (TV: `SubtitlePrefs`, web: `utils/subtitleDelay.ts`).
+
 ## Key Files
 
 - `src/routes/streaming/subtitles.ts` — embedded-subtitle probe/extract (token-gated)

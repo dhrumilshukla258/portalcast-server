@@ -62,6 +62,17 @@ The `STALKER_*` env vars below only pre-fill the *default* values shown when cre
 | `SERIES_FLAG` | `is_series` | Only matters for **mixed-content portals** — a single VOD endpoint returning both movies and series, split by this boolean-ish field (value `1` = series). Portals with a genuinely separate series endpoint are auto-detected (`portal_series_source` cache row) and don't use this at all — see [Provider Support](#provider-support) |
 | `TMDB_API_READ_TOKEN` | — | TMDB read token for metadata enrichment |
 | `OPENSUBTITLES_API_KEY` | — | Enables `/api/v2/subtitles/search` and `/download` (online subtitle search in the player). `searchSubtitles()` (`src/content/opensubtitles.ts`) checks this first and returns `[]` immediately if unset — logs a warning rather than failing loudly, so a missing key looks like "no subtitles found," not an error |
+| `SUBDL_API_KEY` | — | Second subtitle source ([subdl.com](https://subdl.com), free key). Results from both sources are merged; users can also add their own keys in the app |
+
+### Security
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ADMIN_EMAILS` | — | Comma-separated extra admin emails (in addition to `ADMIN_EMAIL`) |
+| `TRUSTED_PROXIES` | — | `private` (any private/loopback address) or a list of proxy IPs/CIDRs. Lets the server see each viewer's real address for rate limits, the security log and automatic bans; without it every viewer behind a proxy shares one address and auto-bans stay off |
+| `SECURITY_BAN_AFTER` | `20` | Failures (bad sign-ins, rejected tokens, hostile requests…) within 15 min that ban an address |
+| `SECURITY_BAN_MINUTES` | `60` | How long a ban lasts. Admin › Security lists events and bans and can lift them |
+| `ALLOW_DIRECT_STREAMS` | `false` | Off: every live stream is relayed by the server, so the provider's addresses never reach a client. `true` lets a client that asks (TV app "Direct live streams") be redirected to the provider's CDN |
 
 ### Networking
 
@@ -365,14 +376,15 @@ The server can be reached simultaneously via LAN `ip:port` and an HTTPS domain b
 
 ## TMDB Integration
 
-Set `TMDB_API_READ_TOKEN` to enrich VOD and series metadata with posters and backdrops.
+Set `TMDB_API_READ_TOKEN` to enrich movies and series with posters, backdrops, descriptions, cast, director, genres, countries, original language, mood keywords, episode stills and channel logos.
 
-The server strips quality/format tags from titles before searching TMDB:
+Names are cleaned before searching (channel prefixes, language and quality tags removed), several query variants are tried, and a result is accepted only when its name and year agree with ours:
 ```
-Avatar 4K BluRay  →  search "Avatar"
+Zee5 Originals : Maa Hai Na 4K   →  search "Maa Hai Na"
+Karz 2002                        →  "Karz", only a 2001–2003 release
 ```
 
-Returns `poster`, `backdrop`, and `overview`. Enriched metadata is merged into the `/api/v2` movie/series responses (`enrichArtworkFromTmdb`) and powers Discover's `ContentMeta` cache. If TMDB is unavailable or the token is not set, the fields are silently omitted — nothing breaks.
+Details, grouping rules and the one-time fix-up steps: [[skill-titles-and-tmdb]]. If TMDB is unavailable or the token is not set, the fields are silently omitted — nothing breaks.
 
 ---
 
@@ -430,7 +442,7 @@ On top of the JWT requirement, a role check applies:
 - Normalised: case, accents, punctuation and `&`/`and` don't matter; adjacent words are also
   indexed joined, so "spiderman", "spider man" and "Spider-Man" all match.
 - Every query word must match the start of a title word, in any order ("dark knight bat").
-- One-letter typos are tolerated (SymSpell deletion map), only for words with no prefix match.
+- One-letter typos are tolerated (edits generated per query word and looked up in a term index), only for words with no prefix match.
 - Ranked: exact title, then starts-with, contains, whole-word, prefix, typo; a year in the
   query boosts matching titles; shorter titles first.
 - Built once per catalog snapshot (fingerprint of size + ids) and reused; searches keep the

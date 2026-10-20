@@ -11,9 +11,14 @@ pairing flow for TVs).
   output is committed into this repo's `public/` folder — not built by this
   repo's own Docker build, so `public/` must be manually rebuilt+copied (or
   via `portalcast-webui/deploy.sh`) whenever webui source changes.
-- `portalcast-tv-android` (Kotlin/Compose-for-TV) was written against the
-  Xtream Codes API emulation this server no longer has (see below); it needs
-  to move to the device-code login + `/api/v2/*` before it works again.
+- `portalcast-tv-android` (Kotlin/Compose-for-TV) signs in with the
+  device-code pairing flow and uses `/api/v2/*` like the webui. Its field-level
+  contract is `portalcast-tv-android/docs/api-contract.md`: change an `/api/v2`
+  shape and check it there (and in the webui's `src/api/types`).
+- Fields added for both clients on 2026-10-19/20: `network`/`network_logo`,
+  `description` on Discover cards, `networks` facet (series), `title_key`/
+  `clean_name` on catalog items (Search grouping), TMDB episode data, sealed
+  `cmd` values (`sealed:…`, hand back as is — never play).
 
 See `../../docs/project_ecosystem.md` (shared across all portalcast-* repos)
 for the full multi-repo product ecosystem, planned future clients, and

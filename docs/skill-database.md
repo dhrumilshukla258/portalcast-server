@@ -40,6 +40,10 @@ Export: `databasePath` (used by pull-db.sh and diagnostics).
 | `ContentCountry` | `content_countries` | Discover country tags — see [[skill-discover]] |
 | `ContentTheme` | `content_themes` | Discover theme tags (curated TMDB keyword buckets) — see [[skill-discover]] |
 | `StreamFailure` | `stream_failures` | Broken-stream tracking, unique on `(profileId, itemType, itemId)` — see [[skill-stream-failures]] |
+| `MediaInfo` | `media_info` | Measured resolution/frame rate per title, reported by players |
+| `SubtitleFile` | `subtitle_files` | Downloaded subtitles as WebVTT, keyed by source + id — see [[skill-subtitles]] |
+| `SecurityEvent` | `security_events` | Security log (failed sign-ins, bad tokens, hostile requests), 30-day retention |
+| `RefreshToken` | `refresh_tokens` | Issued refresh tokens (hashed), rotation and revocation — see [[skill-auth-system]] |
 
 ---
 
@@ -48,6 +52,8 @@ Export: `databasePath` (used by pull-db.sh and diagnostics).
 | Key | Value |
 |-----|-------|
 | (sweep cursor) | Rotating-category cursor for the automatic stale-content sweep — see [[skill-content-lifecycle]] |
+| `meta_fixup_steps` | Names of the one-time catalog fix-up steps already run — see [[skill-titles-and-tmdb]] |
+| `channel_logos_tmdb` (in `xtream_cache`) | Channel → TMDB network logo, misses retried weekly — `src/content/channels.ts` |
 
 **Legacy rows left in existing databases** (no code reads or writes them since the third-party-player layer was removed on 2026-10-18; harmless, not migrated away): `SystemConfig` keys `playlist_cache`, `vod_cache`, `vod_cat_version`, and the `strm_movies` / `strm_series` tables (their `StrmMovie`/`StrmSeries` models are gone, so `sync()` simply ignores them).
 
@@ -100,7 +106,7 @@ Startup order in `initDB()`:
 
 Added alongside the Discover feature ([[skill-discover]]):
 
-- `groupKey`, `isRepresentative`, `trimmedName`, `portalCategoryId`, `backdrop`, `backdropHd`, `cast`, `director` columns on `content_meta`, plus `isRepresentative` on `content_genres`/`content_countries`/`content_themes` (denormalized copy — see [[skill-discover]]'s Performance section for why) — these are normal model-declared columns now, created via the per-model sync loop like any other column, not a startup migration step
+- `groupKey`, `isRepresentative`, `trimmedName`, `portalCategoryId`, `backdrop`, `backdropHd`, `cast`, `director`, `overview` columns on `content_meta` (`overview` added by `ensureColumns()` at startup, 2026-10-20), plus `isRepresentative` on `content_genres`/`content_countries`/`content_themes` (denormalized copy — see [[skill-discover]]'s Performance section for why) — these are normal model-declared columns now, created via the per-model sync loop like any other column, not a startup migration step
 - Indexes on `content_meta.enrichedAt`, `content_meta.groupKey`, and a composite `(value, contentId)` index on each tag table (step 3 above) — added after two separate perf incidents where missing indexes caused full-table scans/joins under real data volume
 
 ---
