@@ -182,7 +182,7 @@ async function search(kind: "movie" | "tv", query: string, year?: string): Promi
 const TRAILING_YEAR_RE = /\s*[(\[]?((?:19|20)\d{2})[)\]]?\s*$/;
 // ': Season 40 To Current' / ' - Season13 TO Current' / ' : Season : 47 & 48' — only when
 // digits follow, so 'Love in the Season' is left alone.
-const SEASON_SUFFIX_RE = /\s*[:\-–|]?\s*\bseasons?\b\s*:?\s*(?=.*\d).*$/i;
+const SEASON_SUFFIX_RE = /\s*[:\-–|]?\s*\bseasons?(?=[\s:\d]|$)\s*:?\s*(?=.*\d).*$/i;
 const SEASON_PREFIX_RE = /^\s*season\s*\d+\s*[.:\-–]\s*/i;
 
 export interface TitleQuery {
@@ -208,7 +208,8 @@ export function tmdbQueries(name: string, year?: string): TitleQuery[] {
   const trailing = TRAILING_YEAR_RE.exec(noSeason);
   if (trailing && trailing.index > 0) {
     const t = noSeason.slice(0, trailing.index).trim();
-    if (t) { push(t, trailing[1], false); push(t, undefined, false); }
+    // Strict: "Blade Runner 2049" must never fall back to a guess at "Blade Runner".
+    if (t) { push(t, trailing[1], true); push(t, undefined, true); }
   }
   const head = noSeason.replace(TRAILING_YEAR_RE, "").split(/\s*[:|]\s*|\s+[\-–]\s+/)[0]?.trim();
   if (head && head.length >= 3 && head.toLowerCase() !== noSeason.toLowerCase()) push(head, undefined, true);
