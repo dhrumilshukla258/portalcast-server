@@ -49,7 +49,7 @@ The server signs in to your provider, keeps its catalog cached, and serves it th
 **Docker**
 
 ```bash
-cp portalcast-server.yml docker-compose.yml   # set ADMIN_EMAIL and ADMIN_PASSWORD
+cp portalcast-server.yml docker-compose.yml   # check the folders and the port
 docker compose up -d
 ```
 
@@ -65,7 +65,7 @@ Only what the server needs before it starts stays in the compose file:
 
 | Variable | Purpose |
 |---|---|
-| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | The admin account. The password stays an emergency way back in |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Optional. Without them the first visit to the web page creates the admin account; the password stays an emergency way back in |
 | `SQLITE_DB_PATH` | Data folder: database, generated key, uploads, backups (Docker: the `/app/data` volume) |
 | `PORT`, `TLS_CERT_PATH`, `TLS_KEY_PATH` | Listen port and optional HTTPS |
 | `JWT_SECRET` | Optional. Without it the server generates a key once and keeps it in the data folder |

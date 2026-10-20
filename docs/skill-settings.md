@@ -39,6 +39,14 @@ Shown read-only in the page because they are needed before the server starts: th
 
 `JWT_SECRET` signs logins, keys the AES-GCM encryption of every stored secret (`src/auth/crypto.ts`) and signs image-proxy links. It is now optional: when unset, `serverSecret.ts` generates a random key once and keeps it as `<data folder>/secret.key` (mode 600). Installs that set `JWT_SECRET` keep using it. Changing or losing the key signs everyone out and makes saved secrets unreadable (they fall back to the environment or default, with a warning in the log). The backup job never copies the key file.
 
+## First start
+
+`src/routes/account/setup.ts`: with no admin account and no `ADMIN_PASSWORD`, the server is in setup mode (`needsSetup()`). The webui's login page shows **Create admin account** instead of sign-in (`GET /api/auth/setup/status`, `POST /api/auth/setup`: email, name, password of 10+ characters). It creates the admin user, saves the admin email setting and signs in. Once any admin exists, or `ADMIN_PASSWORD` is set, both refuse with 409, permanently. The first person to finish it becomes admin, so finish it right after installing. `POST /api/auth/setup` shares the login rate limit.
+
+## Stream tokens and networks
+
+`resolveStreamTokenFor(request, token)` (`src/services/StreamTokens.ts`) pins a token to the first address that uses it: any home-network (RFC1918) address may use a token first used at home, a token first used from a public address works only from that address. Wrong-network use returns null and is logged as `stream_token_wrong_network` (not bannable). Needs `trustedProxies` behind a reverse proxy, otherwise every request has the proxy's address and the rule has no effect.
+
 ## Provider credentials
 
 The IPTV profile's password, user name, MAC, device ids and serial are stored as `enc:<AES-GCM>` inside `config_profiles.config`. The `ConfigProfile` model's getter and setter decrypt and encrypt, so `profile.config` is plain everywhere in code. Existing plain values are encrypted once at startup (`encryptStoredCredentials()`). `GET /api/config` and `/api/profiles` send the password as `********`; a form that sends the placeholder back keeps the stored password.

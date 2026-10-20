@@ -1,3 +1,4 @@
+import { setupRoutes, needsSetup } from "./routes/account/setup";
 import { registerJob, startJobs } from "./services/jobs";
 import { backupDatabase } from "./services/backup";
 import { refreshChannelLogos, resolveTmdbChannelLogos } from "./content/channels";
@@ -52,13 +53,15 @@ const CSP = "default-src * 'unsafe-inline' data: blob:; object-src 'none'; base-
 
 const init = async () => {
   if (!process.env.ADMIN_PASSWORD) {
-    logger.warn("ADMIN_PASSWORD is not set — admin login is disabled (returns 503).");
+    logger.info("ADMIN_PASSWORD is not set — admins sign in with their own account; the emergency admin password is off.");
   }
   await initDB();
   // Settings saved in the admin page (config/settings.ts), before anything reads them.
   await loadSettings();
 
-  if (!setting<string>("adminEmail") && setting<string[]>("adminEmails").length === 0) {
+  if (await needsSetup()) {
+    logger.warn("No admin account yet: open the web page to create one (first-start setup). The first person to finish it becomes admin.");
+  } else if (process.env.ADMIN_PASSWORD && !setting<string>("adminEmail") && setting<string[]>("adminEmails").length === 0) {
     const msg = "No admin email is set — any email + ADMIN_PASSWORD logs in as admin (bootstrap mode). Set the admin email in Admin → Settings, or ADMIN_EMAIL, to lock this down.";
     if (process.env.NODE_ENV === "production") {
       logger.error(`SECURITY: ${msg}`);
@@ -115,6 +118,7 @@ const init = async () => {
   server.route(settingsRoutes);
   server.route(adminRoutes);
   server.route(authRoutes);
+  server.route(setupRoutes);
   server.route(userRoutes);
   server.route(userManagementRoutes);
   server.route(discoverRoutes);
@@ -162,6 +166,7 @@ const init = async () => {
       request.method.toUpperCase() === "POST" &&
       (p === "/api/auth/admin" ||
         p === "/api/auth/login" ||
+        p === "/api/auth/setup" ||
         p === "/api/auth/google" ||
         p === "/api/auth/refresh" ||
         p === "/api/auth/forgot-password" ||
