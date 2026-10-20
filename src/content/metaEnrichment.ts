@@ -621,17 +621,37 @@ let isEnriching = false;
 const FIXUP_KEY = "meta_fixup_generation";
 const FIXUP_GENERATION = 3;
 
+// Each step is remembered on its own as soon as it finishes (a restart mid-way never
+// repeats a finished step). The regroup is cheap and runs first, with representatives and
+// the Discover index refreshed right after, so a bad grouping left in the database (the
+// TMDB-id-only regroup of 2026-10-20 hid ~8,000 titles) is repaired within minutes of
+// startup instead of after the slow TMDB passes.
+const FIXUP_STEPS_KEY = "meta_fixup_steps";
+
 async function runFixups(): Promise<void> {
-  const row = await SystemConfig.findByPk(FIXUP_KEY);
-  const done = Number(row?.value ?? 0);
-  if (done >= FIXUP_GENERATION) return;
-  logger.info(`[MetaEnrich] running catalog fix-ups ${done + 1}..${FIXUP_GENERATION}`);
-  // Generation 1 used to regroup by TMDB id alone (regroupByTmdbId); that merged different
-  // titles, so it no longer runs and generation 3 recomputes every group with groupKeyFor.
-  if (done < 1) await retryUnmatched();
-  if (done < 2) await recleanChannelNames();
-  if (done < 3) await regroupAll();
-  await SystemConfig.upsert({ key: FIXUP_KEY, value: FIXUP_GENERATION });
+  const legacy = Number((await SystemConfig.findByPk(FIXUP_KEY))?.value ?? 0);
+  const row = await SystemConfig.findByPk(FIXUP_STEPS_KEY);
+  const done = new Set<string>(Array.isArray(row?.value) ? row!.value : []);
+  // Servers that recorded the earlier single generation number: keep what it had finished.
+  if (legacy >= 1) done.add("retry-unmatched");
+  if (legacy >= 2) done.add("reclean-channels");
+  if (legacy >= 3) done.add("regroup-v1");
+  const step = async (name: string, run: () => Promise<void>) => {
+    if (done.has(name)) return;
+    logger.info(`[MetaEnrich] fix-up step: ${name}`);
+    await run();
+    done.add(name);
+    await SystemConfig.upsert({ key: FIXUP_STEPS_KEY, value: [...done] });
+  };
+  await step("regroup-v1", async () => {
+    await regroupAll();
+    await recomputeRepresentatives();
+    clearDiscoverCache();
+  });
+  await step("retry-unmatched", retryUnmatched);
+  await step("reclean-channels", recleanChannelNames);
+  // The TMDB passes write rows through upsertContent (groupKeyFor), so their groups are
+  // already right; recomputeRepresentatives at the end of enrichContentMeta picks again.
 }
 
 /**
@@ -772,9 +792,10 @@ export async function enrichContentMeta(options: { includeBackdropBackfill?: boo
   }
   isEnriching = true;
   try {
+    // Fix-ups first: the regroup step repairs Discover within minutes of startup.
+    await runFixups();
     await enrichMovies();
     await enrichSeries();
-    await runFixups();
     await backfillPortalCategoryIds();
     if (options.includeBackdropBackfill) {
       await backfillBackdrops();
