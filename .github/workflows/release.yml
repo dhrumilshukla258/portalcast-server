@@ -95,7 +95,7 @@ jobs:
         run: |
           curl -fsSL "https://github.com/goreleaser/nfpm/releases/download/v2.41.1/nfpm_2.41.1_Linux_$( [[ ${{ matrix.deb }} == arm64 ]] && echo arm64 || echo x86_64 ).tar.gz" | tar -xz -C build nfpm
           mkdir -p dist-pkg
-          NFPM_ARCH=${{ matrix.deb }} BUNDLE_DIR=build/portalcast-server build/nfpm package --packager deb --config packaging/linux/nfpm.yaml --target dist-pkg/
+          NFPM_ARCH=${{ matrix.deb }} build/nfpm package --packager deb --config packaging/linux/nfpm.yaml --target dist-pkg/
           tar -C build -czf "dist-pkg/portalcast-server-${PORTALCAST_VERSION}-${{ matrix.target }}.tar.gz" portalcast-server
 
       - name: Package (.exe + .zip)

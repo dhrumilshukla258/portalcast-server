@@ -1,5 +1,6 @@
 # Built by .github/workflows/release.yml:  nfpm package --packager deb --config packaging/linux/nfpm.yaml
-# Env: PORTALCAST_VERSION (e.g. 1.2.0), NFPM_ARCH (amd64 | arm64), BUNDLE_DIR (from build-bundle.mjs)
+# Env: PORTALCAST_VERSION (e.g. 1.2.0), NFPM_ARCH (amd64 | arm64). The bundle from
+# build-bundle.mjs must be at build/portalcast-server (nfpm does not expand env vars in src).
 name: portalcast-server
 arch: ${NFPM_ARCH}
 platform: linux
@@ -15,8 +16,9 @@ license: MIT
 recommends:
   - ffmpeg
 contents:
-  - src: ${BUNDLE_DIR}/
-    dst: /opt/portalcast/
+  - src: build/portalcast-server
+    dst: /opt/portalcast
+    type: tree
   - src: packaging/linux/portalcast.service
     dst: /lib/systemd/system/portalcast.service
 scripts:
