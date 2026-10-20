@@ -70,6 +70,9 @@ export const appConfig: AppConfig = { ...AppConfigDefault };
 export const seriesFlag = process.env.SERIES_FLAG || "is_series";
 
 export const tmdbApiToken = process.env.TMDB_API_READ_TOKEN || "";
+/** Optional OMDb key (omdbapi.com): Rotten Tomatoes + Metacritic scores (content/omdb.ts). */
+export const omdbApiKey = process.env.OMDB_API_KEY || "";
+export const omdbDailyLimit = Math.max(0, Number(process.env.OMDB_DAILY_LIMIT ?? 900) || 0);
 
 export const openSubtitlesApiKey = process.env.OPENSUBTITLES_API_KEY || "";
 /** Free key from subdl.com: second subtitle source (content/subdl.ts). */

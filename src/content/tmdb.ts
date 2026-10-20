@@ -55,6 +55,8 @@ export interface TmdbMeta {
   // TMDB's user score (0-10, one decimal) and how many votes it rests on.
   rating: number | null;
   ratingCount: number | null;
+  // "tt0111161": movies carry it on the details, series under external_ids.
+  imdbId: string | null;
 }
 
 interface Credits {
@@ -141,6 +143,7 @@ function buildMeta(detail: any, kind: "movie" | "tv"): TmdbMeta {
     overview: detail.overview || null,
     rating: detail.vote_count > 0 && detail.vote_average > 0 ? Math.round(detail.vote_average * 10) / 10 : null,
     ratingCount: detail.vote_count > 0 ? detail.vote_count : null,
+    imdbId: [detail.imdb_id, detail.external_ids?.imdb_id].find((v) => typeof v === "string" && /^tt\d+$/.test(v)) ?? null,
     cast: credits.cast,
     director: credits.director,
     trailerKey,
@@ -165,7 +168,7 @@ function buildMeta(detail: any, kind: "movie" | "tv"): TmdbMeta {
 // silently emptying the candidate list this was added to widen in the first place.
 async function fetchDetail(kind: "movie" | "tv", id: number): Promise<any | null> {
   return tmdbGet(
-    `/${kind}/${id}?append_to_response=credits,videos,keywords,images&include_image_language=null,en`
+    `/${kind}/${id}?append_to_response=credits,videos,keywords,images,external_ids&include_image_language=null,en`
   );
 }
 

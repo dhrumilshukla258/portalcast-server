@@ -1,3 +1,5 @@
+import { enrichFromOmdb } from "@/content/omdb";
+import { syncImdbRatings } from "@/content/imdbRatings";
 import { findTvmazeShow } from "@/content/tvmaze";
 import { sealCmd, isUpstreamLink } from "@/infra/sealedCmd";
 import { channelOf } from "@/content/titleClean";
@@ -93,6 +95,7 @@ interface Resolved {
   overview: string | null;
   rating: number | null;
   ratingCount: number | null;
+  imdbId: string | null;
 }
 
 /** The portal's own plot, when it is a real sentence ("-" and blanks are not). */
@@ -124,7 +127,7 @@ async function resolveMeta(
   // a poster-only legacy entry would permanently leave that title without them (xtreamCache
   // entries don't expire on plain .get() reads) — treat a legacy-shaped hit as a miss and
   // re-fetch fresh instead of degrading quietly.
-  const isLegacyShape = tmdb && !("_not_found" in tmdb) && (!("originalLanguage" in tmdb) || !("releaseYear" in tmdb) || !("rating" in tmdb));
+  const isLegacyShape = tmdb && !("_not_found" in tmdb) && (!("originalLanguage" in tmdb) || !("releaseYear" in tmdb) || !("rating" in tmdb) || !("imdbId" in tmdb));
   if (!tmdb || isLegacyShape) {
     const fetched = kind === "movie" ? await fetchMovieMeta(name, year) : await fetchTVMeta(name, year);
     tmdb = fetched || { _not_found: true };
@@ -154,6 +157,7 @@ async function resolveMeta(
       overview: tmdb.overview || fallbackOverview,
       rating: tmdb.rating ?? null,
       ratingCount: tmdb.ratingCount ?? null,
+      imdbId: tmdb.imdbId ?? null,
     };
   }
 
@@ -173,6 +177,7 @@ async function resolveMeta(
     overview: fallbackOverview,
     rating: null,
     ratingCount: null,
+    imdbId: null,
   };
 }
 
@@ -214,6 +219,7 @@ async function upsertContent(contentId: string, type: ContentType, name: string,
       // Only when known: a cached TMDB result from before ratings were stored has none, and
       // must not blank a rating the backfill already wrote.
       ...(resolved.rating != null ? { rating: resolved.rating, ratingCount: resolved.ratingCount } : {}),
+      ...(resolved.imdbId ? { imdbId: resolved.imdbId } : {}),
     }, { transaction });
     await replaceTags(ContentGenre, contentId, resolved.genres, transaction);
     await replaceTags(ContentCountry, contentId, resolved.countries, transaction);
@@ -799,7 +805,7 @@ export async function sealProgressLinks(): Promise<void> {
 }
 
 /**
- * Ratings were not stored, and series had no creators (only a "Director" credit was read,
+ * Ratings and IMDb ids were not stored, and series had no creators (only a "Director" credit was read,
  * which a series rarely has: 16% of series had one, 2026-10-20). Every TMDB-matched row
  * without a rating (or a series without creators) has its TMDB details fetched again by its
  * id; only the rating, creators, and empty cast / overview are written. About 100k rows, a few
@@ -808,10 +814,14 @@ export async function sealProgressLinks(): Promise<void> {
 async function backfillRatingsAndCreators(): Promise<void> {
   const rows = (await ContentMeta.findAll({
     where: { tmdbId: { [Op.ne]: null } },
-    attributes: ["id", "type", "tmdbId", "cast", "director", "overview", "rating"],
+    attributes: ["id", "type", "tmdbId", "cast", "director", "overview", "rating", "imdbId", "year", "isRepresentative"],
     raw: true,
   })) as any[];
-  const todo = rows.filter((r) => r.rating == null || (r.type === "series" && !r.director));
+  // Newest titles first (what people open first), the card shown in Discover before its
+  // other versions.
+  const todo = rows
+    .filter((r) => r.rating == null || !r.imdbId || (r.type === "series" && !r.director))
+    .sort((a, b) => (Number(b.year) || 0) - (Number(a.year) || 0) || Number(!!b.isRepresentative) - Number(!!a.isRepresentative));
   let filled = 0;
   for (let i = 0; i < todo.length; i++) {
     const r = todo[i];
@@ -820,6 +830,7 @@ async function backfillRatingsAndCreators(): Promise<void> {
       if (meta) {
         const patch: Record<string, string | number> = {};
         if (meta.rating != null) { patch.rating = meta.rating; patch.ratingCount = meta.ratingCount ?? 0; }
+        if (meta.imdbId) patch.imdbId = meta.imdbId;
         if (r.type === "series" && !r.director && meta.director) patch.director = meta.director;
         if (!r.cast && meta.cast) patch.cast = meta.cast;
         if (!r.overview && meta.overview) patch.overview = meta.overview;
@@ -846,7 +857,8 @@ async function enrichFromTvmaze(): Promise<void> {
     attributes: ["id", "name", "trimmedName", "year", "cast", "director", "overview", "poster", "rating"],
     raw: true,
   })) as any[];
-  const todo = rows.filter((r) => !r.overview || !r.cast);
+  // Newest first, like the TMDB backfill.
+  const todo = rows.filter((r) => !r.overview || !r.cast).sort((a, b) => (Number(b.year) || 0) - (Number(a.year) || 0));
   let looked = 0, matched = 0;
   for (const r of todo) {
     const key = `tvmaze_series_${r.id}`;
@@ -1063,6 +1075,8 @@ export async function enrichContentMeta(options: { includeBackdropBackfill?: boo
     // Fix-ups first: the regroup step repairs Discover within minutes of startup.
     await runFixups();
     await enrichFromTvmaze();
+    await syncImdbRatings();
+    await enrichFromOmdb();
     await enrichMovies();
     await enrichSeries();
     await backfillPortalCategoryIds();

@@ -48,7 +48,17 @@ Both the name **and** the TMDB id must agree. Grouping by TMDB id alone merged 2
 - **A year written in the name must agree within one year**, unless TMDB's title is exactly our whole title (`"Blade Runner 2049"`, `"Fear Street: 1994"`, `"Wonder Woman 1984"` are trusted as is). Without this, `"Karz 2002"` matched the 1980 Karz and `"Wonder Woman 1973"` the 2017 film.
 - Loosened queries (year or tail removed) accept an exact name match only.
 
-Stored per title besides art and tags: `overview`, `cast`, `director` (a series stores its **creators** there, TMDB `created_by`; clients label it "Created by"), and `rating` + `ratingCount` (TMDB vote average and votes). Discover sends `rating_tmdb` when the score rests on 5+ votes.
+Stored per title besides art and tags: `overview`, `cast`, `director` (a series stores its **creators** there, TMDB `created_by`; clients label it "Created by"), `rating` + `ratingCount` (TMDB vote average and votes), and `imdbId` (from TMDB).
+
+## Ratings
+
+Every title shows **one** rating, chosen by the server (`bestRating()` in `routes/discover/index.ts`) and sent as `rating_best` + `rating_source`:
+
+1. **IMDb** (20+ votes): the most voters and the score people know. Loaded from IMDb's free daily file `title.ratings.tsv.gz` at most once a day (`content/imdbRatings.ts`, personal non-commercial use), matched by the IMDb id TMDB gave us. IMDb has no free API and its pages may not be scraped; the webui links the score to the title's IMDb page.
+2. **TMDB** (5+ votes), when IMDb has none.
+3. **TVmaze**, for a series TMDB does not know.
+
+Detail pages add the critics' scores **Rotten Tomatoes** and **Metacritic** (`rt_rating`, `metascore`) when OMDb has them (`content/omdb.ts`, by IMDb id only). This needs `OMDB_API_KEY` (free key: 1,000 calls a day; `OMDB_DAILY_LIMIT`, default 900). Never-checked titles go first, newest year first; scores are re-checked after 90 days. Without a key nothing runs.
 
 ## TVmaze (series TMDB does not know)
 
@@ -69,7 +79,7 @@ Episode lists are filled from TMDB's season data: still, overview, runtime, and 
 | `backfill-credits` | fill empty cast/director/overview from the cached TMDB data and portal plots (nothing fetched) |
 | `fix-year-mismatches` | re-search titles whose name year and portal year both disagree with TMDB; else back to portal data |
 | `seal-progress-links-2` | seal upstream stream links stored in watch progress (see [[skill-stream-tokens]]) |
-| `backfill-ratings-creators` | fetch TMDB details again by id for matched rows without a rating (or series without creators): writes rating, creators, empty cast/overview |
+| `backfill-ratings-creators` | fetch TMDB details again by id, newest year first, for matched rows without a rating or IMDb id (or series without creators): writes rating, IMDb id, creators, empty cast/overview |
 | `retry-unmatched`, `reclean-channels` | search TMDB again for unmatched titles the newer queries can find |
 
 **Before adding a step that rewrites rows**: dry-run it on a copy of a real database and compare counts (empty names, changed groups, overwritten fields). Rewrite only what the new rule is meant to change; fill empty fields rather than overwrite.

@@ -18,8 +18,8 @@ pairing flow for TVs).
 - Fields added for both clients on 2026-10-19/20: `network`/`network_logo`,
   `description` on Discover cards, `networks` facet (series), `title_key`/
   `clean_name` on catalog items (Search grouping), TMDB episode data, sealed
-  `cmd` values (`sealed:…`, hand back as is — never play), `rating_tmdb` on
-  Discover cards, creators in `director` for series ("Created by").
+  `cmd` values (`sealed:…`, hand back as is — never play), one rating per card
+  (`rating_best` + `rating_source`, IMDb first) plus `rt_rating`/`metascore` on Discover cards, creators in `director` for series ("Created by").
 
 See `../../docs/project_ecosystem.md` (shared across all portalcast-* repos)
 for the full multi-repo product ecosystem, planned future clients, and

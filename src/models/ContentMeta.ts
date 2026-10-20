@@ -131,6 +131,26 @@ export class ContentMeta extends Model {
   @Column(DataType.INTEGER)
   declare ratingCount: number;
 
+  // IMDb id from TMDB; IMDb rating and votes from IMDb's daily ratings file (imdbRatings.ts).
+  @Column(DataType.STRING)
+  declare imdbId: string;
+
+  @Column(DataType.FLOAT)
+  declare imdbRating: number;
+
+  @Column(DataType.INTEGER)
+  declare imdbVotes: number;
+
+  // From OMDb by IMDb id (omdb.ts), when OMDB_API_KEY is set: "94%" and 0-100.
+  @Column(DataType.STRING)
+  declare rtRating: string;
+
+  @Column(DataType.INTEGER)
+  declare metascore: number;
+
+  @Column(DataType.DATE)
+  declare omdbCheckedAt: Date;
+
   // Exactly one row per groupKey is flagged true (recomputed by
   // recomputeRepresentatives() in metaEnrichment.ts) — the "best" variant
   // (prefers TMDB-sourced, then most complete data) shown as the single card

@@ -32,6 +32,18 @@ function unauthorized(h: any) {
 // (vs. proxying relative paths through /api/images), which is exactly the shape
 // TMDB poster URLs already are. Map to that convention so results render through
 // the existing MainContentGrid/MediaCard without any special-casing.
+/**
+ * The single rating a title shows: IMDb's (20+ votes; the most voters and the score people
+ * know), else TMDB's (5+ votes), else TVmaze's for a series TMDB does not know. A score from
+ * a handful of votes says little, so none is better than that.
+ */
+function bestRating(row: any): { rating_best?: string; rating_source?: string } {
+  if (row.imdbRating > 0 && (row.imdbVotes ?? 0) >= 20) return { rating_best: Number(row.imdbRating).toFixed(1), rating_source: "IMDb" };
+  if (row.tmdbId && row.rating > 0 && (row.ratingCount ?? 0) >= 5) return { rating_best: Number(row.rating).toFixed(1), rating_source: "TMDB" };
+  if (!row.tmdbId && row.rating > 0) return { rating_best: Number(row.rating).toFixed(1), rating_source: "TVmaze" };
+  return {};
+}
+
 function toMediaItem(row: any, genresById: Map<string, string[]>, countriesById: Map<string, string[]>, origin: string): any {
   // The channel in the name ("Zee5 : Manemagalu") is shown as a logo, not as text. Rows
   // cleaned before the channel list existed still carry it in trimmedName, so a name with
@@ -85,9 +97,13 @@ function toMediaItem(row: any, genresById: Map<string, string[]>, countriesById:
     actors: row.cast || undefined,
     director: row.director || undefined,
     description: row.overview || undefined,
-    // A score from a handful of votes says little: TMDB's needs 5 or more (TVmaze's has no
-    // count and is sent as is).
-    rating_tmdb: row.rating > 0 && (row.ratingCount == null || row.ratingCount >= 5) ? Number(row.rating).toFixed(1) : undefined,
+    // ONE rating per title, so users are not left comparing scores (see bestRating).
+    // imdb_id lets the webui link to the title's IMDb page.
+    ...bestRating(row),
+    imdb_id: row.imdbId || undefined,
+    // Critics' scores beside the main rating on detail pages (OMDb; mostly Western titles).
+    rt_rating: row.rtRating || undefined,
+    metascore: row.metascore || undefined,
   };
 }
 
