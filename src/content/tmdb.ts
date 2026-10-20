@@ -230,7 +230,8 @@ function normName(s: string): string {
 }
 
 /** The result that best fits the query: name match first, then year, then popularity. */
-export function pickResult(results: any[], q: TitleQuery, kind: "movie" | "tv", titleYear: number | null = null): any | null {
+export function pickResult(results: any[], q: TitleQuery, kind: "movie" | "tv", titleYear: number | null = null, fullTitle: string | null = null): any | null {
+  const full = fullTitle ? normName(fullTitle) : null;
   const want = normName(q.query);
   let best: any = null;
   let bestScore = -Infinity;
@@ -240,10 +241,12 @@ export function pickResult(results: any[], q: TitleQuery, kind: "movie" | "tv", 
     const starts = !exact && names.some((n) => n.startsWith(`${want} `) || want.startsWith(`${n} `));
     if (q.strict && !exact) continue;
     const ry = String((kind === "movie" ? r.release_date : r.first_air_date) || "").slice(0, 4);
-    // A year written in the name must agree (within a year) unless it is part of the title
-    // itself ("Blade Runner 2049"). Without this, "Wonder Woman 1973" took the 2017 film,
-    // "Karz 2002" the 1980 one and "IIFA Awards 2019" a 2023 entry (2026-10-20).
-    if (titleYear && !names.some((n) => n.includes(String(titleYear)))) {
+    // TMDB's title exactly equal to our whole title (number included: "Blade Runner 2049",
+    // "Fear Street: 1994") is trusted as is. Otherwise a year written in the name must agree
+    // within a year: without this "Wonder Woman 1973" took the 2017 film, "Karz 2002" the
+    // 1980 one and "IIFA Awards 2019" a 2023 entry (2026-10-20).
+    const sameTitle = full !== null && names.includes(full);
+    if (titleYear && !sameTitle) {
       if (!ry || Math.abs(Number(ry) - titleYear) > 1) continue;
     }
     let score = exact ? 100 : starts ? 60 : 20;
@@ -261,7 +264,7 @@ async function fetchMeta(kind: "movie" | "tv", name: string, year?: string): Pro
   let r: any = null;
   const titleYear = titleYearOf(name);
   for (const q of tmdbQueries(name, year)) {
-    r = pickResult(await search(kind, q.query, q.year), q, kind, titleYear);
+    r = pickResult(await search(kind, q.query, q.year), q, kind, titleYear, cleanTitle(name));
     if (r) break;
   }
   if (!r) return null;
