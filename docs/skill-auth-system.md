@@ -18,7 +18,7 @@ Two login methods: **Google OAuth** and **email/password**. Both share the same 
 | `ADMIN_EMAIL` | Primary admin email (auto-bootstrapped as admin) |
 | `ADMIN_EMAILS` | Comma-separated list of additional admin emails |
 | `ADMIN_PASSWORD` | Env-level admin password (bypasses DB check) |
-| `JWT_SECRET` | Secret used to sign/verify all JWTs |
+| `JWT_SECRET` | Secret used to sign/verify all JWTs. Optional: when unset, a key is generated once into the data folder (`src/infra/serverSecret.ts`, [[skill-settings]]) |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | Nodemailer config for approval emails |
 
 ---

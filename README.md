@@ -49,7 +49,7 @@ The server signs in to your provider, keeps its catalog cached, and serves it th
 **Docker**
 
 ```bash
-cp portalcast-server.yml docker-compose.yml   # set JWT_SECRET, ADMIN_EMAIL, ADMIN_PASSWORD
+cp portalcast-server.yml docker-compose.yml   # set ADMIN_EMAIL and ADMIN_PASSWORD
 docker compose up -d
 ```
 
@@ -59,17 +59,18 @@ Then open `http://<server>:3000`, sign in as admin, and add your provider under 
 
 ## Configuration
 
+Almost everything is set in **Admin › Settings**: API keys (TMDB, OMDb, OpenSubtitles, SubDL), email, sign-in, security limits, network and backups. A value saved there wins over the environment variable of the same name, which still works as the fallback. Secrets are stored encrypted and never shown in full.
+
+Only what the server needs before it starts stays in the compose file:
+
 | Variable | Purpose |
 |---|---|
-| `JWT_SECRET` | **Required.** Signing key for sessions |
-| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | **Required.** The admin account |
-| `TMDB_API_READ_TOKEN` | TMDB metadata, artwork and episode data |
-| `OPENSUBTITLES_API_KEY`, `SUBDL_API_KEY` | Online subtitle search |
-| `GOOGLE_CLIENT_ID` | Google sign-in |
-| `TRUSTED_PROXIES` | Set to `private` behind a reverse proxy, so bans and rate limits see real addresses |
-| `PORT` | Listen port (default `3000`) |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | The admin account. The password stays an emergency way back in |
+| `SQLITE_DB_PATH` | Data folder: database, generated key, uploads, backups (Docker: the `/app/data` volume) |
+| `PORT`, `TLS_CERT_PATH`, `TLS_KEY_PATH` | Listen port and optional HTTPS |
+| `JWT_SECRET` | Optional. Without it the server generates a key once and keeps it in the data folder |
 
-Every variable, with defaults: [docs/features.md](docs/features.md#environment-variables). Behind Caddy, nginx or Traefik the server builds every URL from the forwarded headers, so a LAN address and an HTTPS domain work side by side.
+Every variable, with defaults: [docs/features.md](docs/features.md#environment-variables); how settings work: [docs/skill-settings.md](docs/skill-settings.md). Behind Caddy, nginx or Traefik the server builds every URL from the forwarded headers, so a LAN address and an HTTPS domain work side by side.
 
 ## Docs
 

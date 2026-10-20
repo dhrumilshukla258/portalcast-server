@@ -39,6 +39,8 @@ The `STALKER_*` env vars below only pre-fill the *default* values shown when cre
 | `STALKER_MAC` | `00:1A:79:00:00:00` | MAC address for STB emulation |
 | `STALKER_STB` | `MAG254` | STB type |
 
+Every variable below except the server-start ones (`PORT`, `TLS_*`, `SQLITE_DB_PATH`, `JWT_SECRET`, `ADMIN_PASSWORD`, `NODE_ENV`, `UV_THREADPOOL_SIZE`) can also be set in **Admin › Settings**, which wins over the environment ([[skill-settings]]).
+
 ### Server
 
 | Variable | Default | Description |
@@ -46,7 +48,7 @@ The `STALKER_*` env vars below only pre-fill the *default* values shown when cre
 | `PORT` | `3000` | Listen port |
 | `NODE_ENV` | — | `production`/`development` etc. |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
-| `JWT_SECRET` | — | **Required.** JWT signing key — server refuses to start if unset |
+| `JWT_SECRET` | generated | Optional. Signs logins and encrypts saved secrets; when unset, a key is generated once into the data folder (`secret.key`). See [[skill-settings]] |
 | `ADMIN_EMAIL` | — | **Required for admin login.** Email address mapped to the admin account |
 | `ADMIN_PASSWORD` | — | **Required for admin login.** Admin password — returns 503 if unset |
 | `PUBLIC_BASE_URL` | — | Hard override for all generated URLs (e.g. `https://iptv.example.com`). If unset, URLs are derived per-request from `X-Forwarded-*` headers or the request host |
