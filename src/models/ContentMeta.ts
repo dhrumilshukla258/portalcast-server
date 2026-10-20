@@ -118,6 +118,11 @@ export class ContentMeta extends Model {
   @Column(DataType.STRING)
   declare director: string;
 
+  // Description: TMDB's overview, else the portal's own plot. Discover sends it with every
+  // card (the hero and detail show it without another lookup).
+  @Column(DataType.TEXT)
+  declare overview: string;
+
   // Exactly one row per groupKey is flagged true (recomputed by
   // recomputeRepresentatives() in metaEnrichment.ts) — the "best" variant
   // (prefers TMDB-sourced, then most complete data) shown as the single card

@@ -88,6 +88,13 @@ interface Resolved {
   themes: string[];
   cast: string | null;
   director: string | null;
+  overview: string | null;
+}
+
+/** The portal's own plot, when it is a real sentence ("-" and blanks are not). */
+function portalPlot(item: any): string | null {
+  const p = String(item?.plot ?? item?.description ?? "").trim();
+  return p && p !== "-" && p.toLowerCase() !== "no description available" ? p : null;
 }
 
 // TMDB is the only source for original_language (no provider ever supplies it) and themes
@@ -101,6 +108,7 @@ async function resolveMeta(
   fallbackGenres: string[],
   fallbackCountries: string[],
   fallbackPoster: string | null,
+  fallbackOverview: string | null = null,
 ): Promise<Resolved> {
   let tmdb = await xtreamCache.get<TmdbMeta | { _not_found: true }>(cacheKey);
 
@@ -139,6 +147,7 @@ async function resolveMeta(
       themes: themesForKeywordIds(tmdb.keywordIds),
       cast: tmdb.cast,
       director: tmdb.director,
+      overview: tmdb.overview || fallbackOverview,
     };
   }
 
@@ -155,6 +164,7 @@ async function resolveMeta(
     themes: [],
     cast: null,
     director: null,
+    overview: fallbackOverview,
   };
 }
 
@@ -192,6 +202,7 @@ async function upsertContent(contentId: string, type: ContentType, name: string,
       portalCategoryId: categoryId,
       cast: resolved.cast,
       director: resolved.director,
+      overview: resolved.overview,
     }, { transaction });
     await replaceTags(ContentGenre, contentId, resolved.genres, transaction);
     await replaceTags(ContentCountry, contentId, resolved.countries, transaction);
@@ -230,6 +241,7 @@ async function enrichMovies(): Promise<void> {
           splitList(m.genres_str),
           splitList(m.country),
           m.stream_icon || null,
+          portalPlot(m),
         );
         await upsertContent(contentId, "movie", name, resolved, String(genre.id));
       } catch (e: any) {
@@ -274,6 +286,7 @@ async function enrichSeries(): Promise<void> {
           splitList(s.genre),
           splitList(s.country),
           s.cover || null,
+          portalPlot(s),
         );
         await upsertContent(contentId, "series", name, resolved, String(genre.id));
       } catch (e: any) {
@@ -669,10 +682,62 @@ async function runFixups(): Promise<void> {
     await recomputeRepresentatives();
     clearDiscoverCache();
   });
+  await step("backfill-credits", backfillCreditsAndOverview);
   await step("retry-unmatched", retryUnmatched);
   await step("reclean-channels", recleanChannelNames);
   // The TMDB passes write rows through upsertContent (groupKeyFor), so their groups are
   // already right; recomputeRepresentatives at the end of enrichContentMeta picks again.
+}
+
+/**
+ * Rows saved before cast/director/overview were stored (July) never got them, though the
+ * TMDB data cached on the server has them (55k casts, 63k descriptions measured on the live
+ * catalog, 2026-10-20). Copied from that cache, nothing fetched; for titles TMDB does not
+ * know, the description falls back to the portal's own plot. Only empty fields are filled.
+ */
+export async function backfillCreditsAndOverview(): Promise<void> {
+  const rows = (await ContentMeta.findAll({
+    attributes: ["id", "type", "tmdbId", "cast", "director", "overview"],
+    raw: true,
+  })) as any[];
+  const needs = rows.filter((r) => !r.overview || (r.tmdbId && (!r.cast || !r.director)));
+  // Portal plots for the unmatched ones, from the warmed category lists.
+  const plots = new Map<string, string>();
+  if (needs.some((r) => !r.tmdbId)) {
+    for (const [kind, prefix, idKey] of [["movie", "vod_streams_", "stream_id"], ["series", "series_list_", "series_id"]] as const) {
+      const genres = await readGenres(kind === "movie" ? "movie" : "series");
+      for (const g of genres) {
+        if (!g.id || g.id === "*") continue;
+        for (const item of (await xtreamCache.get<any[]>(`${prefix}${g.id}`)) ?? []) {
+          const plot = portalPlot(item);
+          if (plot) plots.set(`${kind}_${item[idKey]}`, plot);
+        }
+      }
+    }
+  }
+  const BATCH = 500;
+  let changed = 0;
+  for (let i = 0; i < needs.length; i += BATCH) {
+    const slice = needs.slice(i, i + BATCH);
+    const cached = await xtreamCache.getMany<any>(
+      slice.filter((r) => r.tmdbId).map((r) => `${r.type === "movie" ? "tmdb_movie_" : "tmdb_tv_"}${String(r.id).replace(/^(movie|series)_/, "")}`),
+    );
+    await ContentMeta.sequelize!.transaction(async (transaction) => {
+      for (const r of slice) {
+        const key = `${r.type === "movie" ? "tmdb_movie_" : "tmdb_tv_"}${String(r.id).replace(/^(movie|series)_/, "")}`;
+        const meta = r.tmdbId ? cached.get(key) : undefined;
+        const patch: Record<string, string> = {};
+        if (!r.cast && meta?.cast) patch.cast = meta.cast;
+        if (!r.director && meta?.director) patch.director = meta.director;
+        const overview = (meta && !meta._not_found && meta.overview) || plots.get(r.id);
+        if (!r.overview && overview) patch.overview = overview;
+        if (Object.keys(patch).length === 0) continue;
+        await ContentMeta.update(patch, { where: { id: r.id }, transaction });
+        changed++;
+      }
+    });
+  }
+  logger.info(`[MetaEnrich] credits/descriptions filled in for ${changed} of ${needs.length} rows that lacked them`);
 }
 
 /**
