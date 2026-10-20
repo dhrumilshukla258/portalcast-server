@@ -1,3 +1,4 @@
+import { fileForToken } from "@/routes/library/stream";
 import { ServerRoute } from "@hapi/hapi";
 import { spawn, execFile } from "child_process";
 import { promisify } from "util";
@@ -39,7 +40,8 @@ async function probeMetadata(url: string): Promise<MediaMetadata> {
   // Never log the address: an upstream link can carry the portal's credentials.
   logger.info(`[Subtitles] Probing the active stream for embedded tracks`);
   const { stdout } = await execFileAsync("ffprobe", [
-    "-user_agent", "VLC/3.0.16 LibVLC/3.0.16",
+    // The user agent is an HTTP option; a local file (library) must not get it.
+    ...(/^https?:/i.test(url) ? ["-user_agent", "VLC/3.0.16 LibVLC/3.0.16"] : []),
     "-probesize", "5000000",
     "-analyzeduration", "2000000",
     "-v", "quiet",
@@ -79,9 +81,11 @@ async function probeMetadata(url: string): Promise<MediaMetadata> {
 // client sends: a caller-supplied `url=` let any signed-in user make the
 // server open arbitrary addresses, including ones inside the home network.
 // Older webuis still send `url=`; it is accepted and ignored.
-function tokenResource(entry: { resource?: string } | null | undefined): string | null {
+async function tokenResource(entry: { resource?: string } | null | undefined): Promise<string | null> {
   const r = entry?.resource;
   if (!r) return null;
+  // A local-library file: its path on the server (never sent to the client).
+  if (r.startsWith("local:")) return (await fileForToken(r))?.abs ?? null;
   try {
     assertHttpUrl(r);
     return r;
@@ -98,7 +102,7 @@ export const subtitleRoutes: ServerRoute[] = [
       const entry = streamTokenFromRequest(request);
       if (!entry) return h.response({ error: "Unauthorized" }).code(401);
 
-      const raw = tokenResource(entry);
+      const raw = await tokenResource(entry);
       if (!raw) return h.response({ error: "This stream has no file to probe" }).code(400);
       try {
         return h.response(await probeMetadata(raw));
@@ -117,14 +121,14 @@ export const subtitleRoutes: ServerRoute[] = [
 
       const { track } = request.query as { track?: string };
       if (track === undefined) return h.response("Missing params").code(400);
-      const raw = tokenResource(entry);
+      const raw = await tokenResource(entry);
       if (!raw) return h.response("This stream has no file").code(400);
       const idx = parseInt(track, 10);
       if (!Number.isInteger(idx) || idx < 0 || idx > 64) return h.response("Bad track").code(400);
 
       try {
         const args = [
-          "-user_agent", "VLC/3.0.16 LibVLC/3.0.16",
+          ...(/^https?:/i.test(raw) ? ["-user_agent", "VLC/3.0.16 LibVLC/3.0.16"] : []),
           "-i", raw,
           "-map", `0:${idx}`,
           "-f", "webvtt",

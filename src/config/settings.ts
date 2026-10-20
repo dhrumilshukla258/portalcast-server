@@ -85,6 +85,9 @@ const DEFS: SettingDef[] = [
   { key: "streamIdleTimeoutMs", env: "STREAM_IDLE_TIMEOUT_MS", type: "number", default: 60000, min: 5000, max: 3600000, group: "Provider tuning", label: "\"Now watching\" ends after idle (ms)", apply: "live" },
   { key: "epgBatchDelayMs", env: "EPG_FETCH_BATCH_DELAY_MS", type: "number", default: 500, min: 0, max: 60000, group: "Provider tuning", label: "Pause between guide batches (ms)", apply: "live" },
 
+  // Local libraries
+  { key: "mediaRoots", type: "list", default: ["/media"], group: "Local libraries", label: "Media roots", help: "Folders inside the container that libraries may use (the NAS mounts in the compose file). The folder browser shows nothing outside them.", apply: "live" },
+
   // Backups
   { key: "backupFolder", type: "string", default: "", group: "Backups", label: "Backup folder", help: "Where the nightly database copy goes. Empty: the backups folder inside the data folder. A NAS folder mounted into the container is a good choice. The key file is never copied here.", apply: "live" },
   { key: "backupKeep", type: "number", default: 7, min: 0, max: 365, group: "Backups", label: "Nightly backups to keep", help: "0 turns backups off.", apply: "live" },

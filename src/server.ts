@@ -1,3 +1,6 @@
+import { libraryAdminRoutes } from "./routes/library/admin";
+import { localStreamRoutes } from "./routes/library/stream";
+import { scanLibraries } from "./content/library/scanner";
 import { setupRoutes, needsSetup } from "./routes/account/setup";
 import { registerJob, startJobs } from "./services/jobs";
 import { backupDatabase } from "./services/backup";
@@ -76,6 +79,7 @@ const init = async () => {
 
   // Background jobs (services/jobs.ts). The runner starts after the server is listening.
   registerJob({ name: "backup", label: "Back up the database", dailyAtHour: 4, yieldToPlayback: true, run: backupDatabase });
+  registerJob({ name: "library-scan", label: "Scan local libraries", dailyAtHour: 3, yieldToPlayback: true, run: () => scanLibraries() });
 
   await loadActiveProfileFromDB();
   // Explicitly initialize provider after loading the active profile from DB,
@@ -119,6 +123,8 @@ const init = async () => {
   server.route(adminRoutes);
   server.route(authRoutes);
   server.route(setupRoutes);
+  server.route(libraryAdminRoutes);
+  server.route(localStreamRoutes);
   server.route(userRoutes);
   server.route(userManagementRoutes);
   server.route(discoverRoutes);
@@ -259,6 +265,7 @@ const init = async () => {
       path === "/api/health" || // uptime monitors; says nothing to anonymous callers
       path.startsWith("/api/images/") ||
       path.startsWith("/api/proxy") ||
+      path.startsWith("/api/local/") || // local-library files: stream-token gated (routes/library/stream.ts)
       path.startsWith("/api/media/") ||
       path.startsWith("/api/v2/download") ||
       path.startsWith("/live.m3u8") ||

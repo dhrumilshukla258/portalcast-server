@@ -1,4 +1,6 @@
-﻿import { unsealCmd } from "@/infra/sealedCmd";
+﻿import { isLocalTitleId, isLocalFileId, localMovieCategory, localMoviesPage, localTitleFiles, localPlayLink } from "@/content/library/catalog";
+import { LOCAL_CATEGORY } from "@/content/metaEnrichment";
+import { unsealCmd } from "@/infra/sealedCmd";
 import { ServerRoute } from "@hapi/hapi";
 import {
   writeJSON,
@@ -87,14 +89,17 @@ export const movieRoutes: ServerRoute[] = [
         if (channels.length === 0) {
           return h.redirect("/api/v2/refresh-movie-groups");
         }
+        // Local library (content/library): "My Library" first, when it has movies.
+        const local = await localMovieCategory();
+        const groups = [...(local ? [local] : []), ...(await applyGenreOverrides(channels, "movie"))];
         return {
           success: true,
           page: Number(1),
           pageAtaTime: Number(1),
-          total_items: channels.length,
-          actual_length: channels.length,
-          total_loaded: channels.length,
-          data: await applyGenreOverrides(channels, "movie"),
+          total_items: groups.length,
+          actual_length: groups.length,
+          total_loaded: groups.length,
+          data: groups,
           errors: false,
           isPortal: initialConfig.providerType === "stalker",
         };
@@ -142,6 +147,14 @@ export const movieRoutes: ServerRoute[] = [
           page = 1,
           search = "",
         } = query;
+
+        // Local library titles ("L<id>") and the My Library category (content/library/catalog.ts).
+        if (isLocalTitleId(movieId)) return localTitleFiles(String(movieId));
+        if (String(category) === LOCAL_CATEGORY && !Number(movieId)) {
+          const pageData = await localMoviesPage(Number(page) || 1, String(search || ""));
+          pageData.data = await enrichArtworkFromTmdb(pageData.data, "movie", getPublicOrigin(request));
+          return pageData;
+        }
 
         if (category == 0 && movieId == 0) {
           return h.redirect("/api/v2/movie-groups");
@@ -436,6 +449,15 @@ export const movieRoutes: ServerRoute[] = [
           download = 0,
           token,
         } = request.query;
+        // A local-library file ("LF<id>"): a stream token for the file id, never a path.
+        if (isLocalFileId(id)) {
+          const userLabel = streamUserLabel(request);
+          if (!userLabel) return h.response({ error: "Unauthorized" }).code(401);
+          const link = await localPlayLink(String(id), userLabel, (request.query as any).title);
+          if (!link) return h.response({ error: "This file is no longer in the library" }).code(404);
+          return { js: { cmd: link } };
+        }
+
         // A sealed upstream link (infra/sealedCmd.ts) is opened here; never echoed back.
         const cmd = unsealCmd(request.query.cmd) || undefined;
         const { title, category } = request.query as { title?: string; category?: string };

@@ -228,6 +228,37 @@ async function upsertContent(contentId: string, type: ContentType, name: string,
   });
 }
 
+/**
+ * Matches and stores one local-library title (content/library): the same TMDB matching and
+ * catalog row as an IPTV title, under the "local" category, so it groups with the IPTV
+ * versions of the same title. A TMDB id from the folder name, an NFO or "Fix match" is used
+ * as is instead of a search. Returns the TMDB id it matched, if any.
+ */
+export async function enrichLocalTitle(opts: {
+  contentId: string;
+  type: ContentType;
+  name: string;
+  year: string | null;
+  tmdbId?: number | null;
+}): Promise<number | undefined> {
+  const kind = opts.type === "movie" ? "movie" : "tv";
+  const cacheKey = `tmdb_local_${opts.contentId}_${opts.tmdbId ?? "search"}`;
+  if (opts.tmdbId) {
+    const cached = await xtreamCache.get<any>(cacheKey);
+    if (!cached || (!("_not_found" in cached) && !("imdbId" in cached))) {
+      const meta = await fetchMetaByTmdbId(kind, opts.tmdbId);
+      await xtreamCache.set(cacheKey, meta || { _not_found: true });
+      await sleep(THROTTLE_MS);
+    }
+  }
+  const resolved = await resolveMeta(kind, cacheKey, opts.name, opts.year || "", [], [], null, null);
+  await upsertContent(opts.contentId, opts.type, opts.name, resolved, LOCAL_CATEGORY);
+  return resolved.tmdbId;
+}
+
+/** The catalog category of every local-library title ("My Library" in the apps). */
+export const LOCAL_CATEGORY = "local";
+
 async function enrichMovies(): Promise<void> {
   const genres = await readGenres("movie");
   const seen = new Set<string>();
@@ -358,7 +389,7 @@ export async function recomputeRepresentatives(): Promise<void> {
       SELECT \`id\` FROM (
         SELECT \`id\`, ROW_NUMBER() OVER (
           PARTITION BY \`groupKey\`
-          ORDER BY (\`source\` = 'tmdb') DESC, \`poster\` IS NOT NULL DESC, \`enrichedAt\` DESC, \`id\` ASC
+          ORDER BY (\`source\` = 'tmdb') DESC, (\`portalCategoryId\` = 'local') DESC, \`poster\` IS NOT NULL DESC, \`enrichedAt\` DESC, \`id\` ASC
         ) AS rn
         FROM \`content_meta\` WHERE \`groupKey\` IS NOT NULL
       ) WHERE rn = 1;

@@ -344,3 +344,36 @@ export async function fetchMetaByTmdbId(kind: "movie" | "tv", tmdbId: number): P
   if (!detail) return null;
   return buildMeta(detail, kind);
 }
+
+/** TMDB id of a title known by its IMDb id (an NFO file or a folder name may carry only that). */
+export async function findTmdbIdByImdb(imdbId: string, kind: "movie" | "tv"): Promise<number | null> {
+  if (!/^tt\d+$/.test(imdbId)) return null;
+  const data = await tmdbGet(`/find/${imdbId}?external_source=imdb_id`);
+  const list = kind === "movie" ? data?.movie_results : data?.tv_results;
+  return Array.isArray(list) && list[0]?.id ? Number(list[0].id) : null;
+}
+
+export interface TmdbCandidate {
+  tmdbId: number;
+  title: string;
+  year: string | null;
+  poster: string | null;
+  overview: string | null;
+}
+
+/** Search results for the admin "Fix match" picker (no scoring: the admin chooses). */
+export async function searchTmdbCandidates(kind: "movie" | "tv", query: string, year?: string | null): Promise<TmdbCandidate[]> {
+  const results = await search(kind, query, year || undefined);
+  const more = year ? await search(kind, query) : [];
+  const seen = new Set<number>();
+  return [...results, ...more]
+    .filter((r: any) => r?.id && !seen.has(r.id) && seen.add(r.id))
+    .slice(0, 12)
+    .map((r: any) => ({
+      tmdbId: r.id,
+      title: r.title || r.name || "",
+      year: String(r.release_date || r.first_air_date || "").slice(0, 4) || null,
+      poster: r.poster_path ? `${IMG_BASE}/w342${r.poster_path}` : null,
+      overview: r.overview || null,
+    }));
+}

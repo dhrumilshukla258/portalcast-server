@@ -1,3 +1,6 @@
+import { Library } from "../models/Library";
+import { LocalItem } from "../models/LocalItem";
+import { MediaFile } from "../models/MediaFile";
 import { databasePath } from "../infra/paths";
 import fs from "fs";
 import { Sequelize } from "sequelize-typescript";
@@ -40,6 +43,7 @@ export const sequelize = new Sequelize({
     User, DeviceCode, UserProgress, ContentCache,
     ContentMeta, ContentGenre, ContentCountry, ContentTheme,
     StreamFailure, MediaInfo, SubtitleFile, SecurityEvent, RefreshToken,
+    Library, LocalItem, MediaFile,
   ],
   logging: false,
 });
