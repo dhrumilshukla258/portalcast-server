@@ -152,7 +152,7 @@ export async function* streamHlsSegments(
  * `stream_icon`/`cover` (raw logo URLs on the portal host) and `direct_source` (a raw
  * stream URL on some portals). Clients only ever use the proxied `screenshot_uri`.
  */
-function stripUpstreamFields(item: any, origin?: string): any {
+export function stripUpstreamFields(item: any, origin?: string): any {
   if (!item || typeof item !== "object") return item;
   const { stream_icon: _si, direct_source: _ds, cover, ...rest } = item;
   if (typeof cover === "string" && cover) rest.cover = proxiedImageUrl(cover, origin);

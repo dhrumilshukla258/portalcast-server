@@ -12,6 +12,17 @@ import { UserProgress } from "@/models/UserProgress";
 import { SystemConfig } from "@/models/SystemConfig";
 import { clearDiscoverCache } from "@/services/discoverCache";
 import { normalizeTitleKey, stripReleaseNoise } from "@/content/titleClean";
+import { tmdbQueries } from "@/content/tmdb";
+
+/**
+ * The key language/format variants of one title share. A TMDB match groups by TMDB id,
+ * so "Kim's Convenience" and "Kim's Convenience 2016" (whose name alone never produced
+ * the same key) are one title with two versions; unmatched rows fall back to the
+ * cleaned name plus year.
+ */
+export function groupKeyFor(type: ContentType, name: string, year: string | null | undefined, tmdbId?: number | null): string {
+  return tmdbId ? `${type}:tmdb:${tmdbId}` : `${type}:${normalizeTitleKey(name)}:${year || ""}`;
+}
 
 // Single catch-all genre tag for titles whose only "genre" signal is a
 // provider category label (e.g. "Hindi Web Series", "Urdu Tv Show") — the
@@ -169,7 +180,7 @@ async function upsertContent(contentId: string, type: ContentType, name: string,
       // one real title. Legitimate variants (same film dubbed into different
       // languages) share the same production year, so this doesn't split those
       // apart. See db/index.ts's one-time migration for existing rows.
-      groupKey: `${type}:${normalizeTitleKey(name)}:${resolved.year || ""}`,
+      groupKey: groupKeyFor(type, name, resolved.year, resolved.tmdbId),
       trimmedName: stripReleaseNoise(name),
       portalCategoryId: categoryId,
       cast: resolved.cast,
@@ -596,6 +607,81 @@ let isEnriching = false;
 // the same permanently-backdrop-less rows from TMDB on every automatic run
 // forever. Keep it out of the automatic startup/24h path; only run it when
 // explicitly requested (manual admin trigger).
+// ---- one-time catalog fix-ups, by generation --------------------------------------------
+// Each generation runs once per database (SystemConfig remembers the last one done), after
+// the regular enrichment pass, so a server upgrade repairs existing rows without a manual
+// re-enrichment of the whole catalog.
+const FIXUP_KEY = "meta_fixup_generation";
+const FIXUP_GENERATION = 1;
+
+async function runFixups(): Promise<void> {
+  const row = await SystemConfig.findByPk(FIXUP_KEY);
+  const done = Number(row?.value ?? 0);
+  if (done >= FIXUP_GENERATION) return;
+  logger.info(`[MetaEnrich] running catalog fix-ups ${done + 1}..${FIXUP_GENERATION}`);
+  if (done < 1) {
+    await regroupByTmdbId();
+    await retryUnmatched();
+  }
+  await SystemConfig.upsert({ key: FIXUP_KEY, value: FIXUP_GENERATION });
+}
+
+/** Generation 1: rows with a TMDB id group by it (see groupKeyFor). */
+async function regroupByTmdbId(): Promise<void> {
+  const [, meta] = await ContentMeta.sequelize!.query(
+    "UPDATE content_meta SET groupKey = type || ':tmdb:' || tmdbId WHERE tmdbId IS NOT NULL AND groupKey NOT LIKE '%:tmdb:%'",
+  );
+  logger.info(`[MetaEnrich] regrouped ${(meta as any)?.changes ?? "?"} rows by TMDB id`);
+}
+
+/**
+ * Generation 1: a second TMDB pass over titles that never matched, now that tmdbQueries()
+ * also tries the name without a glued-on year, without a ": Season N to current" tail and
+ * the part before a colon. Only rows where that produces a query the old search never
+ * sent are retried, at the usual throttle, so this is minutes rather than hours.
+ */
+async function retryUnmatched(): Promise<void> {
+  const rows = (await ContentMeta.findAll({
+    where: { tmdbId: null },
+    attributes: ["id", "type", "name", "year", "poster", "portalCategoryId"],
+    raw: true,
+  })) as any[];
+  let tried = 0;
+  let matched = 0;
+  for (const row of rows) {
+    const kind = row.type === "movie" ? "movie" : "tv";
+    const old = stripReleaseNoise(row.name).toLowerCase();
+    if (!tmdbQueries(row.name, row.year || undefined).some((q) => q.query.toLowerCase() !== old)) continue;
+    const portalId = String(row.id).replace(/^(movie|series)_/, "");
+    const cacheKey = kind === "movie" ? `tmdb_movie_${portalId}` : `tmdb_tv_${portalId}`;
+    try {
+      await xtreamCache.delete(cacheKey);
+      const [genres, countries] = await Promise.all([
+        ContentGenre.findAll({ where: { contentId: row.id }, attributes: ["value"], raw: true }),
+        ContentCountry.findAll({ where: { contentId: row.id }, attributes: ["value"], raw: true }),
+      ]);
+      const resolved = await resolveMeta(
+        kind,
+        cacheKey,
+        row.name,
+        row.year || "",
+        (genres as any[]).map((g) => g.value).filter((v) => v !== UNCATEGORIZED_GENRE),
+        (countries as any[]).map((c) => c.value),
+        row.poster || null,
+      );
+      tried++;
+      if (resolved.tmdbId) {
+        matched++;
+        await upsertContent(row.id, row.type, row.name, resolved, row.portalCategoryId || "");
+      }
+    } catch (e: any) {
+      logger.error(`[MetaEnrich] retry ${row.name}: ${e.message}`);
+    }
+    if (tried % 200 === 0 && tried > 0) logger.info(`[MetaEnrich] retry: ${tried} tried, ${matched} matched`);
+  }
+  logger.info(`[MetaEnrich] retry of unmatched titles done: ${tried} tried, ${matched} newly matched (of ${rows.length} unmatched)`);
+}
+
 export async function enrichContentMeta(options: { includeBackdropBackfill?: boolean } = {}): Promise<void> {
   if (isEnriching) {
     logger.warn("[MetaEnrich] enrichment already in progress — skipping this request");
@@ -605,6 +691,7 @@ export async function enrichContentMeta(options: { includeBackdropBackfill?: boo
   try {
     await enrichMovies();
     await enrichSeries();
+    await runFixups();
     await backfillPortalCategoryIds();
     if (options.includeBackdropBackfill) {
       await backfillBackdrops();

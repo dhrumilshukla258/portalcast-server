@@ -158,26 +158,125 @@ async function fetchDetail(kind: "movie" | "tv", id: number): Promise<any | null
   );
 }
 
-async function search(kind: "movie" | "tv", query: string, year?: string): Promise<any | null> {
+async function search(kind: "movie" | "tv", query: string, year?: string): Promise<any[]> {
   const q = encodeURIComponent(query);
   const yearParam = kind === "movie"
     ? (year ? `&year=${year}` : "")
     : (year ? `&first_air_date_year=${year}` : "");
   const data = await tmdbGet(`/search/${kind}?query=${q}&language=en-US${yearParam}`);
-  return data?.results?.[0] || null;
+  return Array.isArray(data?.results) ? data.results : [];
+}
+
+// ---- what to search for --------------------------------------------------------------
+// Portal names carry more than the quality/language tags stripReleaseNoise removes:
+//   "Kim's Convenience 2016"                 -> a year glued to the title (and the portal's
+//                                               own releaseDate says 2021, so the year-
+//                                               filtered search found nothing)
+//   "Diners, Drive-Ins and Dives : Season 40 To Current", "The Yorkshire Vet : Season13 TO
+//   Current", "The Fifth Estate : Season : 47 & 48", "Season 1. Pushpa Impossible"
+//   "Jack Carr Investigates: Carlos the Jackal" -> TMDB lists only the show "Jack Carr
+//                                               Investigates"
+// Each name gives a short list of queries, most specific first; the first one with a
+// convincing result wins. The raw cleaned title is always tried first so a title that
+// really ends in a year ("Death Race 2000", "Blade Runner 2049") is matched as itself.
+const TRAILING_YEAR_RE = /\s*[(\[]?((?:19|20)\d{2})[)\]]?\s*$/;
+// ': Season 40 To Current' / ' - Season13 TO Current' / ' : Season : 47 & 48' — only when
+// digits follow, so 'Love in the Season' is left alone.
+const SEASON_SUFFIX_RE = /\s*[:\-–|]?\s*\bseasons?\b\s*:?\s*(?=.*\d).*$/i;
+const SEASON_PREFIX_RE = /^\s*season\s*\d+\s*[.:\-–]\s*/i;
+
+export interface TitleQuery {
+  query: string;
+  year?: string;
+  /** Only accept a result whose name equals the query (a loosened query must not guess). */
+  strict: boolean;
+}
+
+export function tmdbQueries(name: string, year?: string): TitleQuery[] {
+  const out: TitleQuery[] = [];
+  const seen = new Set<string>();
+  const push = (q: string, y: string | undefined, strict: boolean) => {
+    const t = q.replace(/\s+/g, " ").trim().replace(/^[\s\-:|,]+|[\s\-:|,]+$/g, "");
+    const k = `${t.toLowerCase()}|${y || ""}`;
+    if (t.length >= 2 && !seen.has(k)) { seen.add(k); out.push({ query: t, year: y || undefined, strict }); }
+  };
+  const base = cleanTitle(name).replace(SEASON_PREFIX_RE, "");
+  push(base, year, false);
+  if (year) push(base, undefined, false);
+  const noSeason = base.replace(SEASON_SUFFIX_RE, "").trim();
+  if (noSeason && noSeason !== base) { push(noSeason, year, false); push(noSeason, undefined, false); }
+  const trailing = TRAILING_YEAR_RE.exec(noSeason);
+  if (trailing && trailing.index > 0) {
+    const t = noSeason.slice(0, trailing.index).trim();
+    if (t) { push(t, trailing[1], false); push(t, undefined, false); }
+  }
+  const head = noSeason.replace(TRAILING_YEAR_RE, "").split(/\s*[:|]\s*|\s+[\-–]\s+/)[0]?.trim();
+  if (head && head.length >= 3 && head.toLowerCase() !== noSeason.toLowerCase()) push(head, undefined, true);
+  return out;
+}
+
+function normName(s: string): string {
+  return String(s || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+/** The result that best fits the query: name match first, then year, then popularity. */
+export function pickResult(results: any[], q: TitleQuery, kind: "movie" | "tv"): any | null {
+  const want = normName(q.query);
+  let best: any = null;
+  let bestScore = -Infinity;
+  for (const r of results.slice(0, 10)) {
+    const names = [r.title, r.name, r.original_title, r.original_name].filter(Boolean).map(normName);
+    const exact = names.includes(want);
+    const starts = !exact && names.some((n) => n.startsWith(`${want} `) || want.startsWith(`${n} `));
+    if (q.strict && !exact) continue;
+    let score = exact ? 100 : starts ? 60 : 20;
+    const ry = String((kind === "movie" ? r.release_date : r.first_air_date) || "").slice(0, 4);
+    if (q.year && ry) {
+      const d = Math.abs(Number(q.year) - Number(ry));
+      score += d === 0 ? 30 : d === 1 ? 15 : d <= 3 ? 5 : -10;
+    }
+    score += Math.min(10, (Number(r.popularity) || 0) / 10);
+    if (score > bestScore) { bestScore = score; best = r; }
+  }
+  return best;
 }
 
 async function fetchMeta(kind: "movie" | "tv", name: string, year?: string): Promise<TmdbMeta | null> {
-  const cleaned = cleanTitle(name);
-  let r = await search(kind, cleaned, year);
-  // Fallback: some portal years are wrong/guessed, causing a false-negative year-filtered
-  // search — retry once without the year constraint before giving up.
-  if (!r && year) r = await search(kind, cleaned);
+  let r: any = null;
+  for (const q of tmdbQueries(name, year)) {
+    r = pickResult(await search(kind, q.query, q.year), q, kind);
+    if (r) break;
+  }
   if (!r) return null;
 
   const detail = await fetchDetail(kind, r.id);
   if (!detail) return null;
   return buildMeta(detail, kind);
+}
+
+// ---- one season's episodes -----------------------------------------------------------
+export interface TmdbEpisode {
+  number: number;
+  name: string | null;
+  overview: string | null;
+  /** w400 still, about the size an episode row shows. */
+  still: string | null;
+  /** Minutes. */
+  runtime: number | null;
+  airDate: string | null;
+}
+
+export async function fetchTvSeason(tmdbId: number, season: number): Promise<TmdbEpisode[] | null> {
+  const data = await tmdbGet(`/tv/${tmdbId}/season/${season}?language=en-US`);
+  if (!data || !Array.isArray(data.episodes)) return null;
+  return data.episodes.map((e: any) => ({
+    number: Number(e.episode_number) || 0,
+    name: e.name || null,
+    overview: e.overview || null,
+    still: e.still_path ? `${IMG_BASE}/w400${e.still_path}` : null,
+    runtime: typeof e.runtime === "number" && e.runtime > 0 ? e.runtime : null,
+    airDate: e.air_date || null,
+  }));
 }
 
 export async function fetchMovieMeta(name: string, year?: string): Promise<TmdbMeta | null> {

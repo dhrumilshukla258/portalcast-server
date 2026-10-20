@@ -32,11 +32,13 @@ import { mintDownloadToken, DownloadPayload } from "@/services/downloadTokens";
 import crypto from "crypto";
 import { getEpgCache, fetchAndCacheEpg } from "@/content/epg";
 import { getPublicOrigin } from "@/infra/publicUrl";
-import { channelLogoPath, proxiedLogoPath } from "@/providers/portalAssets";
+import { channelLogoPath, proxiedLogoPath, proxiedImageUrl } from "@/providers/portalAssets";
+import { rememberSeasonNumbers, withTmdbEpisodes } from "@/content/tmdbEpisodes";
 import { fetchMovieMeta, fetchTVMeta } from "@/content/tmdb";
 import { searchSubtitles, resolveSubtitleDownloadUrl } from "@/content/opensubtitles";
 import { pruneContentMeta } from "@/content/metaEnrichment";
 import {
+  stripUpstreamFields,
   streamUserLabel,
   CACHE_DURATION_MS,
   resolveStalkerUrl,
@@ -65,6 +67,9 @@ export const seriesRoutes: ServerRoute[] = [
           page = 1,
           search = "",
           sort,
+          // Optional: the season's number, when the client knows it (else remembered from
+          // the season list it fetched, see content/tmdbEpisodes.ts).
+          seasonNumber = 0,
           ...others
         } = query;
 
@@ -96,11 +101,15 @@ export const seriesRoutes: ServerRoute[] = [
         const cacheKey = generateCacheKey("series", query);
         const itemsPerApiPage = 14;
         const startApiPage = Number(page);
-        // Episode lists (a season is selected) carry each episode's measured video quality
-        // (content/mediaInfo.ts). Added on the way out so cached pages stay current too.
+        // On the way out: a season list has its season numbers remembered; an episode list
+        // (a season is selected) is filled from TMDB (stills, descriptions, runtimes) and
+        // carries each episode's measured video quality (content/mediaInfo.ts).
         const withEpisodeVideo = async (resp: any) => {
-          if (!seasonId || !resp || !Array.isArray(resp.data)) return resp;
-          return { ...resp, data: await withVideoInfo(resp.data, profileId, "episode", (e: any) => e.id) };
+          if (!resp || !Array.isArray(resp.data)) return resp;
+          if (Number(movieId) !== 0 && !seasonId) { rememberSeasonNumbers(resp.data); return resp; }
+          if (!seasonId) return resp;
+          const episodes = await withTmdbEpisodes(resp.data, movieId, seasonId, seasonNumber, getPublicOrigin(request));
+          return { ...resp, data: await withVideoInfo(episodes, profileId, "episode", (e: any) => e.id) };
         };
         const getSeriesCache = (catId: string) =>
           xtreamCache.get<any[]>(`series_list_${catId}`).then((v) => v ?? []);
@@ -339,7 +348,15 @@ export const seriesRoutes: ServerRoute[] = [
           total_items: actualTotalItems,
           actual_length: itemsPerApiPage,
           total_loaded: firstPageData.length,
-          data: await enrichArtworkFromTmdb(overriddenSeriesData, "series", getPublicOrigin(request)),
+          // Episode items are not put through the per-item TMDB *series* search: "Episode 6.
+          // The Kim Cup" is not a show, and the search either found nothing or a wrong
+          // show's poster. They get their art from withTmdbEpisodes above instead.
+          data: seasonId
+            ? overriddenSeriesData.map((item: any) => ({
+                ...stripUpstreamFields(item, getPublicOrigin(request)),
+                screenshot_uri: proxiedImageUrl(item.screenshot_uri, getPublicOrigin(request)),
+              }))
+            : await enrichArtworkFromTmdb(overriddenSeriesData, "series", getPublicOrigin(request)),
           errors: false,
           isPortal: initialConfig.providerType === "stalker",
         };
