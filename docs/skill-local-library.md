@@ -1,6 +1,6 @@
-# Local library (NAS movies) — Skill Reference
+# Local library (NAS movies and series) — Skill Reference
 
-Movies from folders on the NAS, scanned, matched to TMDB and served byte for byte (no transcoding) next to IPTV. Phase 1 of the local-library plan, built 2026-10-20: movies only; series, NAS image storage and the browser fallback come in later phases.
+Movies and series from folders on the NAS, scanned, matched to TMDB and served byte for byte (no transcoding) next to IPTV. Phases 1 and 2 of the local-library plan, built 2026-10-20 and 21. NAS image storage and the browser fallback come in later phases.
 
 Related: [[skill-settings]], [[skill-titles-and-tmdb]], [[skill-stream-tokens]], [[skill-discover]]
 
@@ -29,6 +29,10 @@ The NAS is mounted read-only into the container (for example `/srv/mergerfs/data
 3. A title is matched when new, renamed, or unmatched (retried at most daily): the pinned "Fix match" id, else the id from the folder name or NFO (an IMDb id is looked up on TMDB), else a TMDB search with the parsed name and year. `enrichLocalTitle()` (`content/metaEnrichment.ts`) stores it as `content_meta` `movie_L<itemId>` with `portalCategoryId = "local"`, so it groups with IPTV versions of the same title (same `groupKey`), and `recomputeRepresentatives()` prefers a matched local version as the card.
 4. Files not seen get `missingSince`; titles missing for 7 days are removed with their catalog row (watch progress is kept). A library folder that is missing or empty while it had files is skipped for that scan, so an offline disk never empties the library.
 
+## Series libraries
+
+A library of kind `series`: each top-level folder is a show (`tvshow.nfo` for ids). Episodes are found anywhere inside it: `S01E02`, `S01E02E03` (multi-episode), `1x02`, or `E05` / `05 - Title` inside a season folder (`Season 05`, `Staffel 5`, ...); `Specials` is season 0. Files with no episode number outside a season folder are left out. Episode titles come from the file name, or from TMDB season data when the show is matched. The catalog row is `series_L<itemId>`.
+
 ## How the apps see it
 
 No app change is needed to browse and play:
@@ -40,7 +44,17 @@ No app change is needed to browse and play:
 | `GET /api/v2/movies?movieId=L<id>` | The title's files, ids `LF<fileId>`, best first, with `variantLabel` ("4K · HDR10"), `audio_tracks`, `subtitle_tracks` |
 | `GET /api/v2/movie-link?id=LF<id>` | `{ js: { cmd: "/api/local/stream?t=<token>" } }` |
 
-Discover cards for a local representative open with category `local`, which takes the same path.
+Series, the same way:
+
+| Request | Local answer |
+|---|---|
+| `GET /api/v2/series-groups` | "My Library" first, when there is a local show |
+| `GET /api/v2/series?category=local` | Shows, `series_id` `L<itemId>`, `is_series: 1`, `is_local: 1` |
+| `GET /api/v2/series?movieId=L<id>` | Seasons `L<id>S<n>` (`number`, `season_number`, `is_season`), Specials last |
+| `GET /api/v2/series?movieId=L<id>&seasonId=L<id>S<n>` | Episodes. An episode's `id` is its file id `LF<n>` (with `episode_num`, `series_number` = season), so progress, resume and "next episode" work unchanged. Two copies of one episode: the larger picture is listed |
+| `GET /api/v2/movies?movieId=L<id>&episodeId=LF<n>` | That one file (the apps' "resolve the episode file" call) |
+
+Discover cards for a local representative open with category `local`, which takes the same path. Global search (`movies`/`series` with `category=*&search=`) lists local matches first. List items and Discover cards carry `is_local: 1` (and `quality`); both apps draw a **Local** badge (**Local · 4K** when the best file is 4K).
 
 ## Streaming
 
@@ -52,4 +66,4 @@ ExoPlayer plays MKV/MP4 directly. Audio the TV cannot decode (DTS, TrueHD) falls
 
 ## Not yet (later phases)
 
-Series and episodes; local titles in the global Search; per-title progress across versions; images and NFO files stored on the NAS; "Local" badges; the browser fallback for audio the browser cannot play (MKV with AC3/DTS).
+Per-title progress across versions (resume an IPTV start from the NAS copy); images and NFO files stored on the NAS (Jellyfin's `folder.jpg`, `backdrop.jpg`, `logo.png` are already beside most titles); the browser fallback for audio the browser cannot play (MKV with AC3/DTS).
