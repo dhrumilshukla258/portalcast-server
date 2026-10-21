@@ -220,10 +220,16 @@ function walkSeries(root: string): FoundTitle[] {
   return shows;
 }
 
+let waitLogged = 0;
 async function waitWhileWatching(): Promise<void> {
-  // Probing reads the disks: let someone's film go first (checked between files).
+  // Probing reads the disks: let someone's film go first (checked between files), for at
+  // most 2 minutes per file, so a scan still finishes while someone watches all evening.
   let waited = 0;
-  while (streamTracker.count() > 0 && waited < 30 * 60_000) {
+  while (streamTracker.count() > 0 && waited < 2 * 60_000) {
+    if (Date.now() - waitLogged > 10 * 60_000) {
+      waitLogged = Date.now();
+      logger.info("[library] someone is watching: the scan probes files more slowly until playback stops");
+    }
     await new Promise((r) => setTimeout(r, 15_000));
     waited += 15_000;
   }
@@ -319,15 +325,34 @@ export interface ScanSummary {
 }
 
 let scanning = false;
+/** Libraries asked for while a scan runs ("all" = every library); scanned right after it. */
+const pending = new Set<number | "all">();
 export function isScanning(): boolean {
   return scanning;
 }
 
 /** Scans one library (or all enabled ones). Returns a one-line summary. */
 export async function scanLibraries(onlyId?: number): Promise<string> {
-  if (scanning) return "a scan is already running";
+  if (scanning) {
+    pending.add(onlyId ?? "all");
+    return "queued: a scan is running, this one follows it";
+  }
   scanning = true;
   try {
+    return await scanNow(onlyId);
+  } finally {
+    scanning = false;
+    // Scans asked for meanwhile (a second library added during the first scan).
+    if (pending.size) {
+      const next = pending.has("all") ? undefined : (pending.values().next().value as number);
+      if (next === undefined) pending.clear(); else pending.delete(next);
+      setTimeout(() => void scanLibraries(next).catch((e) => logger.error(`[library] queued scan failed: ${e?.message ?? e}`)), 0);
+    }
+  }
+}
+
+async function scanNow(onlyId?: number): Promise<string> {
+  {
     const libs = await Library.findAll({ where: onlyId ? { id: onlyId } : { enabled: true } });
     const lines: string[] = [];
     for (const lib of libs) {
@@ -348,8 +373,6 @@ export async function scanLibraries(onlyId?: number): Promise<string> {
       clearDiscoverCache();
     }
     return lines.join(" | ") || "no libraries";
-  } finally {
-    scanning = false;
   }
 }
 
@@ -364,6 +387,7 @@ async function scanOne(lib: Library): Promise<ScanSummary> {
     const known = await MediaFile.count({ where: { libraryId: lib.id, root } });
     const st = statOf(root);
     const found = st?.isDirectory() ? (kind === "series" ? walkSeries(root) : walk(root)) : [];
+    logger.info(`[library] ${lib.name}: ${found.length} ${kind === "series" ? "shows" : "titles"} found in ${root}, ${found.reduce((n, t) => n + t.files.length, 0)} files`);
     if (found.length === 0 && known > 0) {
       // Folder gone or empty although it had files: a disk is probably offline.
       sum.skippedFolders.push(root);
@@ -373,6 +397,7 @@ async function scanOne(lib: Library): Promise<ScanSummary> {
 
     for (const t of found) {
       sum.titles++;
+      if (sum.titles % 50 === 0) logger.info(`[library] ${lib.name}: ${sum.titles}/${found.length} done (${sum.probed} files probed so far)`);
       let item = await LocalItem.findOne({ where: { libraryId: lib.id, root, relPath: t.relPath } });
       const nameChanged = item && (item.name !== t.name || (item.year ?? null) !== (t.year ?? null) || (item.tmdbIdHint ?? null) !== (t.tmdbId ?? null));
       if (!item) {
