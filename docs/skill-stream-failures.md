@@ -26,7 +26,7 @@ Live channels fail too (`500 {"error":"Failed to generate URL"}` from `/live.m3u
 | `attemptId` | Set automatically by `mintStreamToken` to the top-level token's own id when `itemId` is present; inherited by every child token |
 
 Producers:
-- `/api/v2/movie-link` — accepts new optional query params **`itemId`** and **`itemType`** (`movie`/`episode`). Without them (older TV clients): `itemId = id` (file id), `itemType` from `series`, and `hideable` only if `vod_info_<id>` exists in XtreamCache (i.e. the id is verifiably a movie list id).
+- `/api/v2/movie-link` — accepts new optional query params **`itemId`** and **`itemType`** (`movie`/`episode`). Without them (older TV clients): `itemId = id` (file id), `itemType` from `series`, and `hideable` only if the id is a movie in the in-memory catalog (`catalogUnion.catalogItem`, i.e. verifiably a movie list id).
 - `mapChannel` (`stalkerV2/shared.ts`) — `itemType:"live"`, `itemId: channel.id`.
 - `/api/v2/channel-link` — `itemType:"live"` only when the client sends `id`; the cmd is never used as an itemId (it can hold credentials).
 

@@ -170,7 +170,7 @@ Content is cached in SQLite (`XtreamCache` table, 24-hour TTL) so the server nev
 `warmSeriesInfoCache()` runs independently after the series warm:
 - Iterates every cached series and pre-fetches all seasons/episodes
 - 500ms throttle between series to avoid portal hammering
-- Stores episodes under `ep_info_{ep_id}` and `ep_cmd_{ep_id}`
+- Records each episode's series in the `episode_index` table (see [[skill-storage]])
 
 ### Full catchup scan
 
@@ -193,9 +193,8 @@ Use after a long offline period to fill gaps the incremental warm misses (it sto
 | `vod_streams_{category_id}` | Movie list for a genre |
 | `series_list_{category_id}` | Series list for a genre |
 | `series_info_{series_id}` | Seasons and episodes |
-| `vod_info_{stream_id}` | Movie metadata |
 | `vod_cmd_{stream_id}` | Movie playback command |
-| `ep_info_{episode_id}` | Episode metadata |
+| `episode_index` table | Episode id -> series, episode number |
 | `ep_cmd_{episode_id}` | Episode playback command |
 | `portal_series_source` | `"native"` or `"mixed"` |
 

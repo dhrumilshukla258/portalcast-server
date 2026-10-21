@@ -63,9 +63,8 @@ xtreamCache.delete(key)
 | `vod_streams_{category_id}` | Movie list for a genre |
 | `series_list_{category_id}` | Series list for a genre |
 | `series_info_{series_id}` | Seasons and episodes |
-| `vod_info_{stream_id}` | Movie metadata |
 | `vod_cmd_{stream_id}` | Movie playback command |
-| `ep_info_{episode_id}` | Episode metadata |
+| `episode_index` table | Episode id -> series, episode number ([[skill-storage]]) |
 | `ep_cmd_{episode_id}` | Episode playback command |
 | `tmdb_movie_{id}` / `tmdb_tv_{id}` | Cached TMDB lookups (shared with Discover enrichment, see [[skill-discover]]) |
 | `portal_series_source` | `"native"` or `"mixed"` |
@@ -119,7 +118,7 @@ Use after a long offline period. The incremental warm stops at the first known i
 
 ### XtreamCache is never purged by age
 
-Despite genuinely accumulating unbounded per-item rows over time (no scheduled job ever deletes an expired `vod_info_*`/`ep_info_*`/etc. row), `XtreamCache` is **deliberately excluded** from `runDbCleanup()` in `src/server.ts`. A 7-day-stale purge was tried and reverted after it broke production: even scoped to only `vod_streams_*`/`series_list_*` keys, an earlier unscoped version of it also deleted write-once rows like `series_info_*` — populated once by `warmSeriesInfoCache()` and never rewritten again once complete, so their `expiresAt` freezes at creation time and eventually crosses any age threshold regardless of the row still being actively read. Deleting them forced a full catalog rebuild on the next warm cycle. See [[skill-database#Scheduled Cleanup]] for the full incident writeup.
+The per-item rows that used to accumulate (`vod_info_*`, `vod_cmd_*`, `ep_info_*`, `ep_cmd_*`) are no longer written; the storage migration removed them ([[skill-storage]]). `XtreamCache` is still **deliberately excluded** from `runDbCleanup()` in `src/server.ts`. A 7-day-stale purge was tried and reverted after it broke production: even scoped to only `vod_streams_*`/`series_list_*` keys, an earlier unscoped version of it also deleted write-once rows like `series_info_*` — populated once by `warmSeriesInfoCache()` and never rewritten again once complete, so their `expiresAt` freezes at creation time and eventually crosses any age threshold regardless of the row still being actively read. Deleting them forced a full catalog rebuild on the next warm cycle. See [[skill-database#Scheduled Cleanup]] for the full incident writeup.
 
 `runDbCleanup()` does still purge expired `device_codes` rows and stale `EpgCache` rows — simpler tables with no stale-serve/write-once pattern to worry about.
 
