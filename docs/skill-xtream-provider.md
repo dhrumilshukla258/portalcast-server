@@ -63,9 +63,7 @@ xtreamCache.delete(key)
 | `vod_streams_{category_id}` | Movie list for a genre |
 | `series_list_{category_id}` | Series list for a genre |
 | `series_info_{series_id}` | Seasons and episodes |
-| `vod_cmd_{stream_id}` | Movie playback command |
 | `episode_index` table | Episode id -> series, episode number ([[skill-storage]]) |
-| `ep_cmd_{episode_id}` | Episode playback command |
 | `tmdb_movie_{id}` / `tmdb_tv_{id}` | Cached TMDB lookups (shared with Discover enrichment, see [[skill-discover]]) |
 | `portal_series_source` | `"native"` or `"mixed"` |
 

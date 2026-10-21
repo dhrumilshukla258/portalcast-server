@@ -192,10 +192,8 @@ Use after a long offline period to fill gaps the incremental warm misses (it sto
 |-----|---------|
 | `vod_streams_{category_id}` | Movie list for a genre |
 | `series_list_{category_id}` | Series list for a genre |
-| `series_info_{series_id}` | Seasons and episodes |
-| `vod_cmd_{stream_id}` | Movie playback command |
+| `series_info_{series_id}` | Seasons and episodes (stored compressed over 2 KB, see [[skill-storage]]) |
 | `episode_index` table | Episode id -> series, episode number |
-| `ep_cmd_{episode_id}` | Episode playback command |
 | `portal_series_source` | `"native"` or `"mixed"` |
 
 ---
