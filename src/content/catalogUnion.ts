@@ -21,6 +21,8 @@
 //     in this process, which is the only writer of those rows)
 //   - the override generation (bumped by Sequelize hooks on any ContentOverride/GenreOverride
 //     write, including broken-stream auto-hide)
+import { warmSearchIndex } from "@/content/searchIndex";
+
 import { readGenres } from "@/infra/storage";
 import { xtreamCache, xtreamCacheKeyVersion } from "@/services/xtreamCache";
 import { contentKey, getHiddenGenreIds, overridesGeneration, getAllContentOverrides } from "@/content/overrides";
@@ -121,6 +123,8 @@ export async function getCatalogUnion(type: CatalogType, profileId: number | und
       }
       const entry: CatalogUnion = { fp, raw, browse: await applyOverridesToUnion(type, raw), catOf };
       entries.set(slot, entry);
+      // Index it for search now, not on the next search (routes search it as "<type>:*").
+      if (raw.length) warmSearchIndex(`${type}:*`, raw);
       return entry;
     })().finally(() => building.delete(buildKey));
     building.set(buildKey, p);

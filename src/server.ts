@@ -441,6 +441,16 @@ const init = async () => {
 
   // In-memory Discover index (facets/browse): build now instead of on the first request.
   primeDiscoverIndex();
+  // The "All" catalogs and their search indexes (content/catalogUnion.ts warms the index as
+  // soon as a catalog exists), so the first search after a restart does not wait ~1.5 s.
+  setTimeout(() => {
+    (async () => {
+      const { getCatalogUnion } = await import("./content/catalogUnion");
+      const { getActiveProfileId } = await import("./routes/stalkerV2/shared");
+      const profileId = await getActiveProfileId();
+      for (const type of ["movie", "series"] as const) await getCatalogUnion(type, profileId);
+    })().catch((e) => logger.warn(`[search] startup warm-up failed: ${e?.message ?? e}`));
+  }, 20_000).unref?.();
   // Channel logos for Discover (content/channels.ts): portal logos now, TMDB network logos
   // a minute later in the background (one-time, cached; retried weekly for misses).
   refreshChannelLogos();

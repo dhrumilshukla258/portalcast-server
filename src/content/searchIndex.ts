@@ -23,6 +23,8 @@
 // - Built once per catalog snapshot (fingerprinted by size + an id hash) and reused across
 //   requests; a rebuild costs one pass over the titles.
 
+import { logger } from "@/infra/logger";
+
 export interface Searchable {
   name?: string;
   year?: string | number;
@@ -200,6 +202,29 @@ function fingerprint(items: Searchable[]): string {
   return `${items.length}:${h}`;
 }
 
+/**
+ * Snapshots whose index is being built in the background (warmSearchIndex): until it is
+ * ready, searches keep using the previous index for that key instead of building it
+ * themselves, so nobody waits ~1.5 s for the first search after a catalog refresh.
+ */
+const warming = new Map<string, Searchable[]>();
+
+/** Builds the index for `items` under `key` off the request path (after the catalog changes). */
+export function warmSearchIndex(key: string, items: Searchable[]): void {
+  if (warming.get(key) === items) return;
+  warming.set(key, items);
+  setImmediate(() => {
+    try {
+      if (warming.get(key) !== items) return; // a newer snapshot replaced this one
+      const t0 = Date.now();
+      searchCatalog(key, items, "warm");
+      logger.info(`[search] index for ${key} ready: ${items.length} titles in ${Date.now() - t0} ms`);
+    } finally {
+      if (warming.get(key) === items) warming.delete(key);
+    }
+  });
+}
+
 /** Ranked search over `items`, reusing an index built for the same snapshot under `key`. */
 export function searchCatalog<T extends Searchable>(key: string, items: T[], query: string): T[] {
   if (!query || !query.trim()) return items;
@@ -207,6 +232,10 @@ export function searchCatalog<T extends Searchable>(key: string, items: T[], que
   // Callers holding a long-lived snapshot (content/catalogUnion.ts) pass the same array every
   // time: identity proves it is the indexed snapshot, so skip the O(n) fingerprint.
   const fp = entry && entry.index.items === items ? entry.fp : fingerprint(items);
+  // The new snapshot is still being indexed in the background: answer from the previous one.
+  if (entry && entry.fp !== fp && warming.get(key) === items && query !== "warm") {
+    return (entry.index as SearchIndex<T>).search(query);
+  }
   if (!entry || entry.fp !== fp) {
     entry = { fp, index: new SearchIndex(items) };
     indexCache.delete(key);

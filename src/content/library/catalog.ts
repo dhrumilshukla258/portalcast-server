@@ -8,6 +8,7 @@
 // Items have the same shape as IPTV list items, so neither app needs to know where a title
 // comes from. No path ever leaves the server: clients see ids and short-lived tokens.
 
+import { onDiscoverCacheClear } from "@/services/discoverCache";
 import { needsBrowserFallback } from "@/content/library/remux";
 import { artMarker } from "@/content/library/art";
 import { Op } from "sequelize";
@@ -144,9 +145,28 @@ async function itemsWithMeta(items: LocalItem[]) {
 }
 
 /** All present local movies, newest first (a page is a slice; search uses the same index as IPTV). */
+// The library's movie and series lists, read by every search and "My Library" page: kept
+// in memory and dropped whenever Discover's caches are cleared (every scan, match fix, image
+// change and enrichment run does that), with 10 minutes as a safety net.
+const LIST_TTL_MS = 10 * 60_000;
+const lists = new Map<string, { at: number; list: Promise<any[]> }>();
+onDiscoverCacheClear(() => lists.clear());
+
+function remembered(key: string, load: () => Promise<any[]>): Promise<any[]> {
+  const hit = lists.get(key);
+  if (hit && Date.now() - hit.at < LIST_TTL_MS) return hit.list;
+  const list = load();
+  lists.set(key, { at: Date.now(), list });
+  list.catch(() => lists.delete(key));
+  return list;
+}
+
 export async function localMovieList(): Promise<any[]> {
-  const items = await LocalItem.findAll({ where: { kind: "movie", missingSince: null }, order: [["createdAt", "DESC"]] });
-  return itemsWithMeta(items);
+  // Same array every time (until cleared): search reuses its index without re-hashing it.
+  return remembered("movie", async () => {
+    const items = await LocalItem.findAll({ where: { kind: "movie", missingSince: null }, order: [["createdAt", "DESC"]] });
+    return itemsWithMeta(items);
+  });
 }
 
 export async function localMoviesPage(page: number, search: string, pageSize = 14) {
@@ -264,8 +284,10 @@ async function seriesWithMeta(items: LocalItem[]) {
 }
 
 export async function localSeriesList(): Promise<any[]> {
-  const items = await LocalItem.findAll({ where: { kind: "series", missingSince: null }, order: [["createdAt", "DESC"]] });
-  return seriesWithMeta(items);
+  return remembered("series", async () => {
+    const items = await LocalItem.findAll({ where: { kind: "series", missingSince: null }, order: [["createdAt", "DESC"]] });
+    return seriesWithMeta(items);
+  });
 }
 
 export async function localSeriesPage(page: number, search: string, pageSize = 14) {

@@ -34,7 +34,15 @@ export function setCached<T>(key: string, value: T): void {
 // data immediately instead of waiting out the TTL — the TTL above just
 // remains as a safety net for cases where invalidation is missed (e.g. a
 // crash mid-enrichment).
+const clearListeners: (() => void)[] = [];
+
+/** Runs `fn` whenever Discover's caches are cleared (other in-memory views of the catalog). */
+export function onDiscoverCacheClear(fn: () => void): void {
+  clearListeners.push(fn);
+}
+
 export function clearDiscoverCache(): void {
   cache.flushAll();
   invalidateDiscoverIndex();
+  for (const fn of clearListeners) fn();
 }
