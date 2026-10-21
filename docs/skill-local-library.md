@@ -72,6 +72,26 @@ Discover cards for a local representative open with category `local`, which take
 
 ExoPlayer plays MKV/MP4 directly. Audio the TV cannot decode (DTS, TrueHD) falls back to FFmpeg (`org.jellyfin.media3:media3-ffmpeg-decoder`, extension renderer mode ON: the TV's decoders and passthrough first). The player's Up panel lists audio tracks when there are several.
 
-## Not yet (later phases)
+## Progress across versions
 
-Per-title progress across versions (resume an IPTV start from the NAS copy); TMDB artwork cached on the NAS, custom uploads and NFO writing (folder artwork is already used); the browser fallback for audio the browser cannot play (MKV with AC3/DTS).
+`src/content/progressMirror.ts`: `GET /api/user/progress` adds mirror rows so every version of a title (IPTV copies, the NAS file, its `LF` file ids) resumes at the newest position in its group. Mirrors keep the original meta ids, so both apps still show the title once in Continue Watching. Movies mirror fully; a series mirrors its series-level row only (episode ids differ between versions). Nothing is written.
+
+## Offline mode
+
+`src/services/portalHealth.ts` checks the portal every minute (two failures = offline); `GET /api/v2/health/iptv`. Both apps poll it, show "IPTV is offline · your library still plays" and dim IPTV cards; local titles stay bright.
+
+## Image cache
+
+`src/content/imageCache.ts`: every TMDB image URL that goes out becomes `/api/images/tmdb/<size>/<file>`; the server downloads it once into the image cache folder (setting, default `<data>/image-cache`) and serves it with a one-year cache header. Cap setting `imageCacheGb` (default 20, 0 = off); nightly job "Trim the image cache" removes least recently used images.
+
+## Custom images
+
+`src/content/customArt.ts`, `src/routes/admin/titleImages.ts`: an admin picks a TMDB alternative or uploads a poster, backdrop or logo (webui detail page, "Edit images"). Stored in `<data>/custom-art/<contentId>/`, applied to every version of the title, locked in `content_meta.artLocked` so enrichment, folder art, NFO logos and the backdrop backfill never replace it; reset brings the automatic image back. Served by the signed local-art route (`c<contentId>` ids).
+
+## Browser fallback
+
+`src/content/library/remux.ts`: the webui sends `client=web` to `movie-link`; an H.264 file whose audio a browser cannot play (AC3, DTS, TrueHD...) or in an AVI-like container comes back as `/api/local/hls/index.m3u8`. Segments of about 6 s start on the file's own keyframes (read once with ffprobe, stored in `media_files.keyframes`); each segment copies the video and converts only the audio to AAC stereo (measured: 0.17 s per 6 s segment). HEVC files are not remuxed (copying does not help a browser). Setting `browserFallback` (default on). The TV always plays the original file.
+
+## Not built
+
+Writing NFO files: the owner's library already has Jellyfin's NFOs, and nightly database backups cover recovery, so PortalCast reads NFOs but does not write them.

@@ -1,3 +1,4 @@
+import { keyframesFor, segmentsFor, playlistFor, segmentProcess } from "@/content/library/remux";
 import { customArtPath } from "@/content/customArt";
 import { validCacheRequest, cachedImagePath } from "@/content/imageCache";
 import { LocalItem } from "@/models/LocalItem";
@@ -55,6 +56,41 @@ function parseRange(header: string | undefined, size: number): { start: number; 
 const IMAGE_MIME: Record<string, string> = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp" };
 
 export const localStreamRoutes: ServerRoute[] = [
+  {
+    // Browser fallback playlist (content/library/remux.ts): keyframe-aligned segments.
+    method: "GET",
+    path: "/api/local/hls/index.m3u8",
+    handler: async (request, h) => {
+      const entry = streamTokenFromRequest(request);
+      const target = entry ? await fileForToken(entry.resource) : null;
+      if (!entry || !target) return h.response("Invalid or expired link").code(403);
+      // The first time, the keyframes are read (can take a while on a big file): wait up to
+      // 25 s, then ask the player to retry (it does, for a few minutes).
+      const kf = await Promise.race([keyframesFor(target.file, target.abs), new Promise<"wait">((r) => setTimeout(() => r("wait"), 25_000))]);
+      if (kf === "wait") return h.response("Preparing").code(503).header("Retry-After", "5");
+      if (!kf) return h.response("This file cannot be prepared for the browser").code(415);
+      const segs = segmentsFor(kf, target.file.duration ?? kf[kf.length - 1] + 6);
+      return h.response(playlistFor(segs, String((request.query as any).t))).type("application/vnd.apple.mpegurl").header("Cache-Control", "no-store");
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/local/hls/seg.ts",
+    handler: async (request, h) => {
+      const entry = streamTokenFromRequest(request);
+      const target = entry ? await fileForToken(entry.resource) : null;
+      if (!entry || !target) return h.response("Invalid or expired link").code(403);
+      const kf = await keyframesFor(target.file, target.abs);
+      const segs = kf ? segmentsFor(kf, target.file.duration ?? kf[kf.length - 1] + 6) : [];
+      const seg = segs[Number((request.query as any).i)];
+      if (!seg) return h.response("No such segment").code(404);
+      streamTracker.touch("vod", clientIp(request), `local:${target.file.id}`, entry.userLabel, { kind: "movie", label: entry.label, category: entry.category });
+      const proc = segmentProcess(target.file, target.abs, seg);
+      request.raw.req.on("close", () => { if (!proc.killed) proc.kill("SIGKILL"); });
+      proc.stderr?.on("data", () => {});
+      return h.response(proc.stdout!).type("video/mp2t").header("Cache-Control", "private, max-age=3600");
+    },
+  },
   {
     // TMDB artwork through our own disk cache (content/imageCache.ts). Public like every
     // image route; only TMDB's own size names and file names are accepted.

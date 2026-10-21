@@ -8,6 +8,7 @@
 // Items have the same shape as IPTV list items, so neither app needs to know where a title
 // comes from. No path ever leaves the server: clients see ids and short-lived tokens.
 
+import { needsBrowserFallback } from "@/content/library/remux";
 import { artMarker } from "@/content/library/art";
 import { Op } from "sequelize";
 import { LocalItem } from "@/models/LocalItem";
@@ -143,8 +144,11 @@ export async function localTitleFiles(titleId: string) {
   return { success: true, page: 1, pageAtaTime: 1, total_items: data.length, actual_length: 14, total_loaded: data.length, data, errors: false, isPortal: false };
 }
 
-/** A play link for a local file: a stream token naming the file id, never its path. */
-export async function localPlayLink(fileId: string, userLabel: string, title?: string): Promise<string | null> {
+/**
+ * A play link for a local file: a stream token naming the file id, never its path. The webui
+ * (`client=web`) gets the HLS browser fallback when the file needs it (content/library/remux.ts).
+ */
+export async function localPlayLink(fileId: string, userLabel: string, title?: string, client?: string): Promise<string | null> {
   const id = Number(String(fileId).slice(2));
   const file = await MediaFile.findByPk(id);
   if (!file || file.missingSince) return null;
@@ -157,6 +161,7 @@ export async function localPlayLink(fileId: string, userLabel: string, title?: s
     itemId: episode ? `LF${file.id}` : `L${file.itemId}`,
     hideable: false,
   });
+  if (client === "web" && needsBrowserFallback(file)) return `/api/local/hls/index.m3u8?t=${token}&m3u8=1`;
   return `/api/local/stream?t=${token}`;
 }
 

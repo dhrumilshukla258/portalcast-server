@@ -107,6 +107,10 @@ export class MediaFile extends Model {
   @Column(DataType.DATE)
   declare probedAt: Date | null;
 
+  /** Keyframe times (s), read once for the browser fallback (content/library/remux.ts). */
+  @Column(DataType.JSON)
+  declare keyframes: number[] | null;
+
   @Column(DataType.TEXT)
   declare probeError: string | null;
 

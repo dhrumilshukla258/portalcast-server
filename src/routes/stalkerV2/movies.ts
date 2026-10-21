@@ -464,7 +464,7 @@ export const movieRoutes: ServerRoute[] = [
         if (isLocalFileId(id)) {
           const userLabel = streamUserLabel(request);
           if (!userLabel) return h.response({ error: "Unauthorized" }).code(401);
-          const link = await localPlayLink(String(id), userLabel, (request.query as any).title);
+          const link = await localPlayLink(String(id), userLabel, (request.query as any).title, (request.query as any).client);
           if (!link) return h.response({ error: "This file is no longer in the library" }).code(404);
           return { js: { cmd: link } };
         }

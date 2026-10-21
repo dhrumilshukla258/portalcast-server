@@ -92,6 +92,9 @@ const DEFS: SettingDef[] = [
   { key: "imageCacheGb", type: "number", default: 20, min: 0, max: 2000, group: "Images", label: "TMDB image cache size (GB)", help: "Artwork is downloaded from TMDB once and served from this server. 0 turns the cache off (apps load TMDB directly).", apply: "live" },
   { key: "imageCacheFolder", type: "string", default: "", group: "Images", label: "Image cache folder", help: "Empty: image-cache inside the data folder. A NAS folder mounted into the container is a good choice.", apply: "live" },
 
+  // Playback
+  { key: "browserFallback", type: "boolean", default: true, group: "Playback", label: "Browser fallback for local files", help: "Local files the browser cannot play (AC3/DTS/TrueHD audio, AVI) reach the webui as HLS: video copied untouched, audio converted to AAC. The TV always gets the original file.", apply: "live" },
+
   // Backups
   { key: "backupFolder", type: "string", default: "", group: "Backups", label: "Backup folder", help: "Where the nightly database copy goes. Empty: the backups folder inside the data folder. A NAS folder mounted into the container is a good choice. The key file is never copied here.", apply: "live" },
   { key: "backupKeep", type: "number", default: 7, min: 0, max: 365, group: "Backups", label: "Nightly backups to keep", help: "0 turns backups off.", apply: "live" },
