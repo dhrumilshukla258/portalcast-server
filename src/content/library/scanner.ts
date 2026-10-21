@@ -237,19 +237,13 @@ async function walkSeries(root: string): Promise<FoundTitle[]> {
   return shows;
 }
 
-let waitLogged = 0;
-async function waitWhileWatching(): Promise<void> {
-  // Probing reads the disks: let someone's film go first (checked between files), for at
-  // most 2 minutes per file, so a scan still finishes while someone watches all evening.
-  let waited = 0;
-  while (streamTracker.count() > 0 && waited < 2 * 60_000) {
-    if (Date.now() - waitLogged > 10 * 60_000) {
-      waitLogged = Date.now();
-      logger.info("[library] someone is watching: the scan probes files more slowly until playback stops");
-    }
-    await new Promise((r) => setTimeout(r, 15_000));
-    waited += 15_000;
-  }
+/**
+ * The scan never stops for viewers. A probe reads only a file's headers (a few MB), so
+ * while someone streams the scan keeps going with a short gap between probes, leaving
+ * the disks to the film in between.
+ */
+async function paceWhileStreaming(): Promise<void> {
+  if (streamTracker.count() > 0) await new Promise((r) => setTimeout(r, 1000));
 }
 
 /**
@@ -445,7 +439,7 @@ async function scanOne(lib: Library): Promise<ScanSummary> {
           if (f.versionLabel) row.versionLabel = f.versionLabel;
         }
         if (changed || !row.probedAt) {
-          await waitWhileWatching();
+          await paceWhileStreaming();
           try {
             const p = await probeFile(path.join(root, f.relPath));
             Object.assign(row, { ...p, probedAt: new Date(), probeError: null });
