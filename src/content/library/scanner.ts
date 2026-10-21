@@ -351,6 +351,24 @@ export async function scanLibraries(onlyId?: number): Promise<string> {
   }
 }
 
+/**
+ * Retries a write that met "database is locked": the metadata backfills write all the time,
+ * and SQLite has one writer, so a big write (like re-picking every title's card) can find
+ * the lock taken for longer than the 5 s wait. A few spaced retries get through.
+ */
+async function withBusyRetry<T>(what: string, fn: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (e: any) {
+      const busy = /SQLITE_BUSY|database is locked/i.test(String(e?.message ?? e));
+      if (!busy || attempt >= 6) throw e;
+      logger.warn(`[library] ${what}: database busy, retrying (${attempt})`);
+      await new Promise((r) => setTimeout(r, attempt * 3000));
+    }
+  }
+}
+
 async function scanNow(onlyId?: number): Promise<string> {
   {
     const libs = await Library.findAll({ where: onlyId ? { id: onlyId } : { enabled: true } });
@@ -363,12 +381,12 @@ async function scanNow(onlyId?: number): Promise<string> {
         (s.skippedFolders.length ? `; skipped (not reachable): ${s.skippedFolders.join(", ")}` : "");
       lib.lastScanAt = new Date();
       lib.lastScanSummary = line;
-      await lib.save();
+      await withBusyRetry("saving the scan result", () => lib.save());
       lines.push(line);
       logger.info(`[library] ${line}`);
     }
     if (libs.length) {
-      await recomputeRepresentatives();
+      await withBusyRetry("updating Discover", () => recomputeRepresentatives());
       invalidateDiscoverIndex();
       clearDiscoverCache();
     }
