@@ -1,5 +1,5 @@
 // Custom artwork chosen in the admin page ("Edit images" on a detail page): a TMDB alternative
-// or an upload, per kind (poster, backdrop, logo). Stored in <data folder>/custom-art/<id>/,
+// or an upload, per kind (poster, backdrop, logo). Stored in <custom images folder>/<id>/,
 // applied to every version of the title (its group), and locked: TMDB refreshes, folder art
 // and NFO files never replace it (content_meta.artLocked). "Reset" removes the lock and
 // brings the automatic image back.
@@ -13,6 +13,7 @@ import axios from "axios";
 import { Op, QueryTypes } from "sequelize";
 import { ContentMeta } from "@/models/ContentMeta";
 import { dataDir } from "@/infra/paths";
+import { setting } from "@/config/settings";
 import { artMarker } from "@/content/library/art";
 import { sniffRasterImage } from "@/infra/sniffImage";
 import { fetchMetaByTmdbId } from "@/content/tmdb";
@@ -21,10 +22,14 @@ import { clearDiscoverCache } from "@/services/discoverCache";
 export type CustomKind = "poster" | "backdrop" | "logo";
 export interface ArtLock { poster?: string; backdrop?: string; logo?: string; v?: number }
 
-export const CUSTOM_DIR = path.join(dataDir, "custom-art");
+/** Setting customArtFolder (a NAS folder mounted into the container), else <data>/custom-art. */
+export function customArtFolder(): string {
+  const configured = String(setting<string>("customArtFolder") || "").trim();
+  return configured ? path.resolve(configured) : path.join(dataDir, "custom-art");
+}
 
 export function customFile(contentId: string, name: string): string {
-  return path.join(CUSTOM_DIR, contentId.replace(/[^\w-]/g, ""), name);
+  return path.join(customArtFolder(), contentId.replace(/[^\w-]/g, ""), name);
 }
 
 /** The lock of a row, whatever shape the JSON column came back in. */

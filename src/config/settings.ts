@@ -91,6 +91,7 @@ const DEFS: SettingDef[] = [
   // Images
   { key: "imageCacheGb", type: "number", default: 20, min: 0, max: 2000, group: "Images", label: "TMDB image cache size (GB)", help: "Artwork is downloaded from TMDB once and served from this server. 0 turns the cache off (apps load TMDB directly).", apply: "live" },
   { key: "imageCacheFolder", type: "string", default: "", group: "Images", label: "Image cache folder", help: "Empty: image-cache inside the data folder. A NAS folder mounted into the container is a good choice.", apply: "live" },
+  { key: "customArtFolder", type: "string", default: "", group: "Images", label: "Custom images folder", help: "Posters, backdrops and logos chosen or uploaded in \"Edit images\". Empty: custom-art inside the data folder. Move the existing files there before changing it.", apply: "live" },
 
   // Playback
   { key: "browserFallback", type: "boolean", default: true, group: "Playback", label: "Browser fallback for local files", help: "Local files the browser cannot play (AC3/DTS/TrueHD audio, AVI) reach the webui as HLS: video copied untouched, audio converted to AAC. The TV always gets the original file.", apply: "live" },

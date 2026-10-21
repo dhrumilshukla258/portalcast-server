@@ -86,7 +86,7 @@ ExoPlayer plays MKV/MP4 directly. Audio the TV cannot decode (DTS, TrueHD) falls
 
 ## Custom images
 
-`src/content/customArt.ts`, `src/routes/admin/titleImages.ts`: an admin picks a TMDB alternative or uploads a poster, backdrop or logo (webui detail page, "Edit images"). Stored in `<data>/custom-art/<contentId>/`, applied to every version of the title, locked in `content_meta.artLocked` so enrichment, folder art, NFO logos and the backdrop backfill never replace it; reset brings the automatic image back. Served by the signed local-art route (`c<contentId>` ids).
+`src/content/customArt.ts`, `src/routes/admin/titleImages.ts`: an admin picks a TMDB alternative or uploads a poster, backdrop or logo (webui detail page, "Edit images"). Stored in the custom images folder (setting `customArtFolder`, default `<data>/custom-art`) under `<contentId>/`, applied to every version of the title, locked in `content_meta.artLocked` so enrichment, folder art, NFO logos and the backdrop backfill never replace it; reset brings the automatic image back. Served by the signed local-art route (`c<contentId>` ids).
 
 ## Browser fallback
 
