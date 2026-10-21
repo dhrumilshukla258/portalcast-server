@@ -54,44 +54,46 @@ interface FoundFile {
 }
 interface FoundTitle { relPath: string; name: string; year: string | null; tmdbId: number | null; imdbId: string | null; files: FoundFile[]; nfo?: NfoData | null }
 
-function readDir(dir: string): fs.Dirent[] {
+// Non-blocking file access throughout (speed plan): the libraries are on the NAS, and a
+// blocking call while a disk wakes froze every other request for the length of the scan.
+async function readDir(dir: string): Promise<fs.Dirent[]> {
   try {
-    return fs.readdirSync(dir, { withFileTypes: true });
+    return await fs.promises.readdir(dir, { withFileTypes: true });
   } catch {
     return [];
   }
 }
 
-function statOf(p: string): fs.Stats | null {
+async function statOf(p: string): Promise<fs.Stats | null> {
   try {
-    return fs.statSync(p);
+    return await fs.promises.stat(p);
   } catch {
     return null;
   }
 }
 
 /** A Kodi/Jellyfin NFO file, fully parsed (content/library/nfo.ts), or null. */
-function readNfo(p: string): NfoData | null {
+async function readNfo(p: string): Promise<NfoData | null> {
   try {
-    return parseNfoFull(fs.readFileSync(p, "utf-8").slice(0, 512 * 1024));
+    return parseNfoFull((await fs.promises.readFile(p, "utf-8")).slice(0, 512 * 1024));
   } catch {
     return null;
   }
 }
 
 /** Jellyfin keeps an episode's thumbnail in metadata/<file>.jpg; Kodi beside it as <file>-thumb.jpg. */
-function episodeThumb(dir: string, base: string, relDir: string): string | null {
+async function episodeThumb(dir: string, base: string, relDir: string): Promise<string | null> {
   for (const rel of [path.join("metadata", base + ".jpg"), base + "-thumb.jpg", base + ".jpg", path.join("metadata", base + ".png")]) {
-    if (statOf(path.join(dir, rel))?.isFile()) return path.join(relDir, rel);
+    if ((await statOf(path.join(dir, rel)))?.isFile()) return path.join(relDir, rel);
   }
   return null;
 }
 
 /** Every title under one library folder. */
-function walk(root: string): FoundTitle[] {
+async function walk(root: string): Promise<FoundTitle[]> {
   const titles: FoundTitle[] = [];
-  const visit = (dir: string, depth: number) => {
-    const entries = readDir(dir);
+  const visit = async (dir: string, depth: number): Promise<void> => {
+    const entries = await readDir(dir);
     const videos = entries.filter((e) => e.isFile() && isVideoFile(e.name) && !isExtraFile(e.name) && !e.name.startsWith("."));
     const subs = entries.filter((e) => e.isFile() && SUBTITLE_EXTS.has(path.extname(e.name).toLowerCase()));
     const relDir = path.relative(root, dir);
@@ -109,8 +111,8 @@ function walk(root: string): FoundTitle[] {
         })
         .filter((s): s is SidecarSubtitle => s !== null);
 
-    const fileOf = (e: fs.Dirent, label: string | null): FoundFile | null => {
-      const st = statOf(path.join(dir, e.name));
+    const fileOf = async (e: fs.Dirent, label: string | null): Promise<FoundFile | null> => {
+      const st = await statOf(path.join(dir, e.name));
       if (!st) return null;
       return { relPath: path.join(relDir, e.name), size: st.size, mtimeMs: st.mtimeMs, versionLabel: label, sidecars: sidecarsFor(e.name) };
     };
@@ -118,9 +120,9 @@ function walk(root: string): FoundTitle[] {
     if (videos.length > 0 && depth > 0) {
       // A movie folder: every video whose name starts with the folder's name is a version.
       const asVersions = videos.filter((v) => versionLabelFor(fileBase(v.name), folderBase) !== null || fileBase(v.name).toLowerCase() === folderBase.toLowerCase());
-      const nfo = readNfo(path.join(dir, "movie.nfo")) ?? (videos.length === 1 ? readNfo(path.join(dir, fileBase(videos[0].name) + ".nfo")) : null);
+      const nfo = (await readNfo(path.join(dir, "movie.nfo"))) ?? (videos.length === 1 ? await readNfo(path.join(dir, fileBase(videos[0].name) + ".nfo")) : null);
       if (asVersions.length === videos.length || videos.length === 1) {
-        const files = videos.map((v) => fileOf(v, videos.length === 1 ? null : versionLabelFor(fileBase(v.name), folderBase))).filter((f): f is FoundFile => !!f);
+        const files = (await Promise.all(videos.map((v) => fileOf(v, videos.length === 1 ? null : versionLabelFor(fileBase(v.name), folderBase))))).filter((f): f is FoundFile => !!f);
         const parsed = videos.length === 1 && !folderParsed.year && !folderParsed.tmdbId ? parseTitle(fileBase(videos[0].name)) : folderParsed;
         titles.push({
           relPath: relDir,
@@ -133,20 +135,20 @@ function walk(root: string): FoundTitle[] {
         });
       } else {
         for (const v of videos) {
-          const f = fileOf(v, null);
+          const f = await fileOf(v, null);
           if (!f) continue;
           const p = parseTitle(fileBase(v.name));
-          const own = readNfo(path.join(dir, fileBase(v.name) + ".nfo"));
+          const own = await readNfo(path.join(dir, fileBase(v.name) + ".nfo"));
           titles.push({ relPath: f.relPath, name: own?.title || p.name, year: own?.year || p.year, tmdbId: own?.tmdbId ?? p.tmdbId, imdbId: own?.imdbId ?? p.imdbId, files: [f], nfo: own });
         }
       }
     } else if (videos.length > 0) {
       // Loose files at the top of the library folder: one title each.
       for (const v of videos) {
-        const f = fileOf(v, null);
+        const f = await fileOf(v, null);
         if (!f) continue;
         const p = parseTitle(fileBase(v.name));
-        const own = readNfo(path.join(dir, fileBase(v.name) + ".nfo"));
+        const own = await readNfo(path.join(dir, fileBase(v.name) + ".nfo"));
         titles.push({ relPath: f.relPath, name: own?.title || p.name, year: own?.year || p.year, tmdbId: own?.tmdbId ?? p.tmdbId, imdbId: own?.imdbId ?? p.imdbId, files: [f], nfo: own });
       }
     }
@@ -155,34 +157,35 @@ function walk(root: string): FoundTitle[] {
     for (const e of entries) {
       // Jellyfin's trickplay thumbnails ("<video>.trickplay") and extras folders hold no titles.
       if (!e.isDirectory() || e.name.startsWith(".") || e.name.toLowerCase().endsWith(".trickplay") || EXTRA_DIRS.has(e.name.toLowerCase())) continue;
-      visit(path.join(dir, e.name), depth + 1);
+      await visit(path.join(dir, e.name), depth + 1);
     }
   };
-  visit(root, 0);
+  await visit(root, 0);
   return titles;
 }
 
 /** Every show under one series library folder: each top-level folder is a show. */
-function walkSeries(root: string): FoundTitle[] {
+async function walkSeries(root: string): Promise<FoundTitle[]> {
   const shows: FoundTitle[] = [];
-  for (const showDir of readDir(root)) {
+  for (const showDir of await readDir(root)) {
     if (!showDir.isDirectory() || showDir.name.startsWith(".") || EXTRA_DIRS.has(showDir.name.toLowerCase())) continue;
     const showPath = path.join(root, showDir.name);
     const parsed = parseTitle(showDir.name);
-    const nfo = readNfo(path.join(showPath, "tvshow.nfo"));
+    const nfo = await readNfo(path.join(showPath, "tvshow.nfo"));
     const files: FoundFile[] = [];
-    const visit = (dir: string, depth: number, seasonHint: number | null) => {
-      const entries = readDir(dir);
+    const visit = async (dir: string, depth: number, seasonHint: number | null): Promise<void> => {
+      const entries = await readDir(dir);
       const subs = entries.filter((e) => e.isFile() && SUBTITLE_EXTS.has(path.extname(e.name).toLowerCase()));
       for (const e of entries) {
         if (!e.isFile() || !isVideoFile(e.name) || isExtraFile(e.name) || e.name.startsWith(".")) continue;
         const base = path.basename(e.name, path.extname(e.name));
         const ep = parseEpisode(base, seasonHint);
         if (!ep) continue; // not an episode (no SxxEyy and no season folder): left out
-        const st = statOf(path.join(dir, e.name));
+        const st = await statOf(path.join(dir, e.name));
         if (!st) continue;
         const relDir = path.relative(root, dir);
-        const epNfo = readNfo(path.join(dir, base + ".nfo"));
+        const epNfo = await readNfo(path.join(dir, base + ".nfo"));
+        const thumb = await episodeThumb(dir, base, relDir);
         files.push({
           relPath: path.join(relDir, e.name), size: st.size, mtimeMs: st.mtimeMs, versionLabel: null,
           sidecars: subs
@@ -195,7 +198,7 @@ function walkSeries(root: string): FoundTitle[] {
           // The episode's NFO title beats what the file name says (often nothing useful).
           episodeTitle: epNfo?.title || ep.title,
           nfo: epNfo ? { title: epNfo.title, plot: epNfo.plot, rating: epNfo.rating, premiered: epNfo.premiered, runtime: epNfo.runtime, directors: epNfo.directors } : null,
-          thumb: episodeThumb(dir, base, relDir),
+          thumb,
         });
       }
       if (depth >= 4) return;
@@ -204,10 +207,10 @@ function walkSeries(root: string): FoundTitle[] {
         if (!e.isDirectory() || e.name.startsWith(".") || e.name.toLowerCase() === "metadata" || e.name.toLowerCase().endsWith(".trickplay")) continue;
         const season = seasonFromFolder(e.name);
         if (season === null && EXTRA_DIRS.has(e.name.toLowerCase())) continue;
-        visit(path.join(dir, e.name), depth + 1, season ?? seasonHint);
+        await visit(path.join(dir, e.name), depth + 1, season ?? seasonHint);
       }
     };
-    visit(showPath, 0, null);
+    await visit(showPath, 0, null);
     if (files.length === 0) continue;
     shows.push({
       relPath: showDir.name,
@@ -244,8 +247,8 @@ async function waitWhileWatching(): Promise<void> {
  */
 async function applyFolderArt(item: LocalItem): Promise<void> {
   const dir = path.join(item.root, item.relPath);
-  const st = statOf(dir);
-  const art = st?.isDirectory() ? findArt(dir) : null;
+  const st = await statOf(dir);
+  const art = st?.isDirectory() ? await findArt(dir) : null;
   if (JSON.stringify(art ?? null) !== JSON.stringify(item.art ?? null)) {
     item.art = art;
     await item.save();
@@ -388,8 +391,8 @@ async function scanOne(lib: Library): Promise<ScanSummary> {
 
   for (const root of lib.folders || []) {
     const known = await MediaFile.count({ where: { libraryId: lib.id, root } });
-    const st = statOf(root);
-    const found = st?.isDirectory() ? (kind === "series" ? walkSeries(root) : walk(root)) : [];
+    const st = await statOf(root);
+    const found = st?.isDirectory() ? (kind === "series" ? await walkSeries(root) : await walk(root)) : [];
     logger.info(`[library] ${lib.name}: ${found.length} ${kind === "series" ? "shows" : "titles"} found in ${root}, ${found.reduce((n, t) => n + t.files.length, 0)} files`);
     if (found.length === 0 && known > 0) {
       // Folder gone or empty although it had files: a disk is probably offline.

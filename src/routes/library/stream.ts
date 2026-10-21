@@ -131,7 +131,7 @@ export const localStreamRoutes: ServerRoute[] = [
       if (!file) return h.response("Not found").code(404);
       const name = file;
       const type = IMAGE_MIME[path.extname(name).toLowerCase()];
-      if (!type || !fs.existsSync(file)) return h.response("Not found").code(404);
+      if (!type || !(await fs.promises.access(file).then(() => true, () => false))) return h.response("Not found").code(404);
       // The version in the URL changes when the file does, so devices may keep it for a year.
       return h.response(fs.createReadStream(file)).type(type).header("Cache-Control", "public, max-age=31536000, immutable");
     },
@@ -148,7 +148,7 @@ export const localStreamRoutes: ServerRoute[] = [
       }
       let st: fs.Stats;
       try {
-        st = fs.statSync(target.abs);
+        st = await fs.promises.stat(target.abs);
       } catch {
         return h.response({ error: "The file is not reachable (is the disk online?)" }).code(404);
       }
@@ -208,7 +208,7 @@ export const localStreamRoutes: ServerRoute[] = [
         return h.response(proc.stdout).type("text/vtt").header("Access-Control-Allow-Origin", "*");
       }
       try {
-        const raw = fs.readFileSync(subPath, "utf-8");
+        const raw = await fs.promises.readFile(subPath, "utf-8");
         const vtt = toVtt(raw);
         if (!vtt) return h.response("Unsupported subtitle file").code(415);
         return h.response(vtt).type("text/vtt").header("Access-Control-Allow-Origin", "*");

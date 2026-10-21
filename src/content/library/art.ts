@@ -28,10 +28,10 @@ const PREFIX = "local-art:";
 const KEY = crypto.createHmac("sha256", serverSecret).update("local-art").digest();
 
 /** The artwork files in a title folder (names only, relative to that folder). */
-export function findArt(dir: string): LocalArt | null {
+export async function findArt(dir: string): Promise<LocalArt | null> {
   let names: string[];
   try {
-    names = fs.readdirSync(dir);
+    names = await fs.promises.readdir(dir); // non-blocking: the folder is on the NAS
   } catch {
     return null;
   }
@@ -43,7 +43,7 @@ export function findArt(dir: string): LocalArt | null {
       const hit = EXTS.map((e) => lower.get(base + e)).find(Boolean);
       if (hit) {
         art[kind] = hit;
-        try { v = Math.max(v, Math.floor(fs.statSync(path.join(dir, hit)).mtimeMs / 1000)); } catch { /* gone */ }
+        try { v = Math.max(v, Math.floor((await fs.promises.stat(path.join(dir, hit))).mtimeMs / 1000)); } catch { /* gone */ }
         break;
       }
     }

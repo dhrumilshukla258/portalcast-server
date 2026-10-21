@@ -54,10 +54,11 @@ export async function setCustomArt(contentId: string, kind: CustomKind, bytes: B
   if (!type) throw new Error("Only PNG, JPEG, GIF, WebP or AVIF images are allowed");
   const name = `${kind}.${type}`;
   const file = customFile(contentId, name);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  for (const old of fs.readdirSync(path.dirname(file))) if (old.startsWith(`${kind}.`) && old !== name) fs.rmSync(path.join(path.dirname(file), old), { force: true });
-  fs.writeFileSync(`${file}.part`, bytes);
-  fs.renameSync(`${file}.part`, file);
+  // Non-blocking: the folder can be on the NAS.
+  await fs.promises.mkdir(path.dirname(file), { recursive: true });
+  for (const old of await fs.promises.readdir(path.dirname(file))) if (old.startsWith(`${kind}.`) && old !== name) await fs.promises.rm(path.join(path.dirname(file), old), { force: true });
+  await fs.promises.writeFile(`${file}.part`, bytes);
+  await fs.promises.rename(`${file}.part`, file);
 
   const v = Math.floor(Date.now() / 1000);
   const marker = artMarker(`c${contentId}`, kind, v);
@@ -105,8 +106,9 @@ export async function resetCustomArt(contentId: string, kind: CustomKind): Promi
     if (kind === "logo") patch.logo = meta?.details?.logo ?? null;
     await ContentMeta.update(patch, { where: { id: row.id } });
   }
-  for (const f of fs.existsSync(path.dirname(customFile(contentId, "x"))) ? fs.readdirSync(path.dirname(customFile(contentId, "x"))) : []) {
-    if (f.startsWith(`${kind}.`)) fs.rmSync(customFile(contentId, f), { force: true });
+  const dir = path.dirname(customFile(contentId, "x"));
+  for (const f of await fs.promises.readdir(dir).catch(() => [] as string[])) {
+    if (f.startsWith(`${kind}.`)) await fs.promises.rm(customFile(contentId, f), { force: true });
   }
   clearDiscoverCache();
 }
@@ -118,5 +120,5 @@ export async function customArtPath(contentId: string, kind: string): Promise<st
   if (!entry) return null;
   if (String(entry).startsWith("@")) return customArtPath(String(entry).slice(1), kind);
   const file = customFile(contentId, String(entry));
-  return fs.existsSync(file) ? file : null;
+  return (await fs.promises.access(file).then(() => true, () => false)) ? file : null;
 }
