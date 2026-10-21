@@ -1,3 +1,4 @@
+import { startPortalHealth, iptvHealth } from "./services/portalHealth";
 import { libraryAdminRoutes } from "./routes/library/admin";
 import { localStreamRoutes } from "./routes/library/stream";
 import { scanLibraries } from "./content/library/scanner";
@@ -129,6 +130,8 @@ const init = async () => {
   server.route(userManagementRoutes);
   server.route(discoverRoutes);
   server.route(discoverDetailsRoute);
+  // Is the IPTV portal reachable (services/portalHealth.ts)? Signed-in clients only.
+  server.route({ method: "GET", path: "/api/v2/health/iptv", handler: () => iptvHealth() });
 
   // Rate limiter for unauthenticated public endpoints (stream/media routes)
   // Limits are settings (Admin → Settings), read on every request.
@@ -418,6 +421,7 @@ const init = async () => {
 
   await server.start();
   startJobs();
+  startPortalHealth();
 
   const { backgroundJobService } =
     await import("./services/BackgroundJobService");

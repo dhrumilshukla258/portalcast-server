@@ -1,3 +1,4 @@
+import { withProgressMirrors } from "@/content/progressMirror";
 import { uploadsDir } from "@/infra/paths";
 import { setting } from "@/config/settings";
 import { sealCmd } from "@/infra/sealedCmd";
@@ -147,7 +148,7 @@ export const userRoutes: ServerRoute[] = [
         // silently accepts either shape at compile time, so every `entry.*`
         // field reads as undefined at runtime without this — normalize here.
         const origin = getPublicOrigin(request);
-        return progressRecords.map((r) => {
+        const plainRows = progressRecords.map((r) => {
           const plain = r.toJSON() as any;
           if (typeof plain.meta === "string") {
             try { plain.meta = JSON.parse(plain.meta); } catch { /* leave as-is */ }
@@ -164,6 +165,8 @@ export const userRoutes: ServerRoute[] = [
           }
           return plain;
         });
+        // Every version of a title resumes at the newest position (content/progressMirror.ts).
+        return await withProgressMirrors(plainRows);
       } catch (error) {
         logger.error({ err: error }, "Error fetching user progress");
         return h.response({ error: "Internal Server Error" }).code(500);
