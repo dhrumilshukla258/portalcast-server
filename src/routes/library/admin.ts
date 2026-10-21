@@ -217,7 +217,14 @@ export const libraryAdminRoutes: ServerRoute[] = [
       const raw = (request.payload as any)?.tmdbId;
       const tmdbId = raw === null || raw === undefined || raw === "" ? null : Number(raw);
       if (tmdbId !== null && (!Number.isInteger(tmdbId) || tmdbId <= 0)) return h.response({ error: "Bad TMDB id" }).code(400);
-      const item = await fixMatch(Number(request.params.itemId), tmdbId);
+      let item;
+      try {
+        item = await fixMatch(Number(request.params.itemId), tmdbId);
+      } catch (e: any) {
+        logger.error(`[library] fix match of title ${request.params.itemId} failed: ${e?.message ?? e}`);
+        const busy = /SQLITE_BUSY|database is locked/i.test(String(e?.message ?? e));
+        return h.response({ error: busy ? "The database is busy (metadata is being filled in). Try again in a minute." : "Could not save the match" }).code(busy ? 503 : 500);
+      }
       if (!item) return h.response({ error: "No such title" }).code(404);
       recordFromRequest(request, "setting_changed", `library title ${item.id} matched to ${tmdbId ?? "auto"}`, (admin as any).userId ?? null);
       return { id: item.id, matchedTmdbId: item.matchedTmdbId, locked: item.tmdbIdLocked != null };

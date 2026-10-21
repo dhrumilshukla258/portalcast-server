@@ -518,13 +518,15 @@ export async function fixMatch(itemId: number, tmdbId: number | null): Promise<L
   if (!item) return null;
   item.tmdbIdLocked = tmdbId;
   const kind = item.kind === "series" ? "series" : "movie";
-  const matched = await enrichLocalTitle({ contentId: localContentId(item.id, kind), type: kind, name: item.name, year: item.year, tmdbId: tmdbId ?? item.tmdbIdHint });
+  const matched = await withBusyRetry(`[library] matching "${item.name}"`, () =>
+    enrichLocalTitle({ contentId: localContentId(item.id, kind), type: kind, name: item.name, year: item.year, tmdbId: tmdbId ?? item.tmdbIdHint }),
+  );
   item.matchedTmdbId = matched ?? null;
   item.matchedAt = new Date();
-  await item.save();
+  await withBusyRetry(`[library] saving "${item.name}"`, () => item.save());
   await applyFolderArt(item);
   await applyNfoMeta(item);
-  await recomputeRepresentatives();
+  await withBusyRetry("[library] updating Discover", () => recomputeRepresentatives());
   invalidateDiscoverIndex();
   clearDiscoverCache();
   return item;
