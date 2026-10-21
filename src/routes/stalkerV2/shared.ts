@@ -300,11 +300,18 @@ async function enrichArtworkFromTmdbRaw(items: any[], kind: "movie" | "series", 
 let activeProfileMemo: { id: number | undefined; at: number } | undefined;
 let activeProfileGen = 0; // a read that started before a write never stores its old answer
 const clearActiveProfileMemo = () => { activeProfileGen++; activeProfileMemo = undefined; };
-for (const hook of ["afterCreate", "afterBulkCreate", "afterUpdate", "afterBulkUpdate", "afterSave", "afterDestroy", "afterBulkDestroy", "afterUpsert"] as const) {
-  ConfigProfile.addHook(hook, `active-profile-memo-${hook}`, clearActiveProfileMemo);
+// Added on the first read, not at import (the model may not be attached to Sequelize yet).
+let activeProfileHooked = false;
+function hookActiveProfile(): void {
+  if (activeProfileHooked) return;
+  activeProfileHooked = true;
+  for (const hook of ["afterCreate", "afterBulkCreate", "afterUpdate", "afterBulkUpdate", "afterSave", "afterDestroy", "afterBulkDestroy", "afterUpsert"] as const) {
+    ConfigProfile.addHook(hook, `active-profile-memo-${hook}`, clearActiveProfileMemo);
+  }
 }
 
 export const getActiveProfileId = async () => {
+  hookActiveProfile();
   if (activeProfileMemo && Date.now() - activeProfileMemo.at < 60_000) return activeProfileMemo.id;
   const gen = activeProfileGen;
   const activeProfile = await ConfigProfile.findOne({ where: { isActive: true }, attributes: ["id"] });

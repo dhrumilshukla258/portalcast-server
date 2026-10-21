@@ -160,10 +160,18 @@ export async function deleteGenre(genre: any, type: GenreType): Promise<void> {
 // Category lists are read on most catalog requests and change only when the portal's
 // categories are refreshed: kept in memory, dropped by any write to the genres table (hooks).
 // `genresGen` counts writes, so a read that started before a write never stores its old rows.
+// Hooks are added on the first read, not at import: this module can load before the models
+// are attached to the Sequelize instance (addHook would throw), and nothing is cached before
+// the first read anyway.
 const genresMemo = new Map<string, any[]>();
 let genresGen = 0;
-for (const hook of ["afterCreate", "afterBulkCreate", "afterUpdate", "afterBulkUpdate", "afterSave", "afterDestroy", "afterBulkDestroy", "afterUpsert"] as const) {
-  Genre.addHook(hook, `genres-memo-${hook}`, () => { genresGen++; genresMemo.clear(); });
+let genresHooked = false;
+function hookGenres(): void {
+  if (genresHooked) return;
+  genresHooked = true;
+  for (const hook of ["afterCreate", "afterBulkCreate", "afterUpdate", "afterBulkUpdate", "afterSave", "afterDestroy", "afterBulkDestroy", "afterUpsert"] as const) {
+    Genre.addHook(hook, `genres-memo-${hook}`, () => { genresGen++; genresMemo.clear(); });
+  }
 }
 
 export async function readGenres(
@@ -171,6 +179,7 @@ export async function readGenres(
   profileId?: number,
 ): Promise<any[]> {
   try {
+    hookGenres();
     const memoKey = `${type}|${profileId ?? "*"}`;
     const memo = genresMemo.get(memoKey);
     // Copies: callers may change what they get.
