@@ -50,6 +50,7 @@ import { socketService } from "./services/SocketService";
 import { initDB, sequelize } from "./db";
 import { loadSettings, setting } from "./config/settings";
 import { settingsRoutes } from "./routes/admin/settings";
+import { overviewRoutes } from "./routes/admin/overview";
 import { migrateToProfiles, loadActiveProfileFromDB, encryptStoredCredentials } from "./config/server";
 import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres } from "./services/xtreamCache";
 import { enrichContentMeta, sweepStaleContent } from "./content/metaEnrichment";
@@ -147,6 +148,7 @@ const init = async () => {
   server.route(mediaInfoRoutes);
   server.route(securityRoutes);
   server.route(settingsRoutes);
+  server.route(overviewRoutes);
   server.route(titleImageRoutes);
   server.route(adminRoutes);
   server.route(authRoutes);
