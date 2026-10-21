@@ -12,6 +12,7 @@
 //      progress is kept). A library folder that is gone or empty while it had files is
 //      skipped instead, so an unplugged disk never empties the library.
 
+import { lockOf } from "@/content/customArt";
 import { parseNfoFull, type NfoData } from "@/content/library/nfo";
 import { ContentPerson } from "@/models/ContentPerson";
 import { findArt, artMarker } from "@/content/library/art";
@@ -250,11 +251,12 @@ async function applyFolderArt(item: LocalItem): Promise<void> {
   }
   if (!art) return;
   const contentId = localContentId(item.id, item.kind);
-  const meta = await ContentMeta.findByPk(contentId, { attributes: ["id", "poster", "backdrop", "backdropHd"] });
+  const meta = await ContentMeta.findByPk(contentId, { attributes: ["id", "poster", "backdrop", "backdropHd", "artLocked"] });
   if (!meta) return;
+  const lock = lockOf(meta); // custom art chosen in the admin page wins over folder art
   const want: Record<string, string> = {};
-  if (art.poster) want.poster = artMarker(item.id, "poster", art.v);
-  if (art.backdrop) want.backdrop = want.backdropHd = artMarker(item.id, "backdrop", art.v);
+  if (art.poster && !lock.poster) want.poster = artMarker(item.id, "poster", art.v);
+  if (art.backdrop && !lock.backdrop) want.backdrop = want.backdropHd = artMarker(item.id, "backdrop", art.v);
   const changed = Object.entries(want).some(([k, v]) => (meta as any)[k] !== v);
   if (changed) await ContentMeta.update(want, { where: { id: contentId } });
 }
@@ -289,7 +291,7 @@ async function applyNfoMeta(item: LocalItem): Promise<void> {
   if (fill("premiered", nfo.premiered)) patch.premiered = nfo.premiered;
   if (fill("writers", nfo.writers.join(", "))) patch.writers = nfo.writers.slice(0, 6).join(", ");
   if (!meta.rating && nfo.rating) patch.rating = nfo.rating;
-  if (item.art?.logo) patch.logo = artMarker(item.id, "logo", item.art.v);
+  if (item.art?.logo && !lockOf(meta).logo) patch.logo = artMarker(item.id, "logo", item.art.v);
   if (Object.keys(patch).length) await ContentMeta.update(patch, { where: { id: contentId } });
 
   // Cast and crew: from the NFO when TMDB gave none, or when the NFO is locked.

@@ -1,3 +1,4 @@
+import { titleImageRoutes } from "./routes/admin/titleImages";
 import { evictImageCache } from "./content/imageCache";
 import { startPortalHealth, iptvHealth } from "./services/portalHealth";
 import { libraryAdminRoutes } from "./routes/library/admin";
@@ -123,6 +124,7 @@ const init = async () => {
   server.route(mediaInfoRoutes);
   server.route(securityRoutes);
   server.route(settingsRoutes);
+  server.route(titleImageRoutes);
   server.route(adminRoutes);
   server.route(authRoutes);
   server.route(setupRoutes);

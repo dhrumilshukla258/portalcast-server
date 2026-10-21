@@ -176,6 +176,10 @@ export class ContentMeta extends Model {
   @Column(DataType.TEXT)
   declare writers: string | null;
 
+  /** Custom artwork chosen in the admin page, per kind (content/customArt.ts): locked against refreshes. */
+  @Column(DataType.JSON)
+  declare artLocked: any | null;
+
   /** When the details backfill got TMDB's answer (even an empty one). */
   @Column(DataType.DATE)
   declare detailsCheckedAt: Date | null;

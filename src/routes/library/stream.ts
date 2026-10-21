@@ -1,3 +1,4 @@
+import { customArtPath } from "@/content/customArt";
 import { validCacheRequest, cachedImagePath } from "@/content/imageCache";
 import { LocalItem } from "@/models/LocalItem";
 import { verifyArt } from "@/content/library/art";
@@ -76,10 +77,13 @@ export const localStreamRoutes: ServerRoute[] = [
     handler: async (request, h) => {
       const q = request.query as any;
       const a = String(q.a || "");
-      if (!/^f?\d+\.(poster|backdrop|logo|still)\.\d+$/.test(a) || !verifyArt(a, q.s)) return h.response("Not found").code(404);
+      if (!/^(f?\d+|c(movie|series)_[\w-]+)\.(poster|backdrop|logo|still)\.\d+$/.test(a) || !verifyArt(a, q.s)) return h.response("Not found").code(404);
       const [id, kind] = a.split(".");
       let file: string | null = null;
-      if (id.startsWith("f")) {
+      if (id.startsWith("c")) {
+        // Custom artwork chosen in the admin page (content/customArt.ts).
+        file = await customArtPath(id.slice(1), kind);
+      } else if (id.startsWith("f")) {
         // An episode still beside its video.
         const mf = await MediaFile.findByPk(Number(id.slice(1)), { attributes: ["id", "root", "thumb"] });
         if (mf?.thumb) file = path.join(mf.root, mf.thumb);

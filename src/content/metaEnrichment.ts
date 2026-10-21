@@ -1,3 +1,4 @@
+import { lockOf } from "@/content/customArt";
 import { ContentPerson } from "@/models/ContentPerson";
 import type { TitleDetails } from "@/content/tmdb";
 import { setting } from "@/config/settings";
@@ -195,6 +196,9 @@ async function upsertContent(contentId: string, type: ContentType, name: string,
   // save). Batching cuts that from ~4 lock acquisitions per title to 1,
   // without changing what gets written.
   await ContentMeta.sequelize!.transaction(async (transaction) => {
+    // Custom artwork (content/customArt.ts) survives every refresh: kept aside, put back.
+    const before = await ContentMeta.findByPk(contentId, { attributes: ["poster", "backdrop", "backdropHd", "logo", "artLocked"], transaction });
+    const lock = lockOf(before);
     await ContentMeta.upsert({
       id: contentId,
       type,
@@ -228,6 +232,11 @@ async function upsertContent(contentId: string, type: ContentType, name: string,
       ...(resolved.imdbId ? { imdbId: resolved.imdbId } : {}),
     }, { transaction });
     if (resolved.details) await storeDetails(contentId, resolved.details, transaction);
+    const keep: Record<string, any> = {};
+    if (lock.poster) keep.poster = before!.poster;
+    if (lock.backdrop) { keep.backdrop = before!.backdrop; keep.backdropHd = before!.backdropHd; }
+    if (lock.logo) keep.logo = before!.logo;
+    if (Object.keys(keep).length) await ContentMeta.update(keep, { where: { id: contentId }, transaction });
     await replaceTags(ContentGenre, contentId, resolved.genres, transaction);
     await replaceTags(ContentCountry, contentId, resolved.countries, transaction);
     await replaceTags(ContentTheme, contentId, resolved.themes, transaction);
@@ -279,7 +288,10 @@ export async function storeDetails(contentId: string, d: TitleDetails, transacti
   if (d.collection) patch.collection = d.collection;
   if (d.originalTitle) patch.originalTitle = d.originalTitle;
   if (d.premiered) patch.premiered = d.premiered;
-  if (d.logo) patch.logo = d.logo;
+  if (d.logo) {
+    const row = await ContentMeta.findByPk(contentId, { attributes: ["artLocked"], transaction });
+    if (!lockOf(row).logo) patch.logo = d.logo;
+  }
   const writers = d.people.filter((p) => p.kind === "writer").map((p) => p.name);
   if (writers.length) patch.writers = [...new Set(writers)].slice(0, 6).join(", ");
   await ContentMeta.update(patch, { where: { id: contentId }, transaction });
@@ -548,7 +560,7 @@ async function backfillBackdrops(): Promise<void> {
   // TMDB genuinely has no HD backdrop for this title," which used to make
   // every run re-fetch the same permanently-backdrop-less rows forever.
   const missing = (await ContentMeta.findAll({
-    where: { backdropCheckedAt: null as any, source: "tmdb" },
+    where: { backdropCheckedAt: null as any, source: "tmdb", artLocked: null as any },
     attributes: ["id", "type", "tmdbId"],
     raw: true,
   })) as unknown as { id: string; type: ContentType; tmdbId: number | null }[];

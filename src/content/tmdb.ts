@@ -485,3 +485,17 @@ export async function searchTmdbCandidates(kind: "movie" | "tv", query: string, 
       overview: r.overview || null,
     }));
 }
+
+export interface ImageChoice { path: string; width: number; height: number; language: string | null; preview: string }
+
+/** Every poster, backdrop and logo TMDB has for a title (English and textless first), for "Edit images". */
+export async function fetchImageChoices(kind: "movie" | "tv", id: number): Promise<{ posters: ImageChoice[]; backdrops: ImageChoice[]; logos: ImageChoice[] }> {
+  const data = await tmdbGet(`/${kind}/${id}/images?include_image_language=en,null,hi`);
+  const map = (list: any[], previewSize: string): ImageChoice[] =>
+    (list || [])
+      .filter((i) => i?.file_path)
+      .sort((a, b) => Number(b.iso_639_1 === "en" || b.iso_639_1 == null) - Number(a.iso_639_1 === "en" || a.iso_639_1 == null) || (b.vote_average || 0) - (a.vote_average || 0))
+      .slice(0, 40)
+      .map((i) => ({ path: i.file_path, width: i.width, height: i.height, language: i.iso_639_1 ?? null, preview: `${IMG_BASE}/${previewSize}${i.file_path}` }));
+  return { posters: map(data?.posters, "w342"), backdrops: map(data?.backdrops, "w780"), logos: map(data?.logos, "w300") };
+}

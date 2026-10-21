@@ -228,7 +228,7 @@ export async function initDB() {
     await ensureColumns("content_meta", [
       ["tagline", "TEXT"], ["ageRating", "VARCHAR(255)"], ["runtime", "INTEGER"], ["studios", "TEXT"],
       ["collection", "VARCHAR(255)"], ["originalTitle", "VARCHAR(255)"], ["premiered", "VARCHAR(255)"],
-      ["logo", "VARCHAR(255)"], ["writers", "TEXT"], ["detailsCheckedAt", "DATETIME"],
+      ["logo", "VARCHAR(255)"], ["writers", "TEXT"], ["detailsCheckedAt", "DATETIME"], ["artLocked", "JSON"],
     ]);
     await ensureColumns("media_files", [["nfo", "JSON"], ["thumb", "TEXT"]]);
     await ensureColumns("media_files", [["season", "INTEGER"], ["episode", "INTEGER"], ["episodeEnd", "INTEGER"], ["episodeTitle", "VARCHAR(255)"]]);
