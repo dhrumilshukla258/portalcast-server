@@ -88,6 +88,8 @@ function toMediaItem(row: any, genresById: Map<string, string[]>, countriesById:
     description: row.overview || undefined,
     // ONE rating per title (content/titleRatings.ts), the same for every version of it.
     ...ratingFields(row),
+    // A title you own on the NAS (its card is the local version when there is one).
+    is_local: row.portalCategoryId === "local" ? 1 : undefined,
   };
 }
 

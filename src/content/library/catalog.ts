@@ -306,3 +306,10 @@ export async function localEpisodeFile(seriesId: string, fileId: string) {
   const data = [episodeItem(f, String(seriesId), { category_id: LOCAL_CATEGORY, is_local: 1, screenshot_uri: show?.screenshot_uri })];
   return { ...emptyPage(), total_items: 1, total_loaded: 1, data };
 }
+
+/** Local titles matching a search, for the global Search (listed before IPTV results). */
+export async function localSearch(kind: "movie" | "series", q: string): Promise<any[]> {
+  if (!q.trim()) return [];
+  const list = kind === "movie" ? await localMovieList() : await localSeriesList();
+  return list.length ? (searchCatalog(`local:${kind}`, list, q) as any[]) : [];
+}

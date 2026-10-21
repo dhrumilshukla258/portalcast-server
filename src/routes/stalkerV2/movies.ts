@@ -1,4 +1,5 @@
-﻿import { localEpisodeFile } from "@/content/library/catalog";
+﻿import { localSearch } from "@/content/library/catalog";
+import { localEpisodeFile } from "@/content/library/catalog";
 import { isLocalTitleId, isLocalFileId, localMovieCategory, localMoviesPage, localTitleFiles, localPlayLink } from "@/content/library/catalog";
 import { LOCAL_CATEGORY } from "@/content/metaEnrichment";
 import { unsealCmd } from "@/infra/sealedCmd";
@@ -272,8 +273,9 @@ export const movieRoutes: ServerRoute[] = [
           // content/catalogUnion.ts); a page is O(page) instead of re-reading ~85k items.
           const union = await getCatalogUnion("movie", profileId);
           if (union) {
+            // Search also finds local-library titles, listed first (content/library/catalog.ts).
             const list = search
-              ? await applyOverridesToMatches("movie", filterBySearch(union.raw, search, `movie:${category}`))
+              ? [...(await localSearch("movie", String(search))), ...(await applyOverridesToMatches("movie", filterBySearch(union.raw, search, `movie:${category}`)))]
               : union.browse;
             const offset = (startApiPage - 1) * itemsPerApiPage;
             const pageData = list.slice(offset, offset + itemsPerApiPage).map((m: any) => ({

@@ -1,4 +1,5 @@
-﻿import { isLocalTitleId, localSeasons, localEpisodes, localSeriesPage, localSeriesCategory } from "@/content/library/catalog";
+﻿import { localSearch } from "@/content/library/catalog";
+import { isLocalTitleId, localSeasons, localEpisodes, localSeriesPage, localSeriesCategory } from "@/content/library/catalog";
 import { LOCAL_CATEGORY } from "@/content/metaEnrichment";
 import { ServerRoute } from "@hapi/hapi";
 import { withVideoInfo } from "@/content/mediaInfo";
@@ -218,7 +219,7 @@ export const seriesRoutes: ServerRoute[] = [
           const union = await getCatalogUnion("series", profileId);
           if (union) {
             const list = search
-              ? await applyOverridesToMatches("series", filterBySearch(union.raw, search, `series:${category}`))
+              ? [...(await localSearch("series", String(search))), ...(await applyOverridesToMatches("series", filterBySearch(union.raw, search, `series:${category}`)))]
               : union.browse;
             const offset = (startApiPage - 1) * itemsPerApiPage;
             const pageData = list.slice(offset, offset + itemsPerApiPage).map((s: any) => ({
