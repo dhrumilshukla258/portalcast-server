@@ -253,6 +253,37 @@ export const discoverRoutes: ServerRoute[] = [
   },
 
   {
+    // Several genre rows at once (first page each): Discover's home rows in one request
+    // instead of one per row. Each row is picked from the in-memory index; the titles of
+    // all rows are read in one query. `genres` is comma-separated, at most 12.
+    method: "GET",
+    path: "/api/v2/discover/rows",
+    handler: async (request) => {
+      const q = request.query as any;
+      const type = q.type as ContentType | undefined;
+      const genres = [...new Set(String(q.genres ?? "").split(",").map((g: string) => g.trim()).filter(Boolean))].slice(0, 12);
+      if (!genres.length) return { rows: [] };
+      const [idx, hidden] = await Promise.all([getDiscoverIndex(), getHiddenContentKeySet()]);
+      const picked = genres.map((genre) => ({
+        genre,
+        ...browseIndex(idx, { type, tags: [{ kind: "genre" as const, value: genre }], hidden, page: 1, pageSize: PAGE_SIZE }),
+      }));
+      const allIds = [...new Set(picked.flatMap((p) => p.ids))];
+      const found = allIds.length ? await ContentMeta.findAll({ where: { id: { [Op.in]: allIds } } }) : [];
+      const [genresById, countriesById] = await Promise.all([tagsByContentId(ContentGenre, allIds), tagsByContentId(ContentCountry, allIds)]);
+      const origin = getPublicOrigin(request);
+      const items = await withVideoInfo(
+        found.map((r: any) => toMediaItem(r, genresById, countriesById, origin)),
+        await getActiveProfileId(), "movie", (x: any) => (x.type === "movie" ? x.id : undefined),
+      );
+      const byId = new Map(items.map((it: any) => [String(it.id), it]));
+      return {
+        rows: picked.map((p) => ({ genre: p.genre, data: p.ids.map((id) => byId.get(id)).filter(Boolean), page: 1, total_items: p.total })),
+      };
+    },
+  },
+
+  {
     // "Because you watched X" — content-based recommendations from the user's own
     // UserProgress rows, no cross-user data. For each watched mediaId with a matching
     // ContentMeta row, find other items sharing >=1 genre + the same original_language,
