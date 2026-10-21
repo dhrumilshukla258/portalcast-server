@@ -1,3 +1,5 @@
+import { LocalItem } from "@/models/LocalItem";
+import { verifyArt } from "@/content/library/art";
 import { spawn } from "child_process";
 import { ServerRoute } from "@hapi/hapi";
 import fs from "fs";
@@ -48,7 +50,29 @@ function parseRange(header: string | undefined, size: number): { start: number; 
   return { start, end };
 }
 
+const IMAGE_MIME: Record<string, string> = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp" };
+
 export const localStreamRoutes: ServerRoute[] = [
+  {
+    // Artwork beside a local title (content/library/art.ts). Public like every image route
+    // (an <img> cannot send a token), but signed: only URLs this server handed out work.
+    method: "GET",
+    path: "/api/images/local",
+    handler: async (request, h) => {
+      const q = request.query as any;
+      const a = String(q.a || "");
+      if (!/^\d+\.(poster|backdrop|logo)\.\d+$/.test(a) || !verifyArt(a, q.s)) return h.response("Not found").code(404);
+      const [itemId, kind] = a.split(".");
+      const item = await LocalItem.findByPk(Number(itemId), { attributes: ["id", "root", "relPath", "art"] });
+      const name = (item?.art as any)?.[kind];
+      if (!item || !name) return h.response("Not found").code(404);
+      const file = path.join(item.root, item.relPath, name);
+      const type = IMAGE_MIME[path.extname(name).toLowerCase()];
+      if (!type || !fs.existsSync(file)) return h.response("Not found").code(404);
+      // The version in the URL changes when the file does, so devices may keep it for a year.
+      return h.response(fs.createReadStream(file)).type(type).header("Cache-Control", "public, max-age=31536000, immutable");
+    },
+  },
   {
     method: "GET", // Hapi answers HEAD for GET routes too
     path: "/api/local/stream",

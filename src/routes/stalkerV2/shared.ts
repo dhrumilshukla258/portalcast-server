@@ -1,3 +1,4 @@
+import { withArtUrls } from "@/content/library/art";
 import { logger } from "@/infra/logger";
 import { groupDataFor, ratingFields } from "@/content/titleRatings";
 import { sealCmd } from "@/infra/sealedCmd";
@@ -228,6 +229,9 @@ function withTitleKey(item: any): any {
 }
 
 async function enrichArtworkFromTmdbRaw(items: any[], kind: "movie" | "series", origin?: string): Promise<any[]> {
+  // Local-library titles carry their own art (folder images, else their matched TMDB art).
+  const local = items.filter((it) => it?.is_local);
+  if (local.length === items.length) return items.map((it) => withArtUrls(it, origin));
   const cacheKeys = items.map((item: any) => {
     const itemId = item.id ?? item.stream_id ?? item.series_id;
     return itemId ? `tmdb_web_${kind}_${itemId}` : undefined;
@@ -236,6 +240,7 @@ async function enrichArtworkFromTmdbRaw(items: any[], kind: "movie" | "series", 
 
   return Promise.all(
     items.map(async (item: any, idx: number) => {
+      if (item?.is_local) return withArtUrls(item, origin); // mixed lists (search)
       const itemId = item.id ?? item.stream_id ?? item.series_id;
       if (!itemId) return item;
 

@@ -51,6 +51,10 @@ export class LocalItem extends Model {
   @Column(DataType.DATE)
   declare matchedAt: Date | null;
 
+  /** Artwork found in the title folder (content/library/art.ts): file names and a version. */
+  @Column(DataType.JSON)
+  declare art: { poster?: string; backdrop?: string; logo?: string; v?: number } | null;
+
   /** Set when none of its files are on disk any more; removed after 7 days. */
   @Column(DataType.DATE)
   declare missingSince: Date | null;

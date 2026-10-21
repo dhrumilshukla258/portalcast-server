@@ -56,6 +56,10 @@ Series, the same way:
 
 Discover cards for a local representative open with category `local`, which takes the same path. Global search (`movies`/`series` with `category=*&search=`) lists local matches first. List items and Discover cards carry `is_local: 1` (and `quality`); both apps draw a **Local** badge (**Local · 4K** when the best file is 4K).
 
+## Folder artwork
+
+`src/content/library/art.ts`: artwork beside a title (Jellyfin's names: `folder.jpg`/`poster.jpg`, `backdrop.jpg`/`fanart.jpg`, `logo.png`/`clearlogo.png`) wins over TMDB's for that title. The scanner records it on the `LocalItem` (`art`) and, after every match, points the catalog row's `poster`/`backdrop` at a marker `local-art:<itemId>:<kind>:<version>`. Every image that goes out turns the marker into a signed absolute URL, `/api/images/local?a=<itemId>.<kind>.<version>&s=<sig>` (`proxiedImageUrl`, Discover, `withArtUrls` on local items): signed so the ids cannot be walked, absolute because both apps prefix relative image paths, versioned by the file's mtime so a replaced image is a new URL (served with a one-year cache). `proxiedImageUrl` also rebases this server's own signed `/api/images/...` URLs (saved in watch progress) instead of relaying them through the image proxy.
+
 ## Streaming
 
 `/api/local/stream?t=`: the stream token's resource is `local:<fileId>`; the path never leaves the server. Range requests give 206 with `Content-Range`; HEAD works. Each request counts as "now watching" (`streamTracker`), so background jobs yield. Tokens are network-pinned like every stream token. `/api/local/subtitle?t=&s=<index>` serves a sidecar subtitle as WebVTT (SRT directly, ASS/SSA through FFmpeg). Embedded tracks use `/api/media/info` and `/api/media/subtitle`, which accept local files' tokens.
@@ -66,4 +70,4 @@ ExoPlayer plays MKV/MP4 directly. Audio the TV cannot decode (DTS, TrueHD) falls
 
 ## Not yet (later phases)
 
-Per-title progress across versions (resume an IPTV start from the NAS copy); images and NFO files stored on the NAS (Jellyfin's `folder.jpg`, `backdrop.jpg`, `logo.png` are already beside most titles); the browser fallback for audio the browser cannot play (MKV with AC3/DTS).
+Per-title progress across versions (resume an IPTV start from the NAS copy); TMDB artwork cached on the NAS, custom uploads and NFO writing (folder artwork is already used); the browser fallback for audio the browser cannot play (MKV with AC3/DTS).

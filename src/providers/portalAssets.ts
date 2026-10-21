@@ -1,3 +1,4 @@
+import { isArtMarker, artUrl } from "@/content/library/art";
 import { serverSecret } from "@/infra/serverSecret";
 import crypto from "crypto";
 import { initialConfig } from "@/config/server";
@@ -49,9 +50,17 @@ const SAFE_ABSOLUTE_IMAGE_HOSTS = new Set(["image.tmdb.org"]);
 // context don't pass origin and get the relative result back.
 export function proxiedImageUrl(url?: string, origin?: string): string {
   if (!url) return "";
+  // Local-library artwork (content/library/art.ts): a signed URL to the file on the NAS.
+  if (isArtMarker(url)) return artUrl(url, origin);
   if (!url.startsWith("http")) return url;
   try {
-    if (SAFE_ABSOLUTE_IMAGE_HOSTS.has(new URL(url).hostname)) return url;
+    const parsed = new URL(url);
+    if (SAFE_ABSOLUTE_IMAGE_HOSTS.has(parsed.hostname)) return url;
+    // One of this server's own image URLs (saved in watch progress, maybe under another
+    // address): rebase it, never relay it through the proxy (which refuses private hosts).
+    if (parsed.pathname.startsWith("/api/images/") && parsed.searchParams.has("s")) {
+      return `${origin ?? ""}${parsed.pathname}${parsed.search}`;
+    }
   } catch {
     // Malformed URL — fall through and proxy it anyway rather than leak it as-is.
   }

@@ -1,3 +1,4 @@
+import { artUrl } from "@/content/library/art";
 import { ratingFields } from "@/content/titleRatings";
 import { stripReleaseNoise, channelOf } from "@/content/titleClean";
 import { channelLogo, isLiveChannel } from "@/content/channels";
@@ -66,11 +67,11 @@ function toMediaItem(row: any, genresById: Map<string, string[]>, countriesById:
     screenshot_uri: proxiedImageUrl(row.poster, origin),
     // Any-resolution backdrop — used by the detail-page hero
     // (MediaInfoHeader), which would rather show a lower-res image than none.
-    backdrop_path: row.backdrop || undefined,
+    backdrop_path: row.backdrop ? artUrl(row.backdrop, origin) : undefined,
     // High-res-only backdrop (null unless it clears MIN_BACKDROP_WIDTH, see
     // tmdb.ts) — used by the ambient rotation (AmbientBackdrop.tsx), which
     // skips a title entirely rather than show a soft/upscaled one.
-    backdrop_hd_path: row.backdropHd || undefined,
+    backdrop_hd_path: row.backdropHd ? artUrl(row.backdropHd, origin) : undefined,
     year: row.year,
     genres_str: (genresById.get(row.id) || []).join(", "),
     country: (countriesById.get(row.id) || []).join(", "),

@@ -1,4 +1,5 @@
-﻿import { localSearch } from "@/content/library/catalog";
+﻿import { withArtUrls } from "@/content/library/art";
+import { localSearch } from "@/content/library/catalog";
 import { localEpisodeFile } from "@/content/library/catalog";
 import { isLocalTitleId, isLocalFileId, localMovieCategory, localMoviesPage, localTitleFiles, localPlayLink } from "@/content/library/catalog";
 import { LOCAL_CATEGORY } from "@/content/metaEnrichment";
@@ -153,8 +154,11 @@ export const movieRoutes: ServerRoute[] = [
         // Local library titles ("L<id>") and the My Library category (content/library/catalog.ts).
         if (isLocalTitleId(movieId)) {
           // An episode of a local show (the apps resolve the episode file this way).
-          if (isLocalFileId(episodeId)) return localEpisodeFile(String(movieId), String(episodeId));
-          return localTitleFiles(String(movieId));
+          const resp = isLocalFileId(episodeId)
+            ? await localEpisodeFile(String(movieId), String(episodeId))
+            : await localTitleFiles(String(movieId));
+          const origin = getPublicOrigin(request);
+          return { ...resp, data: resp.data.map((d: any) => withArtUrls(d, origin)) };
         }
         if (String(category) === LOCAL_CATEGORY && !Number(movieId)) {
           const pageData = await localMoviesPage(Number(page) || 1, String(search || ""));

@@ -223,6 +223,7 @@ export async function initDB() {
     // of ~100k updates would scan the whole table.
     await sequelize.query("CREATE INDEX IF NOT EXISTS `idx_content_meta_imdbId` ON `content_meta` (`imdbId`);");
     // Local library (models/MediaFile.ts): episode columns added after the table first shipped.
+    await ensureColumns("local_items", [["art", "JSON"]]);
     await ensureColumns("media_files", [["season", "INTEGER"], ["episode", "INTEGER"], ["episodeEnd", "INTEGER"], ["episodeTitle", "VARCHAR(255)"]]);
     await ensureColumns("users", [
       ["openSubtitlesUsername", "VARCHAR(255)"],

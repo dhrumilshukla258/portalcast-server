@@ -12,6 +12,7 @@
 //      progress is kept). A library folder that is gone or empty while it had files is
 //      skipped instead, so an unplugged disk never empties the library.
 
+import { findArt, artMarker } from "@/content/library/art";
 import fs from "fs";
 import path from "path";
 import { Op } from "sequelize";
@@ -208,6 +209,30 @@ async function waitWhileWatching(): Promise<void> {
   }
 }
 
+/**
+ * Artwork beside a title (Jellyfin's folder.jpg, backdrop.jpg, logo.png) wins over TMDB's:
+ * the catalog row's poster/backdrop point at it (content/library/art.ts). Run after every
+ * match, since matching writes TMDB's images back.
+ */
+async function applyFolderArt(item: LocalItem): Promise<void> {
+  const dir = path.join(item.root, item.relPath);
+  const st = statOf(dir);
+  const art = st?.isDirectory() ? findArt(dir) : null;
+  if (JSON.stringify(art ?? null) !== JSON.stringify(item.art ?? null)) {
+    item.art = art;
+    await item.save();
+  }
+  if (!art) return;
+  const contentId = localContentId(item.id, item.kind);
+  const meta = await ContentMeta.findByPk(contentId, { attributes: ["id", "poster", "backdrop", "backdropHd"] });
+  if (!meta) return;
+  const want: Record<string, string> = {};
+  if (art.poster) want.poster = artMarker(item.id, "poster", art.v);
+  if (art.backdrop) want.backdrop = want.backdropHd = artMarker(item.id, "backdrop", art.v);
+  const changed = Object.entries(want).some(([k, v]) => (meta as any)[k] !== v);
+  if (changed) await ContentMeta.update(want, { where: { id: contentId } });
+}
+
 export interface ScanSummary {
   titles: number;
   added: number;
@@ -329,6 +354,7 @@ async function scanOne(lib: Library): Promise<ScanSummary> {
           logger.warn(`[library] could not match "${item.name}": ${e?.message ?? e}`);
         }
       }
+      await applyFolderArt(item);
       if (item.matchedTmdbId) sum.matched++;
       else sum.unmatched++;
     }
@@ -389,6 +415,7 @@ export async function fixMatch(itemId: number, tmdbId: number | null): Promise<L
   item.matchedTmdbId = matched ?? null;
   item.matchedAt = new Date();
   await item.save();
+  await applyFolderArt(item);
   await recomputeRepresentatives();
   invalidateDiscoverIndex();
   clearDiscoverCache();

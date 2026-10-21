@@ -1,4 +1,5 @@
-﻿import { localSearch } from "@/content/library/catalog";
+﻿import { withArtUrls } from "@/content/library/art";
+import { localSearch } from "@/content/library/catalog";
 import { isLocalTitleId, localSeasons, localEpisodes, localSeriesPage, localSeriesCategory } from "@/content/library/catalog";
 import { LOCAL_CATEGORY } from "@/content/metaEnrichment";
 import { ServerRoute } from "@hapi/hapi";
@@ -81,11 +82,13 @@ export const seriesRoutes: ServerRoute[] = [
           if (!Number(seasonId) && !String(seasonId).startsWith("L")) {
             const seasons = await localSeasons(String(movieId));
             rememberSeasonNumbers(seasons.data);
-            return seasons;
+            const origin = getPublicOrigin(request);
+            return { ...seasons, data: seasons.data.map((d: any) => withArtUrls(d, origin)) };
           }
           const eps = await localEpisodes(String(movieId), String(seasonId), Number(page) || 1);
           const m = /S(\d+)$/.exec(String(seasonId));
           eps.data = await withTmdbEpisodes(eps.data, movieId, seasonId, m ? Number(m[1]) : seasonNumber, getPublicOrigin(request));
+          eps.data = eps.data.map((d: any) => withArtUrls(d, getPublicOrigin(request)));
           return eps;
         }
         if (String(category) === LOCAL_CATEGORY && !Number(movieId)) {
