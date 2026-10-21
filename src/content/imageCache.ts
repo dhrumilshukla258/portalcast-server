@@ -45,7 +45,8 @@ export function validCacheRequest(size: string, file: string): boolean {
 // one blocking write to a disk waking from sleep froze the whole server (measured: 30
 // requests finishing together at ~5,005 ms). The most-used images are also kept in memory
 // (128 MB, least recently used goes first), so they never touch the disk at all.
-const MEM_MAX_BYTES = 128 * 1024 * 1024;
+// Kept modest: these Buffers live outside Node's heap cap, inside the container's 1 GB.
+const MEM_MAX_BYTES = 64 * 1024 * 1024;
 const MEM_MAX_ITEM = 2 * 1024 * 1024; // an "original" backdrop can be several MB: disk only
 const mem = new Map<string, Buffer>();
 let memBytes = 0;
@@ -73,6 +74,7 @@ function memPut(key: string, b: Buffer): void {
 function touch(key: string, target: string): void {
   const last = touched.get(key) ?? 0;
   if (Date.now() - last < 24 * 3600_000) return;
+  if (touched.size > 100_000) touched.clear(); // bounded over a long run
   touched.set(key, Date.now());
   fs.promises.utimes(target, new Date(), new Date()).catch(() => {});
 }

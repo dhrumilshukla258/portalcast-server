@@ -61,11 +61,11 @@ export const sequelize = new Sequelize({
       connection.configure("busyTimeout", 5000);
       connection.__busyTimeoutSet = true;
       // The database is ~1 GB: SQLite's default page cache (~2 MB) sent most reads to disk.
-      // 64 MB cache and a 256 MB memory map per connection (memory is only used as pages are
+      // 32 MB cache and a 256 MB memory map per connection (memory is only used as pages are
       // read); NORMAL sync is safe with WAL (a power cut can lose the last commit, never
       // corrupt the file); temp tables (recomputeRepresentatives) in memory.
       await new Promise<void>((resolve) =>
-        connection.exec("PRAGMA cache_size=-65536; PRAGMA mmap_size=268435456; PRAGMA synchronous=NORMAL; PRAGMA temp_store=MEMORY;", (err: any) => {
+        connection.exec("PRAGMA cache_size=-32768; PRAGMA mmap_size=268435456; PRAGMA synchronous=NORMAL; PRAGMA temp_store=MEMORY;", (err: any) => {
           if (err) logger.warn(`SQLite connection settings failed: ${err.message ?? err}`);
           resolve();
         }),

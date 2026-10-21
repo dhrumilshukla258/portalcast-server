@@ -45,7 +45,7 @@ export async function decodeCacheValue(v: string | Buffer | null | undefined): P
 // the copy stays correct and can live 30 min instead of 30 s. Bounded by size, not by count:
 // 3,000 entries could be 3,000 tiny rows or a few huge series lists. Least recently used goes first.
 const MEM_TTL_MS = 30 * 60 * 1000;
-const MEM_MAX_CHARS = 64 * 1024 * 1024; // ~64 MB of JSON text
+const MEM_MAX_CHARS = 32 * 1024 * 1024; // ~32-64 MB (non-Latin text takes 2 bytes a character)
 let memChars = 0;
 const memRaw = new Map<string, { value: string; expiresAt: Date; cachedAt: number }>();
 
