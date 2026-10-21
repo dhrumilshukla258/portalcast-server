@@ -1,3 +1,6 @@
+import { LOCAL_CATEGORY } from "@/content/metaEnrichment";
+import { localVersionLabel } from "@/content/library/catalog";
+import { categoryNames, iptvVersionLabel } from "@/content/versionLabel";
 import { ContentPerson } from "@/models/ContentPerson";
 import { artUrl } from "@/content/library/art";
 import { ratingFields } from "@/content/titleRatings";
@@ -16,9 +19,7 @@ import { UserProgress } from "@/models/UserProgress";
 import { getActiveProfileId } from "@/routes/stalkerV2/shared";
 import { getHiddenContentKeys, getHiddenContentKeySet } from "@/content/overrides";
 import { getDiscoverIndex, facetsFor, browse as browseIndex, recommend, type BrowseQuery } from "@/content/discoverIndex";
-import { extractLanguageInfo, extractQualityTags, extractLanguageFromCategoryName } from "@/content/titleClean";
 import { UNCATEGORIZED_GENRE } from "@/content/metaEnrichment";
-import { readGenres } from "@/infra/storage";
 import { logger } from "@/infra/logger";
 import { proxiedImageUrl } from "@/providers/portalAssets";
 import { getPublicOrigin } from "@/infra/publicUrl";
@@ -465,61 +466,23 @@ export const discoverRoutes: ServerRoute[] = [
       const ids = rows.map((r: any) => r.id);
       const profileId = await getActiveProfileId();
       await ensureMediaInfoLoaded();
-      const [genresById, countriesById, movieCategories, seriesCategories] = await Promise.all([
+      const [genresById, countriesById, names] = await Promise.all([
         tagsByContentId(ContentGenre, ids),
         tagsByContentId(ContentCountry, ids),
-        readGenres("movie", profileId ?? undefined),
-        readGenres("series", profileId ?? undefined),
+        categoryNames(profileId),
       ]);
-      const movieCategoryNameById = new Map(movieCategories.map((g: any) => [String(g.id), g.title as string]));
-      const seriesCategoryNameById = new Map(seriesCategories.map((g: any) => [String(g.id), g.title as string]));
+      // Local-library versions say "Local" and their files' languages (the title has no tags).
+      const localLabels = new Map<string, string | null>();
+      for (const r of rows as any[]) if (r.portalCategoryId === LOCAL_CATEGORY) localLabels.set(r.id, await localVersionLabel(r.id));
 
       return {
         variants: rows.map((r: any) => {
-          // Category name (e.g. "Hindi | Dubbed") is the ground truth for
-          // this file's actual AUDIO — takes priority over parsing the raw
-          // catalog title, which this portal's own tags can contradict (e.g.
-          // "Eng Dub"/"En HD" both actually mean Hindi audio here, not
-          // English — see LANGUAGE_ALIASES). Title-text parsing is only the
-          // fallback for whatever category name doesn't resolve, and still
-          // the only source for a "Sub" (subtitled, not dubbed) signal, which
-          // category naming doesn't distinguish.
-          const categoryName = (r.type === "series" ? seriesCategoryNameById : movieCategoryNameById).get(
-            String(r.portalCategoryId)
-          );
-          const categoryAudio = categoryName ? extractLanguageFromCategoryName(categoryName) : null;
-          const { audio: titleAudio, subtitles } = extractLanguageInfo(r.name);
-          const audio = categoryAudio || titleAudio;
-
-          // "X Dub"/bare "X" means the AUDIO is X; "X Sub" means the
-          // original audio was kept and only subtitled in X — these are not
-          // interchangeable, so the label must say which is which rather
-          // than just joining every matched tag together.
-          let languagePart: string | null;
-          if (audio && subtitles && audio !== subtitles) {
-            languagePart = `${audio} (+ ${subtitles} Subtitles)`;
-          } else if (audio) {
-            languagePart = audio;
-          } else if (subtitles) {
-            languagePart = `Original Audio (${subtitles} Subtitles)`;
-          } else {
-            languagePart = null;
-          }
-
           // A measured resolution (content/mediaInfo.ts) beats the quality words in the
           // title: "Ek Din HDCam" that decodes as 1080p is labelled "1080p".
           const measured = r.type === "movie" ? getVideoInfo(profileId ?? 0, "movie", r.id) : undefined;
-          const qualityTags = measured ? [measured.label] : extractQualityTags(r.name);
-          const qualitySuffix = qualityTags.length > 0 ? ` ${qualityTags.join(" ")}` : "";
-
-          // Keep the label short — a language/quality tag, never the whole
-          // raw catalog name — falling back to the bare name only when we
-          // truly have neither signal to offer.
-          const variantLabel = languagePart
-            ? `${languagePart}${qualitySuffix}`
-            : qualityTags.length > 0
-              ? qualityTags.join(" ")
-              : r.name;
+          const variantLabel = localLabels.has(r.id)
+            ? localLabels.get(r.id) || "Local"
+            : iptvVersionLabel(r.name, names[r.type === "series" ? "series" : "movie"].get(String(r.portalCategoryId)), measured?.label);
 
           return {
             ...toMediaItem(r, genresById, countriesById, getPublicOrigin(request)),

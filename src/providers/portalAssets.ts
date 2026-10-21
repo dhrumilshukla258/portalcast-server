@@ -62,6 +62,10 @@ export function proxiedImageUrl(url?: string, origin?: string): string {
     if (parsed.pathname.startsWith("/api/images/") && parsed.searchParams.has("s")) {
       return `${origin ?? ""}${parsed.pathname}${parsed.search}`;
     }
+    // The cached TMDB images (content/imageCache.ts) are unsigned: rebase only that exact shape.
+    if (/^\/api\/images\/tmdb\/(w\d+|original)\/[A-Za-z0-9_-]+\.(jpg|jpeg|png|webp|svg)$/.test(parsed.pathname)) {
+      return `${origin ?? ""}${parsed.pathname}`;
+    }
   } catch {
     // Malformed URL — fall through and proxy it anyway rather than leak it as-is.
   }

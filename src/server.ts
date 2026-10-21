@@ -419,7 +419,13 @@ const init = async () => {
           ? (request.response as any).statusCode
           : request.response &&
             (request.response as any).output &&
-            (request.response as any).output.statusCode),
+            (request.response as any).output.statusCode) +
+        // How long the server took (responded - received): finds the slow endpoints.
+        (request.info.responded ? ` (${request.info.responded - request.info.received} ms)` : "") +
+        // A 500 says why (Hapi only sends "Internal Server Error" to the client).
+        ((request.response as any)?.isBoom && (request.response as any).output?.statusCode >= 500
+          ? ` [${String((request.response as any).message).slice(0, 300)}]`
+          : ""),
     );
   });
 

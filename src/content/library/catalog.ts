@@ -50,6 +50,45 @@ function qualityLabel(f: MediaFile): string {
   return [custom, res, f.hdr].filter(Boolean).join(" · ");
 }
 
+const LANGUAGE_NAMES = new Intl.DisplayNames(["en"], { type: "language" });
+
+/** "mal" -> "Malayalam"; nothing for unknown, undetermined or made-up codes. */
+function languageName(code: string | null | undefined): string | null {
+  const c = String(code ?? "").trim().toLowerCase();
+  if (!c || ["und", "zxx", "mis", "mul", "root"].includes(c)) return null;
+  try {
+    const name = LANGUAGE_NAMES.of(c);
+    return name && name.toLowerCase() !== c ? name : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The version picker's label for a local title ("Local · Malayalam, English 1080p"): its
+ * files' audio languages (most common first) and the best file's quality. Null for an
+ * id that is not a local title.
+ */
+export async function localVersionLabel(contentId: string): Promise<string | null> {
+  const m = /^(movie|series)_L(\d+)$/.exec(contentId);
+  if (!m) return null;
+  const files = await MediaFile.findAll({
+    where: { itemId: Number(m[2]), missingSince: null },
+    attributes: ["id", "height", "versionLabel", "hdr", "audioTracks", "relPath"],
+    limit: 300,
+  });
+  const counts = new Map<string, number>();
+  for (const f of files) {
+    for (const name of new Set((f.audioTracks ?? []).map((t) => languageName(t.language)).filter((n): n is string => !!n))) {
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+  }
+  const languages = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([n]) => n);
+  const best = [...files].sort((a, b) => (b.height ?? 0) - (a.height ?? 0))[0];
+  const quality = best ? qualityLabel(best).split(" · ").join(" ") : "";
+  return [["Local", languages.join(", ")].filter(Boolean).join(" · "), quality].filter(Boolean).join(" ");
+}
+
 /** A local title as an IPTV-shaped list item. */
 function listItem(item: LocalItem, meta: ContentMeta | undefined, genres: string[], best: MediaFile | undefined): any {
   const id = `L${item.id}`;

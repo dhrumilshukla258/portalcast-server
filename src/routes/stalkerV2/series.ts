@@ -1,5 +1,6 @@
 ﻿import { withArtUrls } from "@/content/library/art";
 import { localSearch } from "@/content/library/catalog";
+import { withVersionLabels } from "@/content/versionLabel";
 import { isLocalTitleId, localSeasons, localEpisodes, localSeriesPage, localSeriesCategory } from "@/content/library/catalog";
 import { LOCAL_CATEGORY } from "@/content/metaEnrichment";
 import { ServerRoute } from "@hapi/hapi";
@@ -234,6 +235,8 @@ export const seriesRoutes: ServerRoute[] = [
               actors: s.actors || s.cast || "",
               genres_str: s.genres_str || s.genre || "",
             }));
+            // Search results carry the version picker's label (content/versionLabel.ts).
+            const labelled = search ? await withVersionLabels(pageData, "series", profileId) : pageData;
             const responsePayload = {
               success: true,
               page: Number(page),
@@ -241,7 +244,7 @@ export const seriesRoutes: ServerRoute[] = [
               total_items: list.length,
               actual_length: itemsPerApiPage,
               total_loaded: pageData.length,
-              data: await enrichArtworkFromTmdb(pageData, "series", getPublicOrigin(request)),
+              data: await enrichArtworkFromTmdb(labelled, "series", getPublicOrigin(request)),
               errors: false,
               isPortal: initialConfig.providerType === "stalker",
             };

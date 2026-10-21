@@ -1,5 +1,6 @@
 ﻿import { withArtUrls } from "@/content/library/art";
 import { localSearch } from "@/content/library/catalog";
+import { withVersionLabels } from "@/content/versionLabel";
 import { localEpisodeFile } from "@/content/library/catalog";
 import { isLocalTitleId, isLocalFileId, localMovieCategory, localMoviesPage, localTitleFiles, localPlayLink } from "@/content/library/catalog";
 import { LOCAL_CATEGORY } from "@/content/metaEnrichment";
@@ -287,6 +288,8 @@ export const movieRoutes: ServerRoute[] = [
               id: String(m.stream_id),
               screenshot_uri: m.screenshot_uri || m.stream_icon || "",
             }));
+            // Search results carry the version picker's label (content/versionLabel.ts).
+            const labelled = search ? await withVersionLabels(pageData, "movie", profileId) : pageData;
             const responsePayload = {
               success: true,
               page: Number(page),
@@ -294,7 +297,7 @@ export const movieRoutes: ServerRoute[] = [
               total_items: list.length,
               actual_length: itemsPerApiPage,
               total_loaded: pageData.length,
-              data: await withVideoInfo(await enrichArtworkFromTmdb(pageData, "movie", getPublicOrigin(request)), profileId, "movie", (m: any) => m.stream_id ?? m.id),
+              data: await withVideoInfo(await enrichArtworkFromTmdb(labelled, "movie", getPublicOrigin(request)), profileId, "movie", (m: any) => m.stream_id ?? m.id),
               errors: false,
               isPortal: initialConfig.providerType === "stalker",
             };
