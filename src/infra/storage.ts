@@ -157,11 +157,25 @@ export async function deleteGenre(genre: any, type: GenreType): Promise<void> {
   await Genre.destroy({ where: { id: `${prefix}${type}_${genre.id}` } });
 }
 
+// Category lists are read on most catalog requests and change only when the portal's
+// categories are refreshed: kept in memory, dropped by any write to the genres table (hooks).
+// `genresGen` counts writes, so a read that started before a write never stores its old rows.
+const genresMemo = new Map<string, any[]>();
+let genresGen = 0;
+for (const hook of ["afterCreate", "afterBulkCreate", "afterUpdate", "afterBulkUpdate", "afterSave", "afterDestroy", "afterBulkDestroy", "afterUpsert"] as const) {
+  Genre.addHook(hook, `genres-memo-${hook}`, () => { genresGen++; genresMemo.clear(); });
+}
+
 export async function readGenres(
   type: GenreType,
   profileId?: number,
 ): Promise<any[]> {
   try {
+    const memoKey = `${type}|${profileId ?? "*"}`;
+    const memo = genresMemo.get(memoKey);
+    // Copies: callers may change what they get.
+    if (memo) return memo.map((g) => ({ ...g }));
+    const gen = genresGen;
     const genres = await Genre.findAll({
       where: {
         type,
@@ -170,11 +184,12 @@ export async function readGenres(
       raw: true,
     });
 
-    const prefix = profileId !== undefined ? `${profileId}_` : ``;
-    return genres.map((g) => ({
+    const rows = genres.map((g) => ({
       ...g,
       id: g.id.replace(new RegExp(`^\\d+_${type}_`), "").replace(new RegExp(`^${type}_`), ""),
     }));
+    if (gen === genresGen) genresMemo.set(memoKey, rows);
+    return rows.map((g) => ({ ...g }));
   } catch (error) {
     logger.error({ err: error }, `Error reading ${type} genres from database`);
     return [];

@@ -196,7 +196,7 @@ export const xtreamCache = {
 // series mode is detected) but was being re-fetched from SQLite + JSON.parse'd on every single
 // VOD/series request. Memoize it for a short window so bursts of requests share one DB read,
 // while still picking up a change (e.g. provider switch) within a few seconds.
-const SERIES_SOURCE_TTL_MS = 5000;
+const SERIES_SOURCE_TTL_MS = 10 * 60_000; // writers call invalidateSeriesSourceCache()
 let seriesSourceCache: { value: boolean; expiresAt: number } | undefined;
 
 /** Call after writing portal_series_source, so a warm started right after sees the new value. */
@@ -204,7 +204,7 @@ export function invalidateSeriesSourceCache(): void {
   seriesSourceCache = undefined;
 }
 
-async function isNativeSeriesSource(): Promise<boolean> {
+export async function isNativeSeriesSource(): Promise<boolean> {
   if (seriesSourceCache && seriesSourceCache.expiresAt > Date.now()) {
     return seriesSourceCache.value;
   }

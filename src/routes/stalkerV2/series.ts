@@ -23,7 +23,7 @@ import { stalkerApi } from "@/providers/stalker";
 import { Readable } from "stream";
 import { XtreamCache } from "@/models/XtreamCache";
 import { ContentOverride } from "@/models/ContentOverride";
-import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres, catchupScan, xtreamCache, getOrRefreshVodStreams, getOrRefreshSeriesList, invalidateSeriesSourceCache } from "@/services/xtreamCache";
+import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres, catchupScan, xtreamCache, getOrRefreshVodStreams, getOrRefreshSeriesList, invalidateSeriesSourceCache, isNativeSeriesSource } from "@/services/xtreamCache";
 import { logger } from "@/infra/logger";
 import { authCheck } from "@/auth/jwt";
 import { mintStreamToken, proxyUrlFor, streamTokenFromRequest } from "@/services/StreamTokens";
@@ -200,8 +200,7 @@ export const seriesRoutes: ServerRoute[] = [
           });
         }
 
-        const sourceRow = await XtreamCache.findOne({ where: { key: "portal_series_source" } });
-        const isNativeSeries = sourceRow ? JSON.parse(sourceRow.value) === "native" : false;
+        const isNativeSeries = await isNativeSeriesSource();
 
         // Prefer already-warmed DB data over a live portal call for category browsing —
         // same getOrRefreshSeriesList() the Xtream player API uses, so both surfaces get

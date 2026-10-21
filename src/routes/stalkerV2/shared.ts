@@ -295,10 +295,20 @@ async function enrichArtworkFromTmdbRaw(items: any[], kind: "movie" | "series", 
   );
 }
 
+// The active profile id, read on almost every request: kept in memory and dropped by any
+// write to config_profiles (hooks below), with a minute's lifetime as a safety net.
+let activeProfileMemo: { id: number | undefined; at: number } | undefined;
+let activeProfileGen = 0; // a read that started before a write never stores its old answer
+const clearActiveProfileMemo = () => { activeProfileGen++; activeProfileMemo = undefined; };
+for (const hook of ["afterCreate", "afterBulkCreate", "afterUpdate", "afterBulkUpdate", "afterSave", "afterDestroy", "afterBulkDestroy", "afterUpsert"] as const) {
+  ConfigProfile.addHook(hook, `active-profile-memo-${hook}`, clearActiveProfileMemo);
+}
+
 export const getActiveProfileId = async () => {
-  const activeProfile = await ConfigProfile.findOne({
-    where: { isActive: true },
-  });
+  if (activeProfileMemo && Date.now() - activeProfileMemo.at < 60_000) return activeProfileMemo.id;
+  const gen = activeProfileGen;
+  const activeProfile = await ConfigProfile.findOne({ where: { isActive: true }, attributes: ["id"] });
+  if (gen === activeProfileGen) activeProfileMemo = { id: activeProfile?.id, at: Date.now() };
   return activeProfile?.id;
 };
 
