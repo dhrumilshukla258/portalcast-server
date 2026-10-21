@@ -407,6 +407,12 @@ const init = async () => {
           .header("X-Frame-Options", "SAMEORIGIN");
       }
 
+      // Vite's bundle files carry a content hash in their name (assets/index-<hash>.js): a new
+      // build is a new name, so browsers may keep them for a year without asking again. index.html
+      // and sw.js (no hash) keep the default revalidation.
+      if (/^assets\/[^/]+-[A-Za-z0-9_-]{8,}\.(js|css)$/.test(param)) {
+        return h.file(filePath).header("Cache-Control", "public, max-age=31536000, immutable");
+      }
       return h.file(filePath);
     },
   });
