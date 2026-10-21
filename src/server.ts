@@ -1,3 +1,4 @@
+import { tidyPeople } from "./content/people";
 import { ContentCache } from "./models/ContentCache";
 import { runStorageMigrations } from "./db/storageMigrations";
 import { titleImageRoutes } from "./routes/admin/titleImages";
@@ -88,6 +89,7 @@ const init = async () => {
   registerJob({ name: "backup", label: "Back up the database", dailyAtHour: 4, run: backupDatabase });
   registerJob({ name: "library-scan", label: "Scan local libraries", dailyAtHour: 3, run: () => scanLibraries() });
   registerJob({ name: "image-cache", label: "Trim the image cache", dailyAtHour: 5, run: evictImageCache });
+  registerJob({ name: "people", label: "Remove unused cast lists", dailyAtHour: 5, run: tidyPeople });
   registerJob({
     name: "page-cache", label: "Remove expired page answers", dailyAtHour: 5,
     run: async () => `${await ContentCache.destroy({ where: { expiresAt: { [Op.lt]: new Date() } } })} removed`,

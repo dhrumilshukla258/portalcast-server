@@ -12,10 +12,10 @@
 //      progress is kept). A library folder that is gone or empty while it had files is
 //      skipped instead, so an unplugged disk never empties the library.
 
+import { storePeople, peopleCount, titleKeyOf } from "@/content/people";
 import { withBusyRetry } from "@/infra/busyRetry";
 import { lockOf } from "@/content/customArt";
 import { parseNfoFull, type NfoData } from "@/content/library/nfo";
-import { ContentPerson } from "@/models/ContentPerson";
 import { findArt, artMarker } from "@/content/library/art";
 import fs from "fs";
 import path from "path";
@@ -305,13 +305,15 @@ async function applyNfoMeta(item: LocalItem): Promise<void> {
   if (Object.keys(patch).length) await ContentMeta.update(patch, { where: { id: contentId } });
 
   // Cast and crew: from the NFO when TMDB gave none, or when the NFO is locked.
-  const people = await ContentPerson.count({ where: { contentId } });
-  if ((people === 0 || locked) && (nfo.actors.length || nfo.directors.length)) {
-    await ContentPerson.destroy({ where: { contentId } });
-    await ContentPerson.bulkCreate([
-      ...nfo.actors.slice(0, 20).map((a, i) => ({ contentId, kind: "cast", name: a.name, role: a.role, sortOrder: i, tmdbPersonId: null, photo: null })),
-      ...nfo.directors.map((n, i) => ({ contentId, kind: "director", name: n, role: null, sortOrder: i, tmdbPersonId: null, photo: null })),
-      ...nfo.writers.slice(0, 6).map((n, i) => ({ contentId, kind: "writer", name: n, role: null, sortOrder: i, tmdbPersonId: null, photo: null })),
+  // A locked NFO keeps its own list (this copy's content id, read first); otherwise the
+  // NFO fills the title's shared list only when TMDB gave none (content/people.ts).
+  const sharedKey = titleKeyOf({ id: contentId, type: item.kind === "series" ? "series" : "movie", tmdbId: meta?.tmdbId ?? null });
+  const peopleKey = locked ? contentId : sharedKey;
+  if ((locked || (await peopleCount(sharedKey)) === 0) && (nfo.actors.length || nfo.directors.length)) {
+    await storePeople(peopleKey, [
+      ...nfo.actors.slice(0, 20).map((a, i) => ({ kind: "cast", name: a.name, role: a.role, order: i, tmdbPersonId: null, photo: null })),
+      ...nfo.directors.map((n, i) => ({ kind: "director", name: n, role: null, order: i, tmdbPersonId: null, photo: null })),
+      ...nfo.writers.slice(0, 6).map((n, i) => ({ kind: "writer", name: n, role: null, order: i, tmdbPersonId: null, photo: null })),
     ]);
   }
   // Genres and countries: from the NFO when the title has none (or the NFO is locked).

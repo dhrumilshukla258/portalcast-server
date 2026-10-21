@@ -134,11 +134,61 @@ const STEPS: Step[] = [
     },
   },
   {
+    name: "people",
+    run: async (db) => {
+      const has = (await db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'content_people'", { type: QueryTypes.SELECT })) as any[];
+      if (!has.length) return "no content_people table";
+      // Without an index on the person id, picking each person's latest row sorts all
+      // 1.65M rows (measured 5.6 min); with it the step takes seconds.
+      await db.query("CREATE INDEX IF NOT EXISTS tmp_content_people_person ON content_people (tmdbPersonId, id)");
+      // Each person once: the most recent name and photo per TMDB person; NFO names by name.
+      await db.query(`
+        INSERT OR IGNORE INTO people (tmdbPersonId, name, photo)
+        SELECT tmdbPersonId, name,
+               CASE WHEN photo LIKE 'https://image.tmdb.org/t/p/w185/%' THEN substr(photo, 32) ELSE photo END
+        FROM content_people WHERE id IN (SELECT max(id) FROM content_people WHERE tmdbPersonId IS NOT NULL GROUP BY tmdbPersonId)`);
+      await db.query(`
+        INSERT INTO people (tmdbPersonId, name, photo)
+        SELECT NULL, cp.name, max(cp.photo) FROM content_people cp
+        WHERE cp.tmdbPersonId IS NULL AND NOT EXISTS (SELECT 1 FROM people p WHERE p.tmdbPersonId IS NULL AND p.name = cp.name)
+        GROUP BY cp.name`);
+      // One list per title key, from one copy that has people. A local title with a locked
+      // NFO is not known here, so its list moves to the shared key like every other; the
+      // next library scan writes its own list back.
+      await db.query("DROP TABLE IF EXISTS temp.people_src");
+      await db.query(`
+        CREATE TEMP TABLE people_src AS
+        SELECT CASE WHEN m.tmdbId IS NOT NULL THEN m.type || ':' || m.tmdbId ELSE m.id END AS titleKey, min(m.id) AS contentId
+        FROM content_meta m WHERE m.id IN (SELECT DISTINCT contentId FROM content_people)
+        GROUP BY 1`);
+      await db.query(`
+        INSERT INTO title_people (titleKey, personId, kind, role, sortOrder)
+        SELECT s.titleKey, p.id, cp.kind, cp.role, cp.sortOrder
+        FROM people_src s JOIN content_people cp ON cp.contentId = s.contentId
+        JOIN people p ON p.tmdbPersonId = cp.tmdbPersonId
+        WHERE cp.tmdbPersonId IS NOT NULL`);
+      await db.query(`
+        INSERT INTO title_people (titleKey, personId, kind, role, sortOrder)
+        SELECT s.titleKey, p.id, cp.kind, cp.role, cp.sortOrder
+        FROM people_src s JOIN content_people cp ON cp.contentId = s.contentId
+        JOIN people p ON p.tmdbPersonId IS NULL AND p.name = cp.name
+        WHERE cp.tmdbPersonId IS NULL`);
+      const [{ before }] = (await db.query("SELECT count(*) AS before FROM content_people", { type: QueryTypes.SELECT })) as any[];
+      const [{ links }] = (await db.query("SELECT count(*) AS links FROM title_people", { type: QueryTypes.SELECT })) as any[];
+      const [{ persons }] = (await db.query("SELECT count(*) AS persons FROM people", { type: QueryTypes.SELECT })) as any[];
+      await db.query("DROP TABLE temp.people_src");
+      await db.query("DROP TABLE content_people");
+      return `${before} rows became ${persons} persons and ${links} title links`;
+    },
+  },
+  {
     name: "vacuum",
     run: async (db) => {
       const pages = async () => ((await db.query("PRAGMA page_count", { type: QueryTypes.SELECT })) as any[])[0].page_count as number;
       const b = await pages();
       await db.query("VACUUM");
+      // VACUUM writes through the WAL: fold it back in now, or it holds the old size on disk.
+      await db.query("PRAGMA wal_checkpoint(TRUNCATE)");
       const a = await pages();
       return `file compacted: ${((b * 4096) / 1048576).toFixed(0)} MB to ${((a * 4096) / 1048576).toFixed(0)} MB`;
     },

@@ -1,6 +1,6 @@
+import { storePeople, titleKeyOf } from "@/content/people";
 import { withBusyRetry } from "@/infra/busyRetry";
 import { lockOf } from "@/content/customArt";
-import { ContentPerson } from "@/models/ContentPerson";
 import type { TitleDetails } from "@/content/tmdb";
 import { setting } from "@/config/settings";
 import { enrichFromOmdb } from "@/content/omdb";
@@ -293,20 +293,13 @@ export async function storeDetails(contentId: string, d: TitleDetails, transacti
   if (d.collection) patch.collection = d.collection;
   if (d.originalTitle) patch.originalTitle = d.originalTitle;
   if (d.premiered) patch.premiered = d.premiered;
-  if (d.logo) {
-    const row = await ContentMeta.findByPk(contentId, { attributes: ["artLocked"], transaction });
-    if (!lockOf(row).logo) patch.logo = d.logo;
-  }
+  const row = await ContentMeta.findByPk(contentId, { attributes: ["id", "type", "tmdbId", "artLocked"], transaction });
+  if (d.logo && !lockOf(row).logo) patch.logo = d.logo;
   const writers = d.people.filter((p) => p.kind === "writer").map((p) => p.name);
   if (writers.length) patch.writers = [...new Set(writers)].slice(0, 6).join(", ");
   await ContentMeta.update(patch, { where: { id: contentId }, transaction });
-  if (d.people.length) {
-    await ContentPerson.destroy({ where: { contentId }, transaction });
-    await ContentPerson.bulkCreate(
-      d.people.map((p) => ({ contentId, kind: p.kind, name: p.name, role: p.role, sortOrder: p.order, tmdbPersonId: p.tmdbPersonId, photo: p.photo })),
-      { transaction },
-    );
-  }
+  // Shared by every copy of the title (content/people.ts).
+  if (d.people.length && row) await storePeople(titleKeyOf(row as any), d.people, transaction);
 }
 
 /**

@@ -1,7 +1,7 @@
+import { peopleOf, titleKeyOf } from "@/content/people";
 import { LOCAL_CATEGORY } from "@/content/metaEnrichment";
 import { localVersionLabel } from "@/content/library/catalog";
 import { categoryNames, iptvVersionLabel } from "@/content/versionLabel";
-import { ContentPerson } from "@/models/ContentPerson";
 import { artUrl } from "@/content/library/art";
 import { ratingFields } from "@/content/titleRatings";
 import { stripReleaseNoise, channelOf } from "@/content/titleClean";
@@ -130,12 +130,9 @@ async function titleDetails(id: string, origin: string) {
   const group = row.groupKey ? await ContentMeta.findAll({ where: { groupKey: row.groupKey } }) : [row];
   const members = [row, ...group.filter((g) => g.id !== row.id)];
   const first = (f: string) => members.map((m: any) => m[f]).find((v) => v != null && v !== "") ?? null;
-  // People: the first version that has any.
-  let people: ContentPerson[] = [];
-  for (const m of members) {
-    people = await ContentPerson.findAll({ where: { contentId: m.id }, order: [["sortOrder", "ASC"]] });
-    if (people.length) break;
-  }
+  // People: this copy's own list (a locked NFO) first, then the title's shared list, then
+  // any other version's (content/people.ts).
+  const people = await peopleOf([row.id, titleKeyOf(row as any), ...members.flatMap((m) => [m.id, titleKeyOf(m as any)])]);
   const by = (kind: string) => people.filter((p) => p.kind === kind).map((p) => ({ name: p.name, role: p.role, photo: p.photo ? proxiedImageUrl(p.photo, origin) : null }));
   return {
     id,

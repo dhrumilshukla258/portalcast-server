@@ -1,4 +1,3 @@
-import { ContentPerson } from "../models/ContentPerson";
 import { Library } from "../models/Library";
 import { LocalItem } from "../models/LocalItem";
 import { MediaFile } from "../models/MediaFile";
@@ -44,7 +43,7 @@ export const sequelize = new Sequelize({
     User, DeviceCode, UserProgress, ContentCache,
     ContentMeta, ContentGenre, ContentCountry, ContentTheme,
     StreamFailure, MediaInfo, SubtitleFile, SecurityEvent, RefreshToken,
-    Library, LocalItem, MediaFile, ContentPerson,
+    Library, LocalItem, MediaFile,
   ],
   logging: false,
 });
@@ -272,6 +271,15 @@ export async function initDB() {
       ["logo", "VARCHAR(255)"], ["writers", "TEXT"], ["detailsCheckedAt", "DATETIME"], ["artLocked", "JSON"],
       ["trailerKey", "VARCHAR(255)"],
     ]);
+    // Cast and crew stored once (content/people.ts), replacing content_people.
+    await sequelize.query(
+      "CREATE TABLE IF NOT EXISTS `people` (`id` INTEGER PRIMARY KEY, `tmdbPersonId` INTEGER UNIQUE, `name` TEXT NOT NULL, `photo` TEXT)",
+    );
+    await sequelize.query(
+      "CREATE TABLE IF NOT EXISTS `title_people` (`titleKey` TEXT NOT NULL, `personId` INTEGER NOT NULL, `kind` TEXT NOT NULL, `role` TEXT, `sortOrder` INTEGER NOT NULL)",
+    );
+    await sequelize.query("CREATE INDEX IF NOT EXISTS `idx_title_people_title` ON `title_people` (`titleKey`, `sortOrder`)");
+    await sequelize.query("CREATE INDEX IF NOT EXISTS `idx_title_people_person` ON `title_people` (`personId`)");
     // Episode id -> series (content/episodeIndex.ts), replacing ep_info_* rows of xtream_cache.
     await sequelize.query(
       "CREATE TABLE IF NOT EXISTS `episode_index` (`episodeId` INTEGER PRIMARY KEY, `seriesId` INTEGER NOT NULL, `episode` INTEGER)",
