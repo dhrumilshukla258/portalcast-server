@@ -65,6 +65,7 @@ export function keyframesFor(f: MediaFile, abs: string): Promise<number[] | null
       times.sort((a, b) => a - b);
       if (!times.length) return null;
       await MediaFile.update({ keyframes: times } as any, { where: { id: f.id } });
+      (f as any).keyframes = times; // the stream route reuses this row for a few seconds
       return times;
     } catch (e: any) {
       logger.warn(`[remux] keyframes of file ${f.id} could not be read: ${e?.message ?? e}`);

@@ -27,12 +27,43 @@ const MIME: Record<string, string> = {
 const CHUNK = 1024 * 1024;
 
 /** The local file a token names, or null. */
+// A player asks for a file in hundreds of byte ranges a minute: the file row and its size
+// are kept for a few seconds instead of a database read and a NAS check per range.
+const RECENT_MS = 15_000;
+const recentFiles = new Map<string, { at: number; value: { file: MediaFile; abs: string } }>();
+const recentSizes = new Map<string, { at: number; size: number }>();
+
+function prune<T extends { at: number }>(m: Map<string, T>): void {
+  if (m.size < 200) return;
+  const now = Date.now();
+  for (const [k, v] of m) if (now - v.at > RECENT_MS) m.delete(k);
+}
+
 export async function fileForToken(resource: string | undefined): Promise<{ file: MediaFile; abs: string } | null> {
   const m = /^local:(\d+)$/.exec(resource ?? "");
   if (!m) return null;
+  const hit = recentFiles.get(m[1]);
+  if (hit && Date.now() - hit.at < RECENT_MS) return hit.value;
   const file = await MediaFile.findByPk(Number(m[1]));
   if (!file || file.missingSince) return null;
-  return { file, abs: path.join(file.root, file.relPath) };
+  const value = { file, abs: path.join(file.root, file.relPath) };
+  prune(recentFiles);
+  recentFiles.set(m[1], { at: Date.now(), value });
+  return value;
+}
+
+/** The file's size in bytes (null when the disk or file is gone), checked at most every 15 s. */
+async function fileSize(abs: string): Promise<number | null> {
+  const hit = recentSizes.get(abs);
+  if (hit && Date.now() - hit.at < RECENT_MS) return hit.size;
+  try {
+    const st = await fs.promises.stat(abs);
+    prune(recentSizes);
+    recentSizes.set(abs, { at: Date.now(), size: st.size });
+    return st.size;
+  } catch {
+    return null;
+  }
 }
 
 function parseRange(header: string | undefined, size: number): { start: number; end: number } | null | "invalid" {
@@ -146,13 +177,8 @@ export const localStreamRoutes: ServerRoute[] = [
         if ((request.query as any)?.t && !request.app?.streamTokenWrongNetwork) recordFromRequest(request, "stream_token_invalid");
         return h.response({ error: "Invalid or expired link" }).code(403);
       }
-      let st: fs.Stats;
-      try {
-        st = await fs.promises.stat(target.abs);
-      } catch {
-        return h.response({ error: "The file is not reachable (is the disk online?)" }).code(404);
-      }
-      const size = st.size;
+      const size = await fileSize(target.abs);
+      if (size === null) return h.response({ error: "The file is not reachable (is the disk online?)" }).code(404);
       const type = MIME[path.extname(target.abs).toLowerCase()] ?? "application/octet-stream";
       streamTracker.touch("vod", clientIp(request), `local:${target.file.id}`, entry.userLabel, {
         kind: "movie", label: entry.label, category: entry.category,
