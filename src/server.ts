@@ -42,7 +42,9 @@ import { adminRoutes } from "./routes/contentmanager";
 import { authRoutes } from "./routes/account/auth";
 import { userRoutes } from "./routes/account/user";
 import { userManagementRoutes } from "./routes/account/userManagement";
-import { discoverRoutes, discoverDetailsRoute, personRoute } from "./routes/discover";
+import { discoverRoutes, discoverDetailsRoute, personRoute, peopleSearchRoute } from "./routes/discover";
+import { buildPeopleIndex, markPeopleChanged } from "./content/peopleSearch";
+import { onDiscoverCacheClear } from "./services/discoverCache";
 import { socketService } from "./services/SocketService";
 
 import { initDB, sequelize } from "./db";
@@ -97,7 +99,10 @@ const init = async () => {
   registerJob({ name: "backup", label: "Back up the database", dailyAtHour: 4, run: backupDatabase });
   registerJob({ name: "library-scan", label: "Scan local libraries", dailyAtHour: 3, run: () => scanLibraries() });
   registerJob({ name: "image-cache", label: "Trim the image cache", dailyAtHour: 5, run: evictImageCache });
-  registerJob({ name: "people", label: "Remove unused cast lists", dailyAtHour: 5, run: tidyPeople });
+  registerJob({
+    name: "people", label: "Remove unused cast lists", dailyAtHour: 5,
+    run: async () => { const r = await tidyPeople(); markPeopleChanged(); return r; },
+  });
   registerJob({
     name: "page-cache", label: "Remove expired page answers", dailyAtHour: 5,
     run: async () => `${await ContentCache.destroy({ where: { expiresAt: { [Op.lt]: new Date() } } })} removed`,
@@ -153,6 +158,7 @@ const init = async () => {
   server.route(discoverRoutes);
   server.route(discoverDetailsRoute);
   server.route(personRoute);
+  server.route(peopleSearchRoute);
   // Is the IPTV portal reachable (services/portalHealth.ts)? Signed-in clients only.
   server.route({ method: "GET", path: "/api/v2/health/iptv", handler: () => iptvHealth() });
 
@@ -478,6 +484,10 @@ const init = async () => {
       for (const type of ["movie", "series"] as const) await getCatalogUnion(type, profileId);
     })().catch((e) => logger.warn(`[search] startup warm-up failed: ${e?.message ?? e}`));
   }, 20_000).unref?.();
+  // People search (content/peopleSearch.ts): built in a worker thread after the startup
+  // warm-ups, rebuilt when enrichment or the people tidy changes who is in the catalog.
+  setTimeout(() => void buildPeopleIndex(), 30_000).unref?.();
+  onDiscoverCacheClear(markPeopleChanged);
   // Channel logos for Discover (content/channels.ts): portal logos now, TMDB network logos
   // a minute later in the background (one-time, cached; retried weekly for misses).
   refreshChannelLogos();

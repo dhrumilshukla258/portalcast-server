@@ -447,6 +447,34 @@ On top of the JWT requirement, a role check applies:
 - Built once per catalog snapshot (fingerprint of size + ids) and reused; searches keep the
   ranked order through overrides and never append moved-in items.
 
+### People search
+
+`GET /api/v2/search/people?q=&limit=` (`src/content/peopleSearch.ts`) finds actors, directors,
+creators and writers by name. Clients call it next to the title searches and show People plus,
+when the query clearly names one person, "Movies & series with X".
+
+- **Who:** everyone with a major credit on a catalog title (director, creator, first 10 billed
+  cast), ~258k people.
+- **Data layout (structure of arrays):** person *d* is the same index in every column: ids,
+  popularity (major credits) and role flags in typed arrays; normalized names, display names,
+  photos and the sorted word list each packed into one byte buffer with an offsets array;
+  postings in one `Int32Array`. ~27 MB, almost nothing for the garbage collector to walk.
+  People are numbered most popular first, so 1–2 letter prefixes stop after the top 20k.
+- **Build:** in a worker thread with its own read-only SQLite connection (one scan of
+  `title_people NOT INDEXED`, ~4–6 s; through an index it took 16–22 s), buffers transferred
+  zero-copy and swapped in. The main thread pauses <60 ms. 30 s after start, then when
+  enrichment or the people tidy changes people (at most every 15 min). Never `terminate()` the
+  worker: killing it while sqlite3 closes aborts the process.
+- **Query:** binary search for each word's prefix range, AND across words, one-typo fallback;
+  preallocated scratch arrays, so a query allocates nothing per match. Ranked by word match,
+  name equal to / starting with the query, then log(popularity). Typical 0.05–1.5 ms, worst
+  ~2.5 ms; answers cached per normalized query (LRU 5000) until the next build, ~2 µs.
+- **Featured:** the top hit names the query and leads every other hit two to one ("mohanlal",
+  "shah rukh", "tom han"; not "khan", "tom"). Its titles come from the person page payload
+  (cached in Discover's cache, built once for concurrent requests), ordered by titles they lead,
+  then IMDb/TMDB votes.
+- HTTP: `private, max-age=300` + ETag (`infra/httpCaching.ts`).
+
 ## API Reference
 
 ### Browse (`/api/v2`, used by the web UI and TV apps)

@@ -147,7 +147,14 @@ export async function personDetails(id: number, fetchPerson: (tmdbId: number) =>
  * every way they worked on it (cast as "Ip Man", director, writer...). Titles only in TMDB are
  * not listed: the page shows what can be played.
  */
-export async function personCredits(id: number): Promise<{ row: any; roles: { kind: string; role: string | null }[] }[]> {
+export interface PersonCredit {
+  row: any;
+  roles: { kind: string; role: string | null }[];
+  /** They lead it: director, creator, or one of the first three billed cast members. */
+  lead: boolean;
+}
+
+export async function personCredits(id: number): Promise<PersonCredit[]> {
   const q = (sql: string, r: any[] = []) => db().query(sql, { replacements: r, type: QueryTypes.SELECT }) as Promise<any[]>;
   const links = await q("SELECT titleKey, kind, role, sortOrder FROM title_people WHERE personId = ?", [id]);
   if (!links.length) return [];
@@ -157,9 +164,10 @@ export async function personCredits(id: number): Promise<{ row: any; roles: { ki
     if (!list.some((x) => x.kind === l.kind && x.role === l.role)) list.push({ kind: l.kind, role: l.role });
     rolesByKey.set(l.titleKey, list);
   }
+  const leadKeys = new Set(links.filter((l) => l.kind !== "writer" && (l.kind !== "cast" || Number(l.sortOrder) < 3)).map((l) => l.titleKey));
   // Keys are "<type>:<tmdbId>" or a content id; each becomes the card Discover shows (the
   // group's representative), preferring a representative row.
-  const out = new Map<string, { row: any; roles: { kind: string; role: string | null }[] }>();
+  const out = new Map<string, PersonCredit>();
   const keys = [...rolesByKey.keys()];
   const byTmdb = keys.filter((k) => /^(movie|series):\d+$/.test(k));
   const byId = keys.filter((k) => !/^(movie|series):\d+$/.test(k));
@@ -180,14 +188,14 @@ export async function personCredits(id: number): Promise<{ row: any; roles: { ki
     for (const k of slice) {
       const [t, n] = k.split(":");
       const rep = await pickRep(rows.filter((r) => r.type === t && Number(r.tmdbId) === Number(n)));
-      if (rep && !out.has(rep.id)) out.set(rep.id, { row: rep, roles: rolesByKey.get(k)! });
+      if (rep && !out.has(rep.id)) out.set(rep.id, { row: rep, roles: rolesByKey.get(k)!, lead: leadKeys.has(k) });
       else if (rep) out.get(rep.id)!.roles.push(...rolesByKey.get(k)!);
     }
   }
   for (const k of byId) {
     const rows = await q("SELECT * FROM content_meta WHERE id = ?", [k]);
     const rep = await pickRep(rows);
-    if (rep && !out.has(rep.id)) out.set(rep.id, { row: rep, roles: rolesByKey.get(k)! });
+    if (rep && !out.has(rep.id)) out.set(rep.id, { row: rep, roles: rolesByKey.get(k)!, lead: leadKeys.has(k) });
   }
   return [...out.values()].sort((a, b) => (Number(b.row.year) || 0) - (Number(a.row.year) || 0) || String(a.row.name).localeCompare(String(b.row.name)));
 }

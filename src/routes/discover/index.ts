@@ -1,5 +1,7 @@
 import { fetchPerson } from "@/content/tmdb";
 import { personDetails, personCredits } from "@/content/people";
+import { searchPeople, peopleIndexReady } from "@/content/peopleSearch";
+import { getCached, setCached } from "@/services/discoverCache";
 import { peopleOf, titleKeyOf } from "@/content/people";
 import { LOCAL_CATEGORY } from "@/content/metaEnrichment";
 import { localVersionLabel } from "@/content/library/catalog";
@@ -173,22 +175,82 @@ export const discoverDetailsRoute = {
  * in the catalog, one card per title with their roles in it, newest first. Biography and the
  * like come from TMDB the first time the page is opened (content/people.ts).
  */
+/**
+ * A person's page payload, cached in memory (Discover's cache: cleared when enrichment or a
+ * content-manager edit changes the catalog, 10 min otherwise) and built once however many
+ * clients ask at the same moment. Keyed by origin: image URLs carry it.
+ */
+interface PersonPagePayload {
+  /** The response of GET /api/v2/people/{id}: credits newest first. */
+  page: { person: any; credits: any[] };
+  /** The same credits, best known first: titles they lead, then the most rated. */
+  knownFor: any[];
+}
+const personInflight = new Map<string, Promise<PersonPagePayload | null>>();
+async function personPage(id: number, origin: string): Promise<PersonPagePayload | null> {
+  const key = `person:${id}:${origin}`;
+  const cached = getCached<PersonPagePayload>(key);
+  if (cached) return cached;
+  const running = personInflight.get(key);
+  if (running) return running;
+  const work = (async () => {
+    const person = await personDetails(id, fetchPerson);
+    if (!person) return null;
+    const hidden = await getHiddenContentKeySet();
+    const credits = (await personCredits(id)).filter((c) => !hidden.has(c.row.id));
+    const ids = credits.map((c) => c.row.id);
+    const [genresById, countriesById] = await Promise.all([tagsByContentId(ContentGenre, ids), tagsByContentId(ContentCountry, ids)]);
+    const items = credits.map((c) => ({ ...toMediaItem(c.row, genresById, countriesById, origin), roles: c.roles }));
+    const votes = (r: any) => Math.max(Number(r.imdbVotes) || 0, Number(r.ratingCount) || 0);
+    const order = credits.map((c, i) => ({ i, lead: c.lead ? 1 : 0, v: votes(c.row) })).sort((a, b) => b.lead - a.lead || b.v - a.v);
+    const payload: PersonPagePayload = {
+      page: { person: { ...person, photo: person.photo ? proxiedImageUrl(person.photo, origin) : null }, credits: items },
+      knownFor: order.map((o) => items[o.i]),
+    };
+    setCached(key, payload);
+    return payload;
+  })().finally(() => personInflight.delete(key));
+  personInflight.set(key, work);
+  return work;
+}
+
 export const personRoute = {
   method: "GET" as const,
   path: "/api/v2/people/{id}",
   handler: async (request: any, h: any) => {
     const id = Number(request.params.id);
     if (!Number.isSafeInteger(id) || id <= 0) return h.response({ error: "Bad id" }).code(400);
-    const person = await personDetails(id, fetchPerson);
-    if (!person) return h.response({ error: "Unknown person" }).code(404);
+    const p = await personPage(id, getPublicOrigin(request));
+    return p ? p.page : h.response({ error: "Unknown person" }).code(404);
+  },
+};
+
+/** Titles shown under a featured person in search ("Movies & series with ..."). */
+const FEATURED_TITLES = 24;
+
+/**
+ * `GET /api/v2/search/people?q=&limit=`: people by name from the in-memory index
+ * (content/peopleSearch.ts), plus, when the query clearly names one person, their titles
+ * so the client shows "Movies & series with X" without a second request.
+ */
+export const peopleSearchRoute = {
+  method: "GET" as const,
+  path: "/api/v2/search/people",
+  handler: async (request: any) => {
+    const q = String(request.query.q ?? "").slice(0, 100);
+    const limit = Math.min(60, Math.max(1, Number(request.query.limit) || 30));
+    const { people, featured } = searchPeople(q, limit);
     const origin = getPublicOrigin(request);
-    const hidden = await getHiddenContentKeySet();
-    const credits = (await personCredits(id)).filter((c) => !hidden.has(c.row.id));
-    const ids = credits.map((c) => c.row.id);
-    const [genresById, countriesById] = await Promise.all([tagsByContentId(ContentGenre, ids), tagsByContentId(ContentCountry, ids)]);
+    const photo = (p: string | null) => (p ? proxiedImageUrl(p, origin) : null);
+    let featuredOut: any = null;
+    if (featured) {
+      const p = await personPage(featured.id, origin);
+      if (p?.knownFor.length) featuredOut = { id: featured.id, name: featured.name, credits: p.knownFor.slice(0, FEATURED_TITLES), total: p.knownFor.length };
+    }
     return {
-      person: { ...person, photo: person.photo ? proxiedImageUrl(person.photo, origin) : null },
-      credits: credits.map((c) => ({ ...toMediaItem(c.row, genresById, countriesById, origin), roles: c.roles })),
+      people: people.map((p) => ({ ...p, photo: photo(p.photo) })),
+      featured: featuredOut,
+      ready: peopleIndexReady(),
     };
   },
 };

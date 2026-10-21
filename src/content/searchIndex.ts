@@ -54,7 +54,7 @@ function tokensOf(norm: string): string[] {
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 
 /** Every string one edit (delete, adjacent swap, substitute, insert) away from `w`. */
-function editsOne(w: string): string[] {
+export function editsOne(w: string): string[] {
   const out: string[] = [];
   for (let i = 0; i < w.length; i++) out.push(w.slice(0, i) + w.slice(i + 1));
   for (let i = 0; i + 1 < w.length; i++) out.push(w.slice(0, i) + w[i + 1] + w[i] + w.slice(i + 2));
