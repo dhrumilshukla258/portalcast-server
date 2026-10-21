@@ -1,6 +1,6 @@
 import { keyframesFor, segmentsFor, playlistFor, segmentProcess } from "@/content/library/remux";
 import { customArtPath } from "@/content/customArt";
-import { validCacheRequest, cachedImagePath } from "@/content/imageCache";
+import { validCacheRequest, cachedImage } from "@/content/imageCache";
 import { LocalItem } from "@/models/LocalItem";
 import { verifyArt } from "@/content/library/art";
 import { spawn } from "child_process";
@@ -99,10 +99,10 @@ export const localStreamRoutes: ServerRoute[] = [
     handler: async (request, h) => {
       const { size, file } = request.params as { size: string; file: string };
       if (!validCacheRequest(size, file)) return h.response("Not found").code(404);
-      const p = await cachedImagePath(size, file);
-      if (!p) return h.redirect(`https://image.tmdb.org/t/p/${size}/${file}`); // TMDB answers itself
+      const bytes = await cachedImage(size, file);
+      if (!bytes) return h.redirect(`https://image.tmdb.org/t/p/${size}/${file}`); // TMDB answers itself
       const type = IMAGE_MIME[path.extname(file).toLowerCase()] ?? (file.endsWith(".svg") ? "image/svg+xml" : "application/octet-stream");
-      return h.response(fs.createReadStream(p)).type(type).header("Cache-Control", "public, max-age=31536000, immutable");
+      return h.response(bytes).type(type).header("Cache-Control", "public, max-age=31536000, immutable");
     },
   },
   {
