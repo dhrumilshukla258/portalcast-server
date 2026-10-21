@@ -462,7 +462,7 @@ when the query clearly names one person, "Movies & series with X".
   People are numbered most popular first, so 1–2 letter prefixes stop after the top 20k.
 - **Build:** in a worker thread with its own read-only SQLite connection (one scan of
   `title_people NOT INDEXED`, ~4–6 s; through an index it took 16–22 s), buffers transferred
-  zero-copy and swapped in. The main thread pauses <60 ms. 30 s after start, then when
+  zero-copy and swapped in. The main thread pauses <60 ms. Rows are streamed in popularity order (`ORDER BY` in SQL, `each`, no row array) straight into growable packed buffers; the worker runs with a small young generation (8 MB) so short-lived strings are collected early. Peak memory during a build went from about +457 MB to about +250 MB (the live server briefly hit 867 MB of 1 GB with the old build). Never give the worker an old-generation cap: hitting it while sqlite3 is in native code aborts the whole process (measured). 30 s after start, then when
   enrichment or the people tidy changes people (at most every 15 min). Never `terminate()` the
   worker: killing it while sqlite3 closes aborts the process.
 - **Query:** binary search for each word's prefix range, AND across words, one-typo fallback;

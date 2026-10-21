@@ -256,49 +256,94 @@ function workerMain(): void {
   const { parentPort, workerData } = require("worker_threads");
   const sqlite3 = require(workerData.sqlite3);
   const normalize = new Function(`return (${workerData.normalizeSource})`)() as (s: string) => string;
+  const enc = new TextEncoder();
+
+  // Growable packed buffers: rows are streamed one at a time and written straight into these,
+  // so no array of row objects or per-row byte arrays ever exists (peak memory stays low).
+  const ints = () => {
+    let arr = new Int32Array(1 << 16), len = 0;
+    return {
+      push(v: number) { if (len === arr.length) { const next = new Int32Array(arr.length * 2); next.set(arr); arr = next; } arr[len++] = v; },
+      get length() { return len; },
+      out() { const r = arr.slice(0, len); arr = new Int32Array(0); return r; },
+    };
+  };
+  const bytes = () => {
+    let buf = new Uint8Array(1 << 20), len = 0;
+    return {
+      push(str: string) {
+        const need = len + str.length * 3;
+        if (need > buf.length) { let size = buf.length * 2; while (size < need) size *= 2; const next = new Uint8Array(size); next.set(buf.subarray(0, len)); buf = next; }
+        len += enc.encodeInto(str, buf.subarray(len)).written;
+      },
+      get length() { return len; },
+      out() { const r = buf.slice(0, len); buf = new Uint8Array(0); return r; },
+    };
+  };
+
+  const ids = ints(), weight = ints(), kinds = ints();
+  const norms = bytes(), names = bytes(), photos = bytes();
+  const normOff = ints(), nameOff = ints(), photoOff = ints();
+  // Terms: id per distinct word, and one (term, person) pair per occurrence.
+  const termIndex = new Map<string, number>();
+  const termStrs: string[] = [];
+  const pairTerm = ints(), pairDoc = ints();
+  let count = 0;
+
   const conn = new sqlite3.Database(workerData.dbPath, sqlite3.OPEN_READONLY, (openErr: any) => {
     if (openErr) { parentPort.postMessage({ error: String(openErr.message || openErr) }); return; }
     conn.configure("busyTimeout", 5000);
-    conn.all(workerData.sql, (err: any, rows: any[]) => conn.close(() => {
-      if (err) { parentPort.postMessage({ error: String(err.message || err) }); return; }
-      const readMs = Date.now() - workerData.started;
-      rows.sort((a, b) => b.n - a.n || a.id - b.id); // doc ids in popularity order
-      const n = rows.length;
-      const enc = new TextEncoder();
-      const ids = new Int32Array(n), weight = new Int32Array(n), kinds = new Uint8Array(n);
-      const normOff = new Int32Array(n + 1), nameOff = new Int32Array(n + 1), photoOff = new Int32Array(n + 1);
-      const normParts: string[] = new Array(n);
-      const nameBytes: Uint8Array[] = new Array(n), photoBytes: Uint8Array[] = new Array(n);
-      const termDocs = new Map<string, number[]>();
-      let normLen = 0, nameLen = 0, photoLen = 0;
-      for (let d = 0; d < n; d++) {
-        const r = rows[d];
-        ids[d] = r.id; weight[d] = r.n; kinds[d] = r.k;
-        const norm = normalize(String(r.name || ""));
-        normParts[d] = norm; normOff[d] = normLen; normLen += norm.length;
-        nameBytes[d] = enc.encode(String(r.name || "")); nameOff[d] = nameLen; nameLen += nameBytes[d].length;
-        photoBytes[d] = enc.encode(r.photo || ""); photoOff[d] = photoLen; photoLen += photoBytes[d].length;
+    conn.each(
+      workerData.sql,
+      (err: any, r: any) => {
+        if (err) return;
+        const d = count++; // rows arrive most popular first (ORDER BY in the query)
+        ids.push(r.id); weight.push(r.n); kinds.push(r.k);
+        const name = String(r.name || "");
+        const norm = normalize(name);
+        normOff.push(norms.length); norms.push(norm);
+        nameOff.push(names.length); names.push(name);
+        photoOff.push(photos.length); photos.push(r.photo || "");
         const words = norm ? norm.split(" ") : [];
         const terms = new Set<string>(words);
         for (let i = 0; i + 1 < words.length; i++) terms.add(words[i] + words[i + 1]);
-        for (const t of terms) { const l = termDocs.get(t); if (l) l.push(d); else termDocs.set(t, [d]); }
-      }
-      normOff[n] = normLen; nameOff[n] = nameLen; photoOff[n] = photoLen;
-      const norms = enc.encode(normParts.join(""));
-      const names = new Uint8Array(nameLen), photos = new Uint8Array(photoLen);
-      for (let d = 0; d < n; d++) { names.set(nameBytes[d], nameOff[d]); photos.set(photoBytes[d], photoOff[d]); }
-      const terms = [...termDocs.keys()].sort();
-      const vocabOff = new Int32Array(terms.length + 1), postOff = new Int32Array(terms.length + 1);
-      let vLen = 0, pLen = 0;
-      for (let i = 0; i < terms.length; i++) { vocabOff[i] = vLen; vLen += terms[i].length; postOff[i] = pLen; pLen += termDocs.get(terms[i])!.length; }
-      vocabOff[terms.length] = vLen; postOff[terms.length] = pLen;
-      const vocab = enc.encode(terms.join(""));
-      const postings = new Int32Array(pLen);
-      for (let i = 0; i < terms.length; i++) postings.set(termDocs.get(terms[i])!, postOff[i]); // ascending = popularity order
-      const packed = { count: n, ids, weight, kinds, norms, normOff, names, nameOff, photos, photoOff, vocab, vocabOff, postings, postOff };
-      const transfer = Object.values(packed).filter((v: any) => v && v.buffer).map((v: any) => v.buffer);
-      parentPort.postMessage({ packed, readMs, terms: terms.length }, transfer);
-    }));
+        for (const t of terms) {
+          let ti = termIndex.get(t);
+          if (ti === undefined) { ti = termStrs.length; termIndex.set(t, ti); termStrs.push(t); }
+          pairTerm.push(ti); pairDoc.push(d);
+        }
+      },
+      (err: any) => conn.close(() => {
+        if (err) { parentPort.postMessage({ error: String(err.message || err) }); return; }
+        const readMs = Date.now() - workerData.started;
+        normOff.push(norms.length); nameOff.push(names.length); photoOff.push(photos.length);
+        termIndex.clear();
+        // Sort the vocabulary (byte order = the order main-thread binary searches expect), then
+        // place each pair under its term: counting sort, so postings stay in popularity order.
+        const order = Int32Array.from(termStrs.keys()).sort((x, y) => (termStrs[x] < termStrs[y] ? -1 : termStrs[x] > termStrs[y] ? 1 : 0));
+        const rank = new Int32Array(termStrs.length);
+        for (let i = 0; i < order.length; i++) rank[order[i]] = i;
+        const pt = pairTerm.out(), pd = pairDoc.out();
+        const postOff = new Int32Array(termStrs.length + 1);
+        for (let k = 0; k < pt.length; k++) postOff[rank[pt[k]] + 1]++;
+        for (let i = 0; i < termStrs.length; i++) postOff[i + 1] += postOff[i];
+        const cursor = postOff.slice(0, termStrs.length);
+        const postings = new Int32Array(pt.length);
+        for (let k = 0; k < pt.length; k++) postings[cursor[rank[pt[k]]]++] = pd[k];
+        const vocabB = bytes(), vocabOff = ints();
+        for (let i = 0; i < order.length; i++) { vocabOff.push(vocabB.length); vocabB.push(termStrs[order[i]]); }
+        vocabOff.push(vocabB.length);
+        const packed = {
+          count, ids: ids.out(), weight: weight.out(), kinds: Uint8Array.from(kinds.out()),
+          norms: norms.out(), normOff: normOff.out(), names: names.out(), nameOff: nameOff.out(),
+          photos: photos.out(), photoOff: photoOff.out(),
+          vocab: vocabB.out(), vocabOff: vocabOff.out(), postings, postOff,
+        };
+        const transfer = Object.values(packed).filter((v: any) => v && v.buffer).map((v: any) => v.buffer);
+        const heapMb = Math.round(require("v8").getHeapStatistics().total_heap_size / 1048576);
+        parentPort.postMessage({ packed, readMs, terms: termStrs.length, heapMb }, transfer);
+      }),
+    );
   });
 }
 
@@ -310,15 +355,22 @@ const BUILD_SQL = `SELECT p.id, p.name, p.photo, a.n, a.k FROM (
          | MAX(CASE kind WHEN 'creator' THEN ${KIND_CREATOR} ELSE 0 END)
          | MAX(CASE kind WHEN 'writer' THEN ${KIND_WRITER} ELSE 0 END) AS k
     FROM title_people NOT INDEXED GROUP BY personId
-  ) a JOIN people p ON p.id = a.personId WHERE a.n > 0`;
+  ) a JOIN people p ON p.id = a.personId WHERE a.n > 0
+  ORDER BY a.n DESC, p.id`;
 
-function buildInWorker(): Promise<{ packed: Packed; readMs: number; terms: number }> {
+function buildInWorker(): Promise<{ packed: Packed; readMs: number; terms: number; heapMb: number }> {
   return new Promise((resolve, reject) => {
     // `var __name`: esbuild (tsx, tsup) may wrap named functions in a __name() helper that
     // does not exist inside the eval'd worker.
     const source = `var __name = (f) => f;\n(${workerMain.toString()})();`;
     const worker = new Worker(source, {
       eval: true,
+      // Small young generation: the build allocates many short-lived strings, and a small
+      // nursery makes the worker collect them often instead of growing its heap. (Never an old-
+      // generation cap: a worker that hits one while sqlite3 is in native code aborts the whole
+      // process, measured.)
+      resourceLimits: { maxYoungGenerationSizeMb: 8 },
+
       workerData: {
         dbPath: databasePath,
         sqlite3: require.resolve("sqlite3"),
@@ -359,12 +411,12 @@ export async function buildPeopleIndex(): Promise<void> {
   dirty = false;
   const t0 = Date.now();
   try {
-    const { packed, readMs, terms } = await buildInWorker();
+    const { packed, readMs, terms, heapMb } = await buildInWorker();
     index = new PeopleIndex(packed);
     answers.clear();
     lastBuild = Date.now();
     const mb = Object.values(packed).reduce((s: number, v: any) => s + (v?.byteLength ?? 0), 0) / 1e6;
-    logger.info(`[people] search index: ${packed.count} people, ${terms} words, ${mb.toFixed(1)} MB (read ${readMs} ms, ready in ${lastBuild - t0} ms, off the main thread)`);
+    logger.info(`[people] search index: ${packed.count} people, ${terms} words, ${mb.toFixed(1)} MB (read ${readMs} ms, ready in ${lastBuild - t0} ms, worker heap ${heapMb} MB, off the main thread)`);
   } catch (e: any) {
     logger.warn(`[people] search index build failed: ${e?.message ?? e}`);
   } finally {
