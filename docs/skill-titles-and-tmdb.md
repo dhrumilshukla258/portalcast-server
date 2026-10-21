@@ -50,6 +50,10 @@ Both the name **and** the TMDB id must agree. Grouping by TMDB id alone merged 2
 
 Stored per title besides art and tags: `overview`, `cast`, `director` (a series stores its **creators** there, TMDB `created_by`; clients label it "Created by"), `rating` + `ratingCount` (TMDB vote average and votes), and `imdbId` (from TMDB).
 
+## Details (as detailed as Jellyfin)
+
+One TMDB details call per title (`fetchDetail`, with `credits`, `aggregate_credits` for series, `release_dates` / `content_ratings`, `images`, `external_ids`) gives `TmdbMeta.details`: tagline, age rating (US, else IN, GB, CA, AU), runtime, studios (series: networks), collection, original title, premiere date, logo (English or textless PNG preferred), and people: up to 20 cast with characters and 185 px photos, directors, writers, creators. `storeDetails()` writes the `content_meta` columns (`tagline`, `ageRating`, `runtime`, `studios`, `collection`, `originalTitle`, `premiered`, `logo`, `writers`) and replaces the title's `content_people` rows; only filled values are written. The one-time step `backfill-details` refetches every matched title by id (newest first, `detailsCheckedAt` marks the ones done). Cards carry the short fields (`tagline`, `rating_mpaa`, `runtime`, `studios`, `collection`, `writers`, `premiered`, `logo_path`); `GET /api/v2/discover/details?id=movie_123` (or `type=&raw=`) gives a detail page everything including cast and crew with photos, taking missing fields from another version of the title.
+
 ## Ratings
 
 Every title shows **one** rating, chosen by the server (`bestRating()` in `content/titleRatings.ts`) and sent as `rating_best` + `rating_source`. All versions of a title (one `groupKey`: "ABC HD", "ABC - Hindi", "ABC Dub") show the same rating and details, merged across the group by `groupDataFor()`; Discover cards and the Movies / Series list items (`enrichArtworkFromTmdb` in `routes/stalkerV2/shared.ts`) both carry them, filling the portal's empty description/cast/director. The order:
