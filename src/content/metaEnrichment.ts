@@ -323,7 +323,7 @@ async function backfillDetails(): Promise<void> {
     try {
       const meta = await fetchMetaByTmdbId(r.type === "series" ? "tv" : "movie", Number(r.tmdbId));
       if (meta?.details) {
-        await withBusyRetry(`[MetaEnrich] details ${r.id}`, () => ContentMeta.sequelize!.transaction((t) => storeDetails(r.id, meta.details, t)));
+        await withBusyRetry(`[MetaEnrich] details ${r.id}`, () => ContentMeta.sequelize!.transaction({ type: Transaction.TYPES.IMMEDIATE }, (t) => storeDetails(r.id, meta.details, t)));
         filled++;
       }
     } catch (e: any) {
@@ -456,7 +456,10 @@ export async function recomputeRepresentatives(): Promise<void> {
   // The tag tables mirror the flag so facet/browse filtering never needs a join back to
   // content_meta (see ContentGenre.ts for the incident that made this necessary).
   // Runs inside one transaction so the temp table and the updates share a connection.
-  await sequelize.transaction(async (transaction) => {
+  // IMMEDIATE: the write lock is taken first (waiting its turn). A plain transaction reads
+  // for ~3 s and then fails at once with SQLITE_BUSY when it tries to write after another
+  // writer (the details backfill, every ~120 ms) committed in between.
+  await sequelize.transaction({ type: Transaction.TYPES.IMMEDIATE }, async (transaction) => {
     const q = (sql: string) => sequelize.query(sql, { transaction });
     await q("CREATE TEMP TABLE IF NOT EXISTS `rep_ids` (`id` TEXT PRIMARY KEY) WITHOUT ROWID;");
     await q("DELETE FROM temp.`rep_ids`;");

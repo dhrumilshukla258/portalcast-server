@@ -49,6 +49,23 @@ export const sequelize = new Sequelize({
   logging: false,
 });
 
+// Every transaction gets its OWN SQLite connection (sequelize's sqlite ConnectionManager keys
+// connections by the transaction id; only plain queries share "default"), so a PRAGMA run once
+// reaches only the default connection. Busy wait per connection, set here as each one opens:
+// without it a transaction meeting another writer failed with SQLITE_BUSY almost at once.
+{
+  const cm = sequelize.connectionManager as any;
+  const getConnection = cm.getConnection.bind(cm);
+  cm.getConnection = async (options: any) => {
+    const connection = await getConnection(options);
+    if (!connection.__busyTimeoutSet) {
+      connection.configure("busyTimeout", 5000);
+      connection.__busyTimeoutSet = true;
+    }
+    return connection;
+  };
+}
+
 /** ALTER TABLE ... ADD COLUMN for each column the table is missing (idempotent). */
 async function ensureColumns(table: string, columns: [string, string][]): Promise<void> {
   try {
@@ -99,10 +116,9 @@ export async function initDB() {
     // (e.g. background content-meta enrichment vs. a user's progress save)
     // would otherwise fail immediately with SQLITE_BUSY instead of just
     // waiting a beat. This makes a colliding writer retry internally for up
-    // to 5s before giving up. Same "set once, applies to the single shared
-    // connection this dialect keeps for the process lifetime" reasoning as
-    // the WAL pragma above — see sequelize's sqlite ConnectionManager, which
-    // keys connections by a fixed "default" uuid rather than a real pool.
+    // to 5s before giving up. This only reaches the default connection;
+    // transaction connections get the same wait where they open (above,
+    // after `new Sequelize`).
     try {
       await sequelize.query("PRAGMA busy_timeout=5000;");
       logger.info("Migration: Set SQLite busy_timeout to 5000ms.");
