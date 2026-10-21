@@ -12,6 +12,7 @@ import { streamTracker } from "@/services/StreamTracker";
 import { requestMetrics } from "@/services/RequestMetrics";
 import { socketService } from "@/services/SocketService";
 import { logger } from "@/infra/logger";
+import { lastIntegrity } from "@/services/integrity";
 
 // Admin > Overview: everything the front page shows, in one small answer. The counts that
 // need the database are cached for 15 s (several open admin tabs polling cost one set of
@@ -95,6 +96,8 @@ export const overviewRoutes: ServerRoute[] = [
             missingLocal: c.missingLocal,
             failedJobs,
             iptvOffline: health.iptv !== "online",
+            // Repeats or orphans the nightly integrity job could not repair (normally 0).
+            dataIssues: lastIntegrity()?.issues ?? 0,
           },
           watching: watching(),
           runningJobs,

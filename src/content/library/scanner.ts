@@ -25,8 +25,8 @@ import { LocalItem } from "@/models/LocalItem";
 import { MediaFile, SidecarSubtitle } from "@/models/MediaFile";
 import { ContentMeta } from "@/models/ContentMeta";
 import { ContentGenre } from "@/models/ContentGenre";
+import { replaceTags, removeAllTags, tagCount } from "@/content/tags";
 import { ContentCountry } from "@/models/ContentCountry";
-import { ContentTheme } from "@/models/ContentTheme";
 import { logger } from "@/infra/logger";
 import { streamTracker } from "@/services/StreamTracker";
 import { enrichLocalTitle, recomputeRepresentatives } from "@/content/metaEnrichment";
@@ -319,10 +319,8 @@ async function applyNfoMeta(item: LocalItem): Promise<void> {
   // Genres and countries: from the NFO when the title has none (or the NFO is locked).
   for (const [Model, values] of [[ContentGenre, nfo.genres], [ContentCountry, nfo.countries]] as const) {
     if (!values.length) continue;
-    const have = await (Model as any).count({ where: { contentId } });
-    if (have === 0 || locked) {
-      await (Model as any).destroy({ where: { contentId } });
-      await (Model as any).bulkCreate(values.map((value: string) => ({ contentId, value, isRepresentative: false })));
+    if (locked || (await tagCount(Model, contentId)) === 0) {
+      await replaceTags(Model, contentId, values, { isRepresentative: false });
     }
   }
 }
@@ -507,9 +505,7 @@ async function scanOne(lib: Library): Promise<ScanSummary> {
 export async function removeItem(item: LocalItem): Promise<void> {
   const contentId = localContentId(item.id, item.kind);
   await MediaFile.destroy({ where: { itemId: item.id } });
-  await ContentGenre.destroy({ where: { contentId } });
-  await ContentCountry.destroy({ where: { contentId } });
-  await ContentTheme.destroy({ where: { contentId } });
+  await removeAllTags(contentId);
   await ContentMeta.destroy({ where: { id: contentId } });
   await item.destroy();
 }

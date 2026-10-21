@@ -13,6 +13,7 @@ import { localStreamRoutes } from "./routes/library/stream";
 import { scanLibraries } from "./content/library/scanner";
 import { setupRoutes, needsSetup } from "./routes/account/setup";
 import { registerJob, startJobs } from "./services/jobs";
+import { runIntegrityCheck } from "./services/integrity";
 import { backupDatabase } from "./services/backup";
 import { refreshChannelLogos, resolveTmdbChannelLogos } from "./content/channels";
 import "dotenv/config";
@@ -98,6 +99,7 @@ const init = async () => {
 
   // Background jobs (services/jobs.ts). The runner starts after the server is listening.
   registerJob({ name: "backup", label: "Back up the database", dailyAtHour: 4, run: backupDatabase });
+  registerJob({ name: "integrity", label: "Check stored data for repeats", dailyAtHour: 5, run: runIntegrityCheck });
   registerJob({ name: "library-scan", label: "Scan local libraries", dailyAtHour: 3, run: () => scanLibraries() });
   registerJob({ name: "image-cache", label: "Trim the image cache", dailyAtHour: 5, run: evictImageCache });
   registerJob({

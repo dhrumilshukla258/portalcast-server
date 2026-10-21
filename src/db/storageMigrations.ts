@@ -22,6 +22,7 @@ import { QueryTypes, Sequelize } from "sequelize";
 import { logger } from "@/infra/logger";
 import { SystemConfig } from "@/models/SystemConfig";
 import { backupBeforeChange } from "@/services/backup";
+import { mergeNameOnlyPeople } from "@/content/people";
 
 const STEPS_KEY = "storage_migrations";
 const deflateAsync = promisify(zlib.deflate);
@@ -180,6 +181,41 @@ const STEPS: Step[] = [
       await db.query("DROP TABLE content_people");
       return `${before} rows became ${persons} persons and ${links} title links`;
     },
+  },
+  {
+    // A title carries each tag once: repeated rows removed (the first kept), then the index
+    // made UNIQUE so the database refuses a repeat (content/tags.ts also dedupes its input).
+    name: "unique-tags",
+    run: async (db) => {
+      let removed = 0;
+      for (const table of ["content_genres", "content_countries", "content_themes"]) {
+        removed += await changedRows(db, () => db.query(
+          `DELETE FROM \`${table}\` WHERE rowid NOT IN (SELECT MIN(rowid) FROM \`${table}\` GROUP BY \`contentId\`, \`value\`)`,
+        ));
+        await db.query(`DROP INDEX IF EXISTS \`idx_${table}_value_contentId\``);
+        await db.query(`CREATE UNIQUE INDEX \`idx_${table}_value_contentId\` ON \`${table}\` (\`value\`, \`contentId\`)`);
+      }
+      return `${removed} repeated tag rows removed; tag indexes now unique`;
+    },
+  },
+  {
+    // One credit per (title, kind, person, role). The unique index replaces the old
+    // (titleKey, sortOrder) one: lookups by title still use it, and a title's 30 or so credits
+    // are sorted by billing in the query.
+    name: "unique-credits",
+    run: async (db) => {
+      const removed = await changedRows(db, () => db.query(
+        "DELETE FROM title_people WHERE rowid NOT IN (SELECT MIN(rowid) FROM title_people GROUP BY titleKey, kind, personId, IFNULL(role, ''))",
+      ));
+      await db.query("DROP INDEX IF EXISTS `idx_title_people_title`");
+      await db.query("CREATE UNIQUE INDEX `idx_title_people_title` ON `title_people` (`titleKey`, `kind`, `personId`, IFNULL(`role`, ''))");
+      return `${removed} repeated credits removed; credit index now unique`;
+    },
+  },
+  {
+    // Name-only persons (from NFO cast lists) that are a TMDB person already, by a unique full name.
+    name: "merge-name-only-people",
+    run: async () => `${await mergeNameOnlyPeople()} name-only persons merged into their TMDB person`,
   },
   {
     name: "vacuum",

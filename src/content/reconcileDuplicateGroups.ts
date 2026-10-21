@@ -1,7 +1,5 @@
 import { ContentMeta } from "@/models/ContentMeta";
-import { ContentGenre } from "@/models/ContentGenre";
-import { ContentCountry } from "@/models/ContentCountry";
-import { ContentTheme } from "@/models/ContentTheme";
+import { removeAllTags, markTagsRepresentative } from "@/content/tags";
 import { UserProgress } from "@/models/UserProgress";
 import { normalizeTitleKey } from "@/content/titleClean";
 import { clearDiscoverCache } from "@/services/discoverCache";
@@ -98,9 +96,7 @@ export async function reconcileDuplicateGroups(): Promise<void> {
       );
 
       for (const loser of losers) {
-        await ContentGenre.destroy({ where: { contentId: loser.id } });
-        await ContentCountry.destroy({ where: { contentId: loser.id } });
-        await ContentTheme.destroy({ where: { contentId: loser.id } });
+        await removeAllTags(loser.id);
         await ContentMeta.destroy({ where: { id: loser.id } });
         rowsDeleted++;
 
@@ -120,9 +116,7 @@ export async function reconcileDuplicateGroups(): Promise<void> {
         { groupKey: newGroupKey, year: resolvedYear || null, isRepresentative: true },
         { where: { id: winner.id } }
       );
-      for (const Model of [ContentGenre, ContentCountry, ContentTheme]) {
-        await Model.update({ isRepresentative: true }, { where: { contentId: winner.id } });
-      }
+      await markTagsRepresentative(winner.id);
 
       groupsMerged++;
     }

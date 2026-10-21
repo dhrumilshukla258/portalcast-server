@@ -16,6 +16,7 @@ import { fetchMovieMeta, fetchTVMeta, fetchMetaByTmdbId, TmdbMeta } from "@/cont
 import { themesForKeywordIds } from "@/content/themes";
 import { ContentMeta, ContentType, ContentMetaSource } from "@/models/ContentMeta";
 import { ContentGenre } from "@/models/ContentGenre";
+import { replaceTags, removeAllTags, markTagsRepresentative, representativeTagStatements } from "@/content/tags";
 import { ContentCountry } from "@/models/ContentCountry";
 import { ContentTheme } from "@/models/ContentTheme";
 import { UserProgress } from "@/models/UserProgress";
@@ -77,12 +78,6 @@ function splitList(raw: any): string[] {
     .filter(Boolean);
 }
 
-async function replaceTags(Model: typeof ContentGenre | typeof ContentCountry | typeof ContentTheme, contentId: string, values: string[], transaction: Transaction): Promise<void> {
-  await Model.destroy({ where: { contentId }, transaction });
-  if (values.length > 0) {
-    await Model.bulkCreate(values.map((value) => ({ contentId, value })), { transaction });
-  }
-}
 
 interface Resolved {
   poster: string | null;
@@ -242,9 +237,9 @@ async function upsertContent(contentId: string, type: ContentType, name: string,
     if (lock.backdrop) { keep.backdrop = before!.backdrop; keep.backdropHd = before!.backdropHd; }
     if (lock.logo) keep.logo = before!.logo;
     if (Object.keys(keep).length) await ContentMeta.update(keep, { where: { id: contentId }, transaction });
-    await replaceTags(ContentGenre, contentId, resolved.genres, transaction);
-    await replaceTags(ContentCountry, contentId, resolved.countries, transaction);
-    await replaceTags(ContentTheme, contentId, resolved.themes, transaction);
+    await replaceTags(ContentGenre, contentId, resolved.genres, { transaction });
+    await replaceTags(ContentCountry, contentId, resolved.countries, { transaction });
+    await replaceTags(ContentTheme, contentId, resolved.themes, { transaction });
   });
 }
 
@@ -475,10 +470,7 @@ export async function recomputeRepresentatives(): Promise<void> {
     `);
     await q("UPDATE `content_meta` SET `isRepresentative` = 1 WHERE `isRepresentative` IS NOT 1 AND `id` IN (SELECT `id` FROM temp.`rep_ids`);");
     await q("UPDATE `content_meta` SET `isRepresentative` = 0 WHERE `isRepresentative` IS NOT 0 AND `id` NOT IN (SELECT `id` FROM temp.`rep_ids`);");
-    for (const table of ["content_genres", "content_countries", "content_themes"]) {
-      await q(`UPDATE \`${table}\` SET \`isRepresentative\` = 1 WHERE \`isRepresentative\` IS NOT 1 AND \`contentId\` IN (SELECT \`id\` FROM temp.\`rep_ids\`);`);
-      await q(`UPDATE \`${table}\` SET \`isRepresentative\` = 0 WHERE \`isRepresentative\` IS NOT 0 AND \`contentId\` NOT IN (SELECT \`id\` FROM temp.\`rep_ids\`);`);
-    }
+    for (const sql of representativeTagStatements()) await q(sql);
     await q("DELETE FROM temp.`rep_ids`;");
   });
 }
@@ -636,9 +628,7 @@ export async function pruneContentMeta(contentId: string, portalCategoryId?: str
   }
 
   if (existing) {
-    await ContentGenre.destroy({ where: { contentId } });
-    await ContentCountry.destroy({ where: { contentId } });
-    await ContentTheme.destroy({ where: { contentId } });
+    await removeAllTags(contentId);
     await existing.destroy();
   }
 
@@ -672,9 +662,7 @@ export async function pruneContentMeta(contentId: string, portalCategoryId?: str
         return new Date(a.enrichedAt) > new Date(b.enrichedAt) ? a : b;
       });
       await best.update({ isRepresentative: true });
-      for (const Model of [ContentGenre, ContentCountry, ContentTheme]) {
-        await Model.update({ isRepresentative: true }, { where: { contentId: best.id } });
-      }
+      await markTagsRepresentative(best.id);
     }
   }
 

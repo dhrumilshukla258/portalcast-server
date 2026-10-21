@@ -224,7 +224,8 @@ export async function initDB() {
     }
     for (const table of ["content_genres", "content_countries", "content_themes"]) {
       try {
-        await sequelize.query(`CREATE INDEX IF NOT EXISTS \`idx_${table}_value_contentId\` ON \`${table}\` (\`value\`, \`contentId\`);`);
+        // UNIQUE: a title carries each tag once (content/tags.ts; "unique-tags" storage step).
+        await sequelize.query(`CREATE UNIQUE INDEX IF NOT EXISTS \`idx_${table}_value_contentId\` ON \`${table}\` (\`value\`, \`contentId\`);`);
         logger.info(`Migration: Ensured composite (value, contentId) index on ${table}.`);
       } catch (e: any) {
         logger.error(`Migration: failed to create composite index on ${table}: ${e.message}`);
@@ -278,8 +279,11 @@ export async function initDB() {
     await sequelize.query(
       "CREATE TABLE IF NOT EXISTS `title_people` (`titleKey` TEXT NOT NULL, `personId` INTEGER NOT NULL, `kind` TEXT NOT NULL, `role` TEXT, `sortOrder` INTEGER NOT NULL)",
     );
-    await sequelize.query("CREATE INDEX IF NOT EXISTS `idx_title_people_title` ON `title_people` (`titleKey`, `sortOrder`)");
+    // UNIQUE: one credit per (title, kind, person, role) ("unique-credits" storage step).
+    await sequelize.query("CREATE UNIQUE INDEX IF NOT EXISTS `idx_title_people_title` ON `title_people` (`titleKey`, `kind`, `personId`, IFNULL(`role`, ''))");
     await sequelize.query("CREATE INDEX IF NOT EXISTS `idx_title_people_person` ON `title_people` (`personId`)");
+    // Name lookups (a name-only credit matched to its TMDB person) without reading 412k rows.
+    await sequelize.query("CREATE INDEX IF NOT EXISTS `idx_people_name` ON `people` (`name`)");
     // Person pages (content/people.ts personPage): details fetched from TMDB on first open.
     await ensureColumns("people", [
       ["biography", "TEXT"], ["knownFor", "VARCHAR(64)"], ["birthday", "VARCHAR(16)"], ["deathday", "VARCHAR(16)"],

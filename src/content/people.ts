@@ -34,6 +34,41 @@ export function titleKeyOf(row: { id: string; type: string; tmdbId?: number | nu
   return row.tmdbId ? `${row.type === "series" ? "series" : "movie"}:${row.tmdbId}` : row.id;
 }
 
+/**
+ * The TMDB person a name-only credit (from an NFO) refers to: only when the full name has at
+ * least two words and exactly one TMDB person carries it. A one-word or shared name stays a
+ * separate name-only person rather than a guess.
+ */
+async function uniqueTmdbPersonByName(name: string, transaction?: Transaction): Promise<number | null> {
+  if (String(name).trim().split(/\s+/).length < 2) return null;
+  const rows = (await db().query("SELECT id FROM people WHERE name = ? AND tmdbPersonId IS NOT NULL LIMIT 2", {
+    replacements: [name], transaction, type: QueryTypes.SELECT,
+  })) as any[];
+  return rows.length === 1 ? Number(rows[0].id) : null;
+}
+
+/**
+ * Folds name-only persons into the TMDB person of the same name when that name is unique
+ * (the rule above): their credits move over, repeats are dropped, the name-only row goes.
+ * Used once by the "merge-name-only-people" storage step and nightly by the integrity job.
+ */
+export async function mergeNameOnlyPeople(): Promise<number> {
+  const q = (sql: string, r: any[] = []) => db().query(sql, { replacements: r, type: QueryTypes.SELECT }) as Promise<any[]>;
+  const nameOnly = await q("SELECT id, name FROM people WHERE tmdbPersonId IS NULL");
+  let merged = 0;
+  for (const p of nameOnly) {
+    const target = await uniqueTmdbPersonByName(p.name);
+    if (!target) continue;
+    await db().transaction(async (transaction) => {
+      await db().query("UPDATE OR IGNORE title_people SET personId = ? WHERE personId = ?", { replacements: [target, p.id], transaction });
+      await db().query("DELETE FROM title_people WHERE personId = ?", { replacements: [p.id], transaction });
+      await db().query("DELETE FROM people WHERE id = ?", { replacements: [p.id], transaction });
+    });
+    merged++;
+  }
+  return merged;
+}
+
 /** Replaces the people of `titleKey` (one transaction when given). */
 export async function storePeople(titleKey: string, people: PersonEntry[], transaction?: Transaction): Promise<void> {
   const q = (sql: string, replacements: any[] = [], select = false) =>
@@ -58,10 +93,13 @@ export async function storePeople(titleKey: string, people: PersonEntry[], trans
     )) as any[];
     for (const r of rows) idOf.set(Number(r.tmdbPersonId), Number(r.id));
   }
-  // Persons without one (names from an NFO): matched by name.
+  // Persons without one (names from an NFO): the TMDB person when the full name names exactly
+  // one (no second row for someone TMDB already has), else the name-only person, else a new one.
   const byName = new Map<string, number>();
   for (const p of people.filter((x) => !x.tmdbPersonId)) {
     if (byName.has(p.name)) continue;
+    const known = await uniqueTmdbPersonByName(p.name, transaction);
+    if (known) { byName.set(p.name, known); continue; }
     const found = (await q("SELECT id FROM people WHERE tmdbPersonId IS NULL AND name = ? LIMIT 1", [p.name], true)) as any[];
     if (found.length) byName.set(p.name, Number(found[0].id));
     else {
@@ -71,13 +109,22 @@ export async function storePeople(titleKey: string, people: PersonEntry[], trans
     }
   }
 
+  // Each (person, kind, role) once per title: the same actor listed twice is one credit. The
+  // UNIQUE index from the "unique-credits" storage step refuses a repeat that slips through.
+  const seen = new Set<string>();
   const links = people
     .map((p) => ({ p, personId: p.tmdbPersonId ? idOf.get(p.tmdbPersonId) : byName.get(p.name) }))
-    .filter((x): x is { p: PersonEntry; personId: number } => !!x.personId);
+    .filter((x): x is { p: PersonEntry; personId: number } => !!x.personId)
+    .filter(({ p, personId }) => {
+      const key = `${personId}|${p.kind}|${p.role ?? ""}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   for (let i = 0; i < links.length; i += 150) {
     const slice = links.slice(i, i + 150);
     await q(
-      `INSERT INTO title_people (titleKey, personId, kind, role, sortOrder) VALUES ${slice.map(() => "(?, ?, ?, ?, ?)").join(", ")}`,
+      `INSERT OR IGNORE INTO title_people (titleKey, personId, kind, role, sortOrder) VALUES ${slice.map(() => "(?, ?, ?, ?, ?)").join(", ")}`,
       slice.flatMap(({ p, personId }) => [titleKey, personId, p.kind, p.role, p.order]),
     );
   }
