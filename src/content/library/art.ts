@@ -8,6 +8,7 @@
 // apps prefix relative image paths with /api/images. <version> (the file's mtime) makes a
 // replaced image a new URL, so the long cache on devices never shows the old one.
 
+import { cachedTmdbUrl } from "@/content/imageCache";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
@@ -87,6 +88,9 @@ const FIELDS = ["screenshot_uri", "cover", "backdrop_path", "backdrop_hd_path", 
 export function withArtUrls<T extends Record<string, any>>(item: T, origin?: string): T {
   const out: any = { ...item };
   if (isArtMarker(out.logo)) out.logo = artUrl(out.logo, origin);
-  for (const f of FIELDS) if (isArtMarker(out[f])) out[f] = artUrl(out[f], origin);
+  for (const f of FIELDS) {
+    if (isArtMarker(out[f])) out[f] = artUrl(out[f], origin);
+    else if (typeof out[f] === "string") out[f] = cachedTmdbUrl(out[f], origin);
+  }
   return out;
 }

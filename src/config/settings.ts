@@ -88,6 +88,10 @@ const DEFS: SettingDef[] = [
   // Local libraries
   { key: "mediaRoots", type: "list", default: ["/media"], group: "Local libraries", label: "Media roots", help: "Folders inside the container that libraries may use (the NAS mounts in the compose file). The folder browser shows nothing outside them.", apply: "live" },
 
+  // Images
+  { key: "imageCacheGb", type: "number", default: 20, min: 0, max: 2000, group: "Images", label: "TMDB image cache size (GB)", help: "Artwork is downloaded from TMDB once and served from this server. 0 turns the cache off (apps load TMDB directly).", apply: "live" },
+  { key: "imageCacheFolder", type: "string", default: "", group: "Images", label: "Image cache folder", help: "Empty: image-cache inside the data folder. A NAS folder mounted into the container is a good choice.", apply: "live" },
+
   // Backups
   { key: "backupFolder", type: "string", default: "", group: "Backups", label: "Backup folder", help: "Where the nightly database copy goes. Empty: the backups folder inside the data folder. A NAS folder mounted into the container is a good choice. The key file is never copied here.", apply: "live" },
   { key: "backupKeep", type: "number", default: 7, min: 0, max: 365, group: "Backups", label: "Nightly backups to keep", help: "0 turns backups off.", apply: "live" },

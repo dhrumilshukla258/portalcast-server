@@ -1,3 +1,4 @@
+import { cachedTmdbUrl } from "@/content/imageCache";
 import { isArtMarker, artUrl } from "@/content/library/art";
 import { serverSecret } from "@/infra/serverSecret";
 import crypto from "crypto";
@@ -55,7 +56,7 @@ export function proxiedImageUrl(url?: string, origin?: string): string {
   if (!url.startsWith("http")) return url;
   try {
     const parsed = new URL(url);
-    if (SAFE_ABSOLUTE_IMAGE_HOSTS.has(parsed.hostname)) return url;
+    if (SAFE_ABSOLUTE_IMAGE_HOSTS.has(parsed.hostname)) return cachedTmdbUrl(url, origin);
     // One of this server's own image URLs (saved in watch progress, maybe under another
     // address): rebase it, never relay it through the proxy (which refuses private hosts).
     if (parsed.pathname.startsWith("/api/images/") && parsed.searchParams.has("s")) {

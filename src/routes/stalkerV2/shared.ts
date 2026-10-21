@@ -278,12 +278,12 @@ async function enrichArtworkFromTmdbRaw(items: any[], kind: "movie" | "series", 
         return {
           ...item,
           screenshot_uri: proxiedImageUrl(meta.poster || item.screenshot_uri, origin),
-          backdrop_path: meta.backdrop || existingBackdrop,
+          backdrop_path: meta.backdrop ? proxiedImageUrl(meta.backdrop, origin) : existingBackdrop,
           // No `existingBackdrop` fallback here — that's a portal-supplied
           // image of unknown resolution, so it can't be trusted as "high-res"
           // the way a TMDB-confirmed backdropHd pick can. Only ever the
           // TMDB pick, or nothing (AmbientBackdrop skips items without it).
-          backdrop_hd_path: meta.backdropHd || undefined,
+          backdrop_hd_path: meta.backdropHd ? proxiedImageUrl(meta.backdropHd, origin) : undefined,
           description: item.description || meta.overview || item.description,
           actors: item.actors || meta.cast || item.actors,
           director: item.director || meta.director || item.director,

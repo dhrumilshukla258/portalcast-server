@@ -1,3 +1,4 @@
+import { validCacheRequest, cachedImagePath } from "@/content/imageCache";
 import { LocalItem } from "@/models/LocalItem";
 import { verifyArt } from "@/content/library/art";
 import { spawn } from "child_process";
@@ -53,6 +54,20 @@ function parseRange(header: string | undefined, size: number): { start: number; 
 const IMAGE_MIME: Record<string, string> = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp" };
 
 export const localStreamRoutes: ServerRoute[] = [
+  {
+    // TMDB artwork through our own disk cache (content/imageCache.ts). Public like every
+    // image route; only TMDB's own size names and file names are accepted.
+    method: "GET",
+    path: "/api/images/tmdb/{size}/{file}",
+    handler: async (request, h) => {
+      const { size, file } = request.params as { size: string; file: string };
+      if (!validCacheRequest(size, file)) return h.response("Not found").code(404);
+      const p = await cachedImagePath(size, file);
+      if (!p) return h.redirect(`https://image.tmdb.org/t/p/${size}/${file}`); // TMDB answers itself
+      const type = IMAGE_MIME[path.extname(file).toLowerCase()] ?? (file.endsWith(".svg") ? "image/svg+xml" : "application/octet-stream");
+      return h.response(fs.createReadStream(p)).type(type).header("Cache-Control", "public, max-age=31536000, immutable");
+    },
+  },
   {
     // Artwork beside a local title (content/library/art.ts). Public like every image route
     // (an <img> cannot send a token), but signed: only URLs this server handed out work.

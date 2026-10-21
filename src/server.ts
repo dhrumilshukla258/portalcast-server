@@ -1,3 +1,4 @@
+import { evictImageCache } from "./content/imageCache";
 import { startPortalHealth, iptvHealth } from "./services/portalHealth";
 import { libraryAdminRoutes } from "./routes/library/admin";
 import { localStreamRoutes } from "./routes/library/stream";
@@ -81,6 +82,7 @@ const init = async () => {
   // Background jobs (services/jobs.ts). The runner starts after the server is listening.
   registerJob({ name: "backup", label: "Back up the database", dailyAtHour: 4, yieldToPlayback: true, run: backupDatabase });
   registerJob({ name: "library-scan", label: "Scan local libraries", dailyAtHour: 3, yieldToPlayback: true, run: () => scanLibraries() });
+  registerJob({ name: "image-cache", label: "Trim the image cache", dailyAtHour: 5, yieldToPlayback: true, run: evictImageCache });
 
   await loadActiveProfileFromDB();
   // Explicitly initialize provider after loading the active profile from DB,
