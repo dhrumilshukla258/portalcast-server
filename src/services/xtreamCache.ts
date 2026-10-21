@@ -16,8 +16,14 @@ const TTL_MS = 24 * 60 * 60 * 1000;
 // for anything requested again within the window. Bursts of near-simultaneous reads
 // of the same key (multiple genres in a listing, several users browsing the same
 // category) are the common case this targets.
-const MEM_TTL_MS = 30 * 1000;
-const MEM_MAX_ENTRIES = 3000;
+//
+// Speed plan step 6: every write goes through this module (set/setDeferred/delete update the
+// memory copy; the two raw writers either clear it, clearXtreamMem, or are read elsewhere), so
+// the copy stays correct and can live 30 min instead of 30 s. Bounded by size, not by count:
+// 3,000 entries could be 3,000 tiny rows or a few huge series lists. Least recently used goes first.
+const MEM_TTL_MS = 30 * 60 * 1000;
+const MEM_MAX_CHARS = 64 * 1024 * 1024; // ~64 MB of JSON text
+let memChars = 0;
 const memRaw = new Map<string, { value: string; expiresAt: Date; cachedAt: number }>();
 
 function memGet(key: string): { value: string; expiresAt: Date } | undefined {
@@ -26,21 +32,30 @@ function memGet(key: string): { value: string; expiresAt: Date } | undefined {
   const entry = memRaw.get(key);
   if (!entry) return undefined;
   if (entry.cachedAt + MEM_TTL_MS < Date.now()) {
-    memRaw.delete(key);
+    memDelete(key);
     return undefined;
   }
+  memRaw.delete(key); // most recently used moves to the end
+  memRaw.set(key, entry);
   return entry;
 }
 
 function memSet(key: string, value: string, expiresAt: Date): void {
-  if (!memRaw.has(key) && memRaw.size >= MEM_MAX_ENTRIES) {
-    const oldestKey = memRaw.keys().next().value;
-    if (oldestKey !== undefined) memRaw.delete(oldestKey);
-  }
+  memDelete(key);
+  if (value.length > MEM_MAX_CHARS / 4) return; // one giant list never empties the whole tier
   memRaw.set(key, { value, expiresAt, cachedAt: Date.now() });
+  memChars += value.length;
+  while (memChars > MEM_MAX_CHARS) {
+    const oldestKey = memRaw.keys().next().value;
+    if (oldestKey === undefined) break;
+    memDelete(oldestKey);
+  }
 }
 
 function memDelete(key: string): void {
+  const entry = memRaw.get(key);
+  if (!entry) return;
+  memChars -= entry.value.length;
   memRaw.delete(key);
 }
 
@@ -93,6 +108,7 @@ export function xtreamCacheKeyVersion(key: string): string {
 /** For writers that bypass xtreamCache (raw XtreamCache.destroy): drop the read cache and invalidate all versions. */
 export function clearXtreamMem(): void {
   memRaw.clear();
+  memChars = 0;
   pendingWrites.clear();
   versionEpoch++;
 }
