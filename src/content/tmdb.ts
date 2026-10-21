@@ -397,6 +397,32 @@ async function fetchMeta(kind: "movie" | "tv", name: string, year?: string): Pro
   return buildMeta(detail, kind);
 }
 
+// ---- a person (person pages) -------------------------------------------------------------
+export interface TmdbPerson {
+  name: string | null;
+  biography: string | null;
+  knownFor: string | null; // TMDB known_for_department: Acting, Directing, Writing...
+  birthday: string | null;
+  deathday: string | null;
+  placeOfBirth: string | null;
+  /** w185 profile photo. */
+  photo: string | null;
+}
+
+export async function fetchPerson(tmdbPersonId: number): Promise<TmdbPerson | null> {
+  const data = await tmdbGet(`/person/${tmdbPersonId}?language=en-US`);
+  if (!data || !data.id) return null;
+  return {
+    name: data.name || null,
+    biography: String(data.biography || "").trim() || null,
+    knownFor: data.known_for_department || null,
+    birthday: data.birthday || null,
+    deathday: data.deathday || null,
+    placeOfBirth: data.place_of_birth || null,
+    photo: data.profile_path ? `${IMG_BASE}/w185${data.profile_path}` : null,
+  };
+}
+
 // ---- networks a show airs on (for channel logos) ---------------------------------------
 export interface TmdbNetwork { name: string; logo: string | null }
 

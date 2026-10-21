@@ -1,3 +1,5 @@
+import { fetchPerson } from "@/content/tmdb";
+import { personDetails, personCredits } from "@/content/people";
 import { peopleOf, titleKeyOf } from "@/content/people";
 import { LOCAL_CATEGORY } from "@/content/metaEnrichment";
 import { localVersionLabel } from "@/content/library/catalog";
@@ -133,7 +135,8 @@ async function titleDetails(id: string, origin: string) {
   // People: this copy's own list (a locked NFO) first, then the title's shared list, then
   // any other version's (content/people.ts).
   const people = await peopleOf([row.id, titleKeyOf(row as any), ...members.flatMap((m) => [m.id, titleKeyOf(m as any)])]);
-  const by = (kind: string) => people.filter((p) => p.kind === kind).map((p) => ({ name: p.name, role: p.role, photo: p.photo ? proxiedImageUrl(p.photo, origin) : null }));
+  // `id` opens the person's page (GET /api/v2/people/{id}).
+  const by = (kind: string) => people.filter((p) => p.kind === kind).map((p) => ({ id: p.id, name: p.name, role: p.role, photo: p.photo ? proxiedImageUrl(p.photo, origin) : null }));
   return {
     id,
     tagline: first("tagline"),
@@ -162,6 +165,31 @@ export const discoverDetailsRoute = {
     if (!/^(movie|series)_[\w.-]+$/.test(id)) return h.response({ error: "Give id (movie_123) or type and raw" }).code(400);
     const d = await titleDetails(id, getPublicOrigin(request));
     return d ?? h.response({ error: "Unknown title" }).code(404);
+  },
+};
+
+/**
+ * A person's page: who they are (photo, biography, known for, born) and every title of theirs
+ * in the catalog, one card per title with their roles in it, newest first. Biography and the
+ * like come from TMDB the first time the page is opened (content/people.ts).
+ */
+export const personRoute = {
+  method: "GET" as const,
+  path: "/api/v2/people/{id}",
+  handler: async (request: any, h: any) => {
+    const id = Number(request.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return h.response({ error: "Bad id" }).code(400);
+    const person = await personDetails(id, fetchPerson);
+    if (!person) return h.response({ error: "Unknown person" }).code(404);
+    const origin = getPublicOrigin(request);
+    const hidden = await getHiddenContentKeySet();
+    const credits = (await personCredits(id)).filter((c) => !hidden.has(c.row.id));
+    const ids = credits.map((c) => c.row.id);
+    const [genresById, countriesById] = await Promise.all([tagsByContentId(ContentGenre, ids), tagsByContentId(ContentCountry, ids)]);
+    return {
+      person: { ...person, photo: person.photo ? proxiedImageUrl(person.photo, origin) : null },
+      credits: credits.map((c) => ({ ...toMediaItem(c.row, genresById, countriesById, origin), roles: c.roles })),
+    };
   },
 };
 

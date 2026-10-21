@@ -19,6 +19,7 @@ import { iptvHealth } from "@/services/portalHealth";
 const RULES: [RegExp, number][] = [
   [/^\/api\/v2\/discover\/facets$/, 300],
   [/^\/api\/v2\/discover\/(details|variants)$/, 600],
+  [/^\/api\/v2\/people\/\d+$/, 600],
   [/^\/api\/v2\/discover\/(browse|rows|recommendations)$/, 60],
   [/^\/api\/v2\/(movie-groups|series-groups|groups)$/, 600],
   [/^\/api\/v2\/(movies|series)$/, 60],

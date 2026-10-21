@@ -42,7 +42,7 @@ import { adminRoutes } from "./routes/contentmanager";
 import { authRoutes } from "./routes/account/auth";
 import { userRoutes } from "./routes/account/user";
 import { userManagementRoutes } from "./routes/account/userManagement";
-import { discoverRoutes, discoverDetailsRoute } from "./routes/discover";
+import { discoverRoutes, discoverDetailsRoute, personRoute } from "./routes/discover";
 import { socketService } from "./services/SocketService";
 
 import { initDB, sequelize } from "./db";
@@ -152,6 +152,7 @@ const init = async () => {
   server.route(userManagementRoutes);
   server.route(discoverRoutes);
   server.route(discoverDetailsRoute);
+  server.route(personRoute);
   // Is the IPTV portal reachable (services/portalHealth.ts)? Signed-in clients only.
   server.route({ method: "GET", path: "/api/v2/health/iptv", handler: () => iptvHealth() });
 

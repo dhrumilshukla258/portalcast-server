@@ -83,19 +83,113 @@ export async function storePeople(titleKey: string, people: PersonEntry[], trans
   }
 }
 
-export interface PersonRow { kind: string; name: string; role: string | null; photo: string | null; tmdbPersonId: number | null }
+export interface PersonRow { id: number; kind: string; name: string; role: string | null; photo: string | null; tmdbPersonId: number | null }
 
 /** People of the first key that has any, in order. */
 export async function peopleOf(keys: string[]): Promise<PersonRow[]> {
   for (const key of [...new Set(keys)]) {
     const rows = (await db().query(
-      `SELECT tp.kind, p.name, tp.role, p.photo, p.tmdbPersonId FROM title_people tp JOIN people p ON p.id = tp.personId
+      `SELECT p.id, tp.kind, p.name, tp.role, p.photo, p.tmdbPersonId FROM title_people tp JOIN people p ON p.id = tp.personId
        WHERE tp.titleKey = ? ORDER BY tp.sortOrder`,
       { replacements: [key], type: QueryTypes.SELECT },
     )) as PersonRow[];
     if (rows.length) return rows.map((r) => ({ ...r, photo: unpackPhoto(r.photo) }));
   }
   return [];
+}
+
+const DETAILS_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+export interface PersonDetails {
+  id: number;
+  name: string;
+  photo: string | null;
+  tmdbPersonId: number | null;
+  biography: string | null;
+  knownFor: string | null;
+  birthday: string | null;
+  deathday: string | null;
+  placeOfBirth: string | null;
+}
+
+/**
+ * A person with their biography and the like: from the table, fetched from TMDB the first
+ * time the page is opened and refreshed after 30 days (one TMDB call per person, not per
+ * view). Null for an unknown id.
+ */
+export async function personDetails(id: number, fetchPerson: (tmdbId: number) => Promise<any | null>): Promise<PersonDetails | null> {
+  const q = (sql: string, r: any[]) => db().query(sql, { replacements: r, type: QueryTypes.SELECT }) as Promise<any[]>;
+  const [row] = await q("SELECT * FROM people WHERE id = ?", [id]);
+  if (!row) return null;
+  const checked = row.detailsCheckedAt ? Date.parse(row.detailsCheckedAt) : 0;
+  if (row.tmdbPersonId && (!checked || Date.now() - checked > DETAILS_MAX_AGE_MS)) {
+    const t = await fetchPerson(Number(row.tmdbPersonId)).catch(() => null);
+    if (t) {
+      row.biography = t.biography; row.knownFor = t.knownFor; row.birthday = t.birthday;
+      row.deathday = t.deathday; row.placeOfBirth = t.placeOfBirth;
+      if (t.photo) row.photo = packPhoto(t.photo);
+    }
+    // Recorded only when TMDB answered: a network failure is tried again on the next open.
+    if (t) await db().query(
+      "UPDATE people SET biography = ?, knownFor = ?, birthday = ?, deathday = ?, placeOfBirth = ?, photo = ?, detailsCheckedAt = ? WHERE id = ?",
+      { replacements: [row.biography ?? null, row.knownFor ?? null, row.birthday ?? null, row.deathday ?? null, row.placeOfBirth ?? null, row.photo ?? null, new Date().toISOString(), id] },
+    );
+  }
+  return {
+    id: Number(row.id), name: row.name, photo: unpackPhoto(row.photo), tmdbPersonId: row.tmdbPersonId ?? null,
+    biography: row.biography ?? null, knownFor: row.knownFor ?? null, birthday: row.birthday ?? null,
+    deathday: row.deathday ?? null, placeOfBirth: row.placeOfBirth ?? null,
+  };
+}
+
+/**
+ * A person's titles in the catalog, one row per title (the card Discover shows for it), with
+ * every way they worked on it (cast as "Ip Man", director, writer...). Titles only in TMDB are
+ * not listed: the page shows what can be played.
+ */
+export async function personCredits(id: number): Promise<{ row: any; roles: { kind: string; role: string | null }[] }[]> {
+  const q = (sql: string, r: any[] = []) => db().query(sql, { replacements: r, type: QueryTypes.SELECT }) as Promise<any[]>;
+  const links = await q("SELECT titleKey, kind, role, sortOrder FROM title_people WHERE personId = ?", [id]);
+  if (!links.length) return [];
+  const rolesByKey = new Map<string, { kind: string; role: string | null }[]>();
+  for (const l of links) {
+    const list = rolesByKey.get(l.titleKey) ?? [];
+    if (!list.some((x) => x.kind === l.kind && x.role === l.role)) list.push({ kind: l.kind, role: l.role });
+    rolesByKey.set(l.titleKey, list);
+  }
+  // Keys are "<type>:<tmdbId>" or a content id; each becomes the card Discover shows (the
+  // group's representative), preferring a representative row.
+  const out = new Map<string, { row: any; roles: { kind: string; role: string | null }[] }>();
+  const keys = [...rolesByKey.keys()];
+  const byTmdb = keys.filter((k) => /^(movie|series):\d+$/.test(k));
+  const byId = keys.filter((k) => !/^(movie|series):\d+$/.test(k));
+  const pickRep = async (rows: any[]) => {
+    if (!rows.length) return null;
+    const rep = rows.find((r) => r.isRepresentative) ?? rows[0];
+    if (rep.isRepresentative || !rep.groupKey) return rep;
+    const [g] = await q("SELECT * FROM content_meta WHERE groupKey = ? AND isRepresentative = 1 LIMIT 1", [rep.groupKey]);
+    return g ?? rep;
+  };
+  for (let i = 0; i < byTmdb.length; i += 200) {
+    const slice = byTmdb.slice(i, i + 200);
+    const pairs = slice.map((k) => k.split(":"));
+    const rows = await q(
+      `SELECT * FROM content_meta WHERE ${pairs.map(() => "(type = ? AND tmdbId = ?)").join(" OR ")}`,
+      pairs.flatMap(([t, n]) => [t, Number(n)]),
+    );
+    for (const k of slice) {
+      const [t, n] = k.split(":");
+      const rep = await pickRep(rows.filter((r) => r.type === t && Number(r.tmdbId) === Number(n)));
+      if (rep && !out.has(rep.id)) out.set(rep.id, { row: rep, roles: rolesByKey.get(k)! });
+      else if (rep) out.get(rep.id)!.roles.push(...rolesByKey.get(k)!);
+    }
+  }
+  for (const k of byId) {
+    const rows = await q("SELECT * FROM content_meta WHERE id = ?", [k]);
+    const rep = await pickRep(rows);
+    if (rep && !out.has(rep.id)) out.set(rep.id, { row: rep, roles: rolesByKey.get(k)! });
+  }
+  return [...out.values()].sort((a, b) => (Number(b.row.year) || 0) - (Number(a.row.year) || 0) || String(a.row.name).localeCompare(String(b.row.name)));
 }
 
 /** How many people `titleKey` has. */

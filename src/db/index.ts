@@ -280,6 +280,13 @@ export async function initDB() {
     );
     await sequelize.query("CREATE INDEX IF NOT EXISTS `idx_title_people_title` ON `title_people` (`titleKey`, `sortOrder`)");
     await sequelize.query("CREATE INDEX IF NOT EXISTS `idx_title_people_person` ON `title_people` (`personId`)");
+    // Person pages (content/people.ts personPage): details fetched from TMDB on first open.
+    await ensureColumns("people", [
+      ["biography", "TEXT"], ["knownFor", "VARCHAR(64)"], ["birthday", "VARCHAR(16)"], ["deathday", "VARCHAR(16)"],
+      ["placeOfBirth", "VARCHAR(255)"], ["detailsCheckedAt", "DATETIME"],
+    ]);
+    // A person's titles are found by TMDB id ("movie:<tmdbId>" keys).
+    await sequelize.query("CREATE INDEX IF NOT EXISTS `idx_content_meta_type_tmdb` ON `content_meta` (`type`, `tmdbId`)");
     // Episode id -> series (content/episodeIndex.ts), replacing ep_info_* rows of xtream_cache.
     await sequelize.query(
       "CREATE TABLE IF NOT EXISTS `episode_index` (`episodeId` INTEGER PRIMARY KEY, `seriesId` INTEGER NOT NULL, `episode` INTEGER)",
