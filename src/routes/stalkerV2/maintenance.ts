@@ -16,7 +16,7 @@ import { stalkerApi } from "@/providers/stalker";
 import { Readable } from "stream";
 import { XtreamCache } from "@/models/XtreamCache";
 import { ContentOverride } from "@/models/ContentOverride";
-import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres, catchupScan, xtreamCache, getOrRefreshVodStreams, getOrRefreshSeriesList, clearXtreamMem } from "@/services/xtreamCache";
+import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres, catchupScan, xtreamCache, getOrRefreshVodStreams, getOrRefreshSeriesList, clearXtreamMem, decodeCacheValue, encodeCacheValue } from "@/services/xtreamCache";
 import { logger } from "@/infra/logger";
 import { authCheck } from "@/auth/jwt";
 import { mintStreamToken, proxyUrlFor, streamTokenFromRequest } from "@/services/StreamTokens";
@@ -62,7 +62,7 @@ export const maintenanceRoutes: ServerRoute[] = [
 
         for (const row of rows) {
           let list: any;
-          try { list = JSON.parse(row.value); } catch { continue; }
+          try { list = JSON.parse(await decodeCacheValue(row.value)); } catch { continue; }
           if (!Array.isArray(list)) continue;
 
           let changed = false;
@@ -78,11 +78,13 @@ export const maintenanceRoutes: ServerRoute[] = [
           });
 
           if (changed) {
-            row.value = JSON.stringify(fixed);
+            row.value = await encodeCacheValue(JSON.stringify(fixed));
             await row.save();
             entriesUpdated++;
           }
         }
+        // Rows changed behind xtreamCache's back: drop its memory copy.
+        if (entriesUpdated > 0) clearXtreamMem();
 
         return h.response({
           success: true,

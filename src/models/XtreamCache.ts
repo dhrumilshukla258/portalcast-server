@@ -15,8 +15,9 @@ export class XtreamCache extends Model {
   @Column(DataType.STRING)
   declare key: string;
 
+  /** JSON text, or zlib-compressed JSON as a BLOB for values over 2 KB (services/xtreamCache.ts). */
   @Column(DataType.TEXT)
-  declare value: string;
+  declare value: string | Buffer;
 
   @Column(DataType.DATE)
   declare expiresAt: Date;
