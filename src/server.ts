@@ -1,3 +1,7 @@
+import { registerHttpCaching } from "./infra/httpCaching";
+import axios from "axios";
+import { httpClient } from "./streaming/httpClient";
+import { countAxios } from "./services/outboundTraffic";
 import { tidyPeople } from "./content/people";
 import { ContentCache } from "./models/ContentCache";
 import { runStorageMigrations } from "./db/storageMigrations";
@@ -59,6 +63,10 @@ import { primeDiscoverIndex } from "./content/discoverIndex";
 // The webui loads scripts/media/artwork from many origins (streams, TMDB, Google sign-in,
 // Chromecast, YouTube trailers), so sources stay open; eval, plugins and <base> are off.
 const CSP = "default-src * 'unsafe-inline' data: blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'self';";
+
+// Every outbound request counted by destination (services/outboundTraffic.ts).
+countAxios(axios);
+countAxios(httpClient);
 
 const init = async () => {
   if (!process.env.ADMIN_PASSWORD) {
@@ -178,6 +186,8 @@ const init = async () => {
   }, 60_000);
 
   server.ext("onPreResponse", (_request, h) => h.continue);
+  // Cache headers and ETags on stable reads, IPTV status on every answer (infra/httpCaching.ts).
+  registerHttpCaching(server);
 
   server.ext("onRequest", (request, h) => {
     const p = request.path;

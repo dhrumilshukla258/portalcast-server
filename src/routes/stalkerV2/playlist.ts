@@ -1,4 +1,6 @@
-﻿import { ServerRoute } from "@hapi/hapi";
+﻿import { cachedRelayImage } from "@/content/imageCache";
+import { countOutbound, noteOutboundResult } from "@/services/outboundTraffic";
+import { ServerRoute } from "@hapi/hapi";
 import { sniffImage, mimeOf, svgHeaders, type ImageKind } from "@/infra/sniffImage";
 import { recordFromRequest } from "@/services/SecurityEvents";
 import {
@@ -85,7 +87,9 @@ async function readImageBody(response: Response): Promise<{ buf: Buffer; kind: I
   return kind ? { buf, kind } : null;
 }
 function imageResponse(h: any, img: { buf: Buffer; kind: ImageKind }) {
-  const r = h.response(img.buf).type(mimeOf(img.kind)).header("cache-control", "max-age=3600");
+  // Kept 30 days by the apps: a portal image at a given address practically never changes,
+  // and every reload used to go back through us to the portal after an hour.
+  const r = h.response(img.buf).type(mimeOf(img.kind)).header("cache-control", "public, max-age=2592000");
   if (img.kind === "svg") for (const [k, v] of Object.entries(svgHeaders)) r.header(k, v);
   return r;
 }
@@ -139,21 +143,24 @@ export const playlistDomainRoutes: ServerRoute[] = [
 
         const proto = initialConfig.https ? "https" : "http";
         const targetUrl = `${proto}://${initialConfig.hostname}:${initialConfig.port}/${slug}`;
-        const response = await fetch(targetUrl);
-
-        if (!response.ok || !response.body) {
+        // Kept by the server after the first fetch (content/imageCache.ts cachedRelayImage).
+        const buf = await cachedRelayImage(targetUrl, async () => {
+          countOutbound(targetUrl, undefined, "portal image");
+          const response = await fetch(targetUrl);
+          noteOutboundResult(targetUrl, true);
+          if (!response.ok || !response.body) return null;
+          // Served by what the bytes are, not by what the portal claims (or the extension).
+          const img = await readImageBody(response);
+          if (!img) recordFromRequest(request, "image_proxy_blocked", `portal path ${slug.slice(0, 80)} is not an image`);
+          return img?.buf ?? null;
+        });
+        const kind = buf ? sniffImage(buf) : null;
+        if (!buf || !kind) {
           return h
             .response({ success: false, message: "Image not found" })
             .code(404);
         }
-
-        // Served by what the bytes are, not by what the portal claims (or the extension).
-        const img = await readImageBody(response);
-        if (!img) {
-          recordFromRequest(request, "image_proxy_blocked", `portal path ${slug.slice(0, 80)} is not an image`);
-          return h.response({ success: false, message: "Not an image" }).code(400);
-        }
-        return imageResponse(h, img);
+        return imageResponse(h, { buf, kind });
       } catch (err) {
         logger.error({ err }, "Piping error");
         return h
@@ -199,29 +206,37 @@ export const playlistDomainRoutes: ServerRoute[] = [
         // performing its own independent DNS resolution (or silently
         // following a redirect to an unchecked host) would reopen the SSRF
         // this guard exists to close.
-        let response = await fetchPinnedImage(targetUrl);
-        for (let redirects = 0; response.status >= 300 && response.status < 400 && redirects < 5; redirects++) {
-          const location = response.headers.get("location");
-          if (!location) break;
-          const nextUrl = new URL(location, targetUrl);
-          if (nextUrl.protocol !== "http:" && nextUrl.protocol !== "https:") {
-            return h.response({ success: false, message: "Forbidden redirect" }).code(403);
+        // Kept by the server after the first fetch (content/imageCache.ts cachedRelayImage).
+        let forbiddenRedirect = false;
+        const buf = await cachedRelayImage(targetUrl, async () => {
+          countOutbound(targetUrl, undefined, "image proxy");
+          let response = await fetchPinnedImage(targetUrl);
+          for (let redirects = 0; response.status >= 300 && response.status < 400 && redirects < 5; redirects++) {
+            const location = response.headers.get("location");
+            if (!location) break;
+            const nextUrl = new URL(location, targetUrl);
+            if (nextUrl.protocol !== "http:" && nextUrl.protocol !== "https:") {
+              forbiddenRedirect = true;
+              return null;
+            }
+            response = await fetchPinnedImage(nextUrl.toString());
           }
-          response = await fetchPinnedImage(nextUrl.toString());
-        }
-
-        if (!response.ok || !response.body) {
-          logger.warn(`[images/proxy] upstream ${parsed.hostname} returned ${response.status}`);
-          return h.response({ success: false, message: "Image not found" }).code(404);
-        }
-        // Served by what the bytes are, not by the upstream's Content-Type.
-        const img = await readImageBody(response);
-        if (!img) {
-          recordFromRequest(request, "image_proxy_blocked", `${parsed.hostname} returned a non-image`);
-          logger.warn(`[images/proxy] ${parsed.hostname} sent a non-image for ${parsed.pathname}`);
-          return h.response({ success: false, message: "Not an image" }).code(400);
-        }
-        return imageResponse(h, img);
+          if (!response.ok || !response.body) {
+            logger.warn(`[images/proxy] upstream ${parsed.hostname} returned ${response.status}`);
+            return null;
+          }
+          // Served by what the bytes are, not by the upstream's Content-Type.
+          const img = await readImageBody(response);
+          if (!img) {
+            recordFromRequest(request, "image_proxy_blocked", `${parsed.hostname} returned a non-image`);
+            logger.warn(`[images/proxy] ${parsed.hostname} sent a non-image for ${parsed.pathname}`);
+          }
+          return img?.buf ?? null;
+        });
+        if (forbiddenRedirect) return h.response({ success: false, message: "Forbidden redirect" }).code(403);
+        const kind = buf ? sniffImage(buf) : null;
+        if (!buf || !kind) return h.response({ success: false, message: "Image not found" }).code(404);
+        return imageResponse(h, { buf, kind });
       } catch (err) {
         if (err instanceof ForbiddenHostError) {
           recordFromRequest(request, "image_proxy_blocked", parsed.hostname);

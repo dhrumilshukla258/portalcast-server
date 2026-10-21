@@ -324,6 +324,28 @@ export const getActiveProfileId = async () => {
 };
 
 // Generates dynamic deterministic keys for parameters
+/**
+ * Detail answers (a series' seasons, a season's episodes, a movie's files) kept 24 hours.
+ * They were written to content_cache but never read back, so every open of a series asked
+ * the portal again (seasons, then each season's episodes). The key holds only what decides
+ * the answer, not every query parameter a client happens to send. A request for one episode
+ * (episodeId) stays live: it refreshes play links.
+ */
+export const DETAIL_CACHE_MS = 24 * 60 * 60 * 1000;
+
+export function detailCacheKey(type: "movie" | "series", q: { movieId?: any; seasonId?: any; episodeId?: any; page?: any; search?: any }): string | null {
+  if (!Number(q.movieId) || q.search || Number(q.episodeId) > 0) return null;
+  return `${type}-detail:${q.movieId}:${q.seasonId || 0}:${q.page || 1}`;
+}
+
+/** A stored detail answer, its image addresses moved to `origin` when it was built for another. */
+export function rebaseOrigin<T>(stored: { origin?: string; response: T } | any, origin: string): T {
+  const response = stored?.response ?? stored;
+  const from = stored?.origin as string | undefined;
+  if (!from || from === origin) return response;
+  return JSON.parse(JSON.stringify(response).split(from).join(origin));
+}
+
 export const generateCacheKey = (type: string, queryParams: any): string => {
   const sortedString = JSON.stringify(
     queryParams,

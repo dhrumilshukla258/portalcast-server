@@ -1,15 +1,23 @@
-// Is the IPTV portal reachable? Checked every minute with one small request to the portal's
-// address: any HTTP answer (even an error page) means online; a timeout or a network error
-// means offline. The apps ask GET /api/v2/health/iptv and grey out IPTV while it is offline;
-// the local library keeps playing (docs/skill-local-library.md, "Offline").
+// Is the IPTV portal reachable? Real traffic answers that first: any portal answer in the
+// last 5 minutes (services/outboundTraffic.ts sees every request) means online, with no extra
+// request. Only when the portal has been quiet for 5 minutes is it probed with one small
+// request; a network failure seen in real traffic is confirmed by a probe at once, and while
+// it is offline it is probed every minute until it answers. Any HTTP answer (even an error
+// page) means online; a timeout or a network error means offline. Before: a probe every
+// minute (1,440 a day). The apps learn the result from a header on every answer (server.ts)
+// and from GET /api/v2/health/iptv; the local library keeps playing (skill-local-library.md).
 //
 // Its own timer, not the job runner: a long backup or scan must not delay this.
 
+import { portalContact } from "@/services/outboundTraffic";
 import axios from "axios";
 import { initialConfig } from "@/config/server";
 import { logger } from "@/infra/logger";
 
 const EVERY_MS = 60_000;
+/** Without real traffic for this long, one probe confirms the portal is still there. */
+const QUIET_PROBE_MS = 5 * 60_000;
+let lastProbe = 0;
 const TIMEOUT_MS = 6_000;
 /** Two failures in a row before calling it offline: one slow answer is not an outage. */
 const FAILS_TO_OFFLINE = 2;
@@ -32,11 +40,24 @@ function portalBase(): string | null {
 
 async function check(): Promise<void> {
   const base = portalBase();
-  lastCheck = Date.now();
   if (!base) return; // no portal configured: nothing to report
+  const now = Date.now();
+  const { lastAnswer, lastFailure } = portalContact();
+  // Real traffic answered recently, with no failure since: online, no request needed.
+  if (online && lastAnswer > 0 && now - lastAnswer < QUIET_PROBE_MS && lastAnswer >= lastFailure) {
+    lastCheck = lastAnswer;
+    fails = 0;
+    return;
+  }
+  // Probed recently and nothing has failed since: wait for the quiet period to pass.
+  if (online && now - lastProbe < QUIET_PROBE_MS && lastFailure <= lastProbe) return;
+  lastProbe = now;
+  lastCheck = now;
   let ok = false;
   try {
-    await axios.get(base, { timeout: TIMEOUT_MS, maxRedirects: 0, validateStatus: () => true, responseType: "stream" }).then((r) => r.data?.destroy?.());
+    await axios
+      .get(base, { timeout: TIMEOUT_MS, maxRedirects: 0, validateStatus: () => true, responseType: "stream", countAs: "portal health" } as any)
+      .then((r) => r.data?.destroy?.());
     ok = true;
   } catch {
     ok = false;

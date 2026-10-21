@@ -8,6 +8,7 @@
 // choice), imageCacheGb (size cap, default 20; 0 turns caching off and the apps load TMDB
 // directly as before). A nightly job removes the least recently used images above the cap.
 
+import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import axios from "axios";
@@ -137,8 +138,15 @@ export async function evictImageCache(): Promise<string> {
   // Non-blocking throughout: this walks the whole folder, which can be on the NAS.
   let sizes: string[] = [];
   try { sizes = await fs.promises.readdir(root); } catch { /* no cache yet */ }
+  // <size>/<file> for TMDB images; relay/<xx>/<hash> for portal images (one level deeper).
+  const dirs: string[] = [];
   for (const size of sizes) {
-    const dir = path.join(root, size);
+    if (size !== "relay") { dirs.push(path.join(root, size)); continue; }
+    let subs: string[] = [];
+    try { subs = await fs.promises.readdir(path.join(root, size)); } catch { /* none */ }
+    for (const sub of subs) dirs.push(path.join(root, size, sub));
+  }
+  for (const dir of dirs) {
     let names: string[] = [];
     try { names = await fs.promises.readdir(dir); } catch { continue; }
     for (const n of names) {
@@ -158,4 +166,55 @@ export async function evictImageCache(): Promise<string> {
     try { await fs.promises.rm(f.p); total -= f.size; removed++; } catch { /* gone */ }
   }
   return `${removed} images removed, ${(total / 1024 ** 3).toFixed(2)} GB left`;
+}
+
+// ── Portal images (channel logos, posters of titles not on TMDB) ─────────────
+// Relayed images were fetched from the portal on every request (apps kept them an hour), so
+// every logo of every channel list went back to the portal again and again. They are kept
+// like TMDB images now: memory, then <cache folder>/relay/, then the portal once. Images the
+// portal does not have are remembered for 10 minutes, so a missing logo is not asked for on
+// every page. The bytes are checked by the caller (an image, under the size cap) before
+// they are kept.
+
+const MISSING_FOR_MS = 10 * 60_000;
+const missing = new Map<string, number>();
+const relayInflight = new Map<string, Promise<Buffer | null>>();
+
+export async function cachedRelayImage(url: string, fetchImage: () => Promise<Buffer | null>): Promise<Buffer | null> {
+  const hash = crypto.createHash("sha1").update(url).digest("hex");
+  const key = `relay/${hash}`;
+  const hit = memGet(key);
+  if (hit) return hit;
+  const gone = missing.get(key);
+  if (gone && Date.now() - gone < MISSING_FOR_MS) return null;
+  const running = relayInflight.get(key);
+  if (running) return running;
+  const target = path.join(imageCacheFolder(), "relay", hash.slice(0, 2), hash);
+  const job = (async () => {
+    if (imageCacheEnabled()) {
+      try {
+        const bytes = await fs.promises.readFile(target);
+        touch(key, target);
+        memPut(key, bytes);
+        return bytes;
+      } catch {
+        /* not cached yet */
+      }
+    }
+    const bytes = await fetchImage();
+    if (!bytes) {
+      missing.set(key, Date.now());
+      if (missing.size > 5000) missing.delete(missing.keys().next().value as string);
+      return null;
+    }
+    missing.delete(key);
+    memPut(key, bytes);
+    if (imageCacheEnabled()) {
+      touched.set(key, Date.now());
+      saveInBackground(target, bytes);
+    }
+    return bytes;
+  })().finally(() => relayInflight.delete(key));
+  relayInflight.set(key, job);
+  return job;
 }

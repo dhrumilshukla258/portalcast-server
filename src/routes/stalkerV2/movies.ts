@@ -55,7 +55,7 @@ import {
   getActiveProfileId,
   generateCacheKey,
   mapChannel,
-  filterBySearch,
+  filterBySearch, detailCacheKey, rebaseOrigin, DETAIL_CACHE_MS
 } from "./shared";
 import { getCatalogUnion, applyOverridesToMatches } from "@/content/catalogUnion";
 export const movieRoutes: ServerRoute[] = [
@@ -232,6 +232,14 @@ export const movieRoutes: ServerRoute[] = [
           const cachedRecord = await ContentCache.findOne({ where: { profileId, cacheKey } });
           if (cachedRecord && new Date() < cachedRecord.expiresAt) {
             return cachedRecord.response;
+          }
+        }
+        // A detail answer (seasons, episodes, a movie's files): kept 24 h (shared.ts detailCacheKey).
+        const detailKey = detailCacheKey("movie", { movieId, seasonId, episodeId, page, search });
+        if (detailKey) {
+          const kept = await ContentCache.findOne({ where: { profileId, cacheKey: detailKey } });
+          if (kept && new Date() < kept.expiresAt) {
+            return (rebaseOrigin(kept.response, getPublicOrigin(request)));
           }
         }
 
@@ -437,12 +445,11 @@ export const movieRoutes: ServerRoute[] = [
         // warm hasn't run yet, and caching that empty "All" page hid the whole catalog from
         // every client for CACHE_DURATION_MS (found 2026-10-18).
         if (!search && res?.js && firstPageData.length > 0) {
-          await ContentCache.upsert({
-            profileId,
-            cacheKey,
-            response: responsePayload,
-            expiresAt: new Date(Date.now() + CACHE_DURATION_MS),
-          });
+          await ContentCache.upsert(
+            detailKey
+              ? { profileId, cacheKey: detailKey, response: { origin: getPublicOrigin(request), response: responsePayload }, expiresAt: new Date(Date.now() + DETAIL_CACHE_MS) }
+              : { profileId, cacheKey, response: responsePayload, expiresAt: new Date(Date.now() + CACHE_DURATION_MS) },
+          );
         }
 
         return responsePayload;
