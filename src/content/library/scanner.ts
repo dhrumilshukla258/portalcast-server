@@ -82,18 +82,27 @@ async function readNfo(p: string): Promise<NfoData | null> {
 }
 
 /** Jellyfin keeps an episode's thumbnail in metadata/<file>.jpg; Kodi beside it as <file>-thumb.jpg. */
-async function episodeThumb(dir: string, base: string, relDir: string): Promise<string | null> {
-  for (const rel of [path.join("metadata", base + ".jpg"), base + "-thumb.jpg", base + ".jpg", path.join("metadata", base + ".png")]) {
-    if ((await statOf(path.join(dir, rel)))?.isFile()) return path.join(relDir, rel);
-  }
+// `here` = file names in the episode's folder, `meta` = file names in its metadata/ folder
+// (each folder listed once): no file check per candidate name on the NAS.
+function episodeThumb(here: Set<string>, meta: Set<string>, base: string, relDir: string): string | null {
+  if (meta.has(base + ".jpg")) return path.join(relDir, "metadata", base + ".jpg");
+  if (here.has(base + "-thumb.jpg")) return path.join(relDir, base + "-thumb.jpg");
+  if (here.has(base + ".jpg")) return path.join(relDir, base + ".jpg");
+  if (meta.has(base + ".png")) return path.join(relDir, "metadata", base + ".png");
   return null;
 }
+
+/** Names of the files in a directory listing. */
+const fileNames = (entries: fs.Dirent[]) => new Set(entries.filter((e) => e.isFile()).map((e) => e.name));
 
 /** Every title under one library folder. */
 async function walk(root: string): Promise<FoundTitle[]> {
   const titles: FoundTitle[] = [];
   const visit = async (dir: string, depth: number): Promise<void> => {
     const entries = await readDir(dir);
+    const here = fileNames(entries);
+    // Only NFO files the listing shows are opened (no failed open per video on the NAS).
+    const nfoIfPresent = (name: string) => (here.has(name) ? readNfo(path.join(dir, name)) : Promise.resolve(null));
     const videos = entries.filter((e) => e.isFile() && isVideoFile(e.name) && !isExtraFile(e.name) && !e.name.startsWith("."));
     const subs = entries.filter((e) => e.isFile() && SUBTITLE_EXTS.has(path.extname(e.name).toLowerCase()));
     const relDir = path.relative(root, dir);
@@ -120,7 +129,7 @@ async function walk(root: string): Promise<FoundTitle[]> {
     if (videos.length > 0 && depth > 0) {
       // A movie folder: every video whose name starts with the folder's name is a version.
       const asVersions = videos.filter((v) => versionLabelFor(fileBase(v.name), folderBase) !== null || fileBase(v.name).toLowerCase() === folderBase.toLowerCase());
-      const nfo = (await readNfo(path.join(dir, "movie.nfo"))) ?? (videos.length === 1 ? await readNfo(path.join(dir, fileBase(videos[0].name) + ".nfo")) : null);
+      const nfo = (await nfoIfPresent("movie.nfo")) ?? (videos.length === 1 ? await nfoIfPresent(fileBase(videos[0].name) + ".nfo") : null);
       if (asVersions.length === videos.length || videos.length === 1) {
         const files = (await Promise.all(videos.map((v) => fileOf(v, videos.length === 1 ? null : versionLabelFor(fileBase(v.name), folderBase))))).filter((f): f is FoundFile => !!f);
         const parsed = videos.length === 1 && !folderParsed.year && !folderParsed.tmdbId ? parseTitle(fileBase(videos[0].name)) : folderParsed;
@@ -138,7 +147,7 @@ async function walk(root: string): Promise<FoundTitle[]> {
           const f = await fileOf(v, null);
           if (!f) continue;
           const p = parseTitle(fileBase(v.name));
-          const own = await readNfo(path.join(dir, fileBase(v.name) + ".nfo"));
+          const own = await nfoIfPresent(fileBase(v.name) + ".nfo");
           titles.push({ relPath: f.relPath, name: own?.title || p.name, year: own?.year || p.year, tmdbId: own?.tmdbId ?? p.tmdbId, imdbId: own?.imdbId ?? p.imdbId, files: [f], nfo: own });
         }
       }
@@ -148,7 +157,7 @@ async function walk(root: string): Promise<FoundTitle[]> {
         const f = await fileOf(v, null);
         if (!f) continue;
         const p = parseTitle(fileBase(v.name));
-        const own = await readNfo(path.join(dir, fileBase(v.name) + ".nfo"));
+        const own = await nfoIfPresent(fileBase(v.name) + ".nfo");
         titles.push({ relPath: f.relPath, name: own?.title || p.name, year: own?.year || p.year, tmdbId: own?.tmdbId ?? p.tmdbId, imdbId: own?.imdbId ?? p.imdbId, files: [f], nfo: own });
       }
     }
@@ -175,6 +184,9 @@ async function walkSeries(root: string): Promise<FoundTitle[]> {
     const files: FoundFile[] = [];
     const visit = async (dir: string, depth: number, seasonHint: number | null): Promise<void> => {
       const entries = await readDir(dir);
+      const here = fileNames(entries);
+      const metaDir = entries.find((e) => e.isDirectory() && e.name === "metadata");
+      const meta = metaDir ? fileNames(await readDir(path.join(dir, metaDir.name))) : new Set<string>();
       const subs = entries.filter((e) => e.isFile() && SUBTITLE_EXTS.has(path.extname(e.name).toLowerCase()));
       for (const e of entries) {
         if (!e.isFile() || !isVideoFile(e.name) || isExtraFile(e.name) || e.name.startsWith(".")) continue;
@@ -184,8 +196,8 @@ async function walkSeries(root: string): Promise<FoundTitle[]> {
         const st = await statOf(path.join(dir, e.name));
         if (!st) continue;
         const relDir = path.relative(root, dir);
-        const epNfo = await readNfo(path.join(dir, base + ".nfo"));
-        const thumb = await episodeThumb(dir, base, relDir);
+        const epNfo = here.has(base + ".nfo") ? await readNfo(path.join(dir, base + ".nfo")) : null;
+        const thumb = episodeThumb(here, meta, base, relDir);
         files.push({
           relPath: path.join(relDir, e.name), size: st.size, mtimeMs: st.mtimeMs, versionLabel: null,
           sidecars: subs
