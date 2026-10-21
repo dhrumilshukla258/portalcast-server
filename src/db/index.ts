@@ -231,6 +231,21 @@ export async function initDB() {
         logger.error(`Migration: failed to create composite index on ${table}: ${e.message}`);
       }
     }
+    // Indexes that only cost writes (speed plan step 3): exact duplicates of the idx_* ones
+    // above (groupKey, enrichedAt), `value` alone (the composite (value, contentId) covers it),
+    // and isRepresentative (content_meta: covered by idx_content_meta_discover; tag tables:
+    // ~80% of rows are representative, a scan beats the index). The models no longer declare them.
+    for (const name of [
+      "content_meta_group_key", "content_meta_enriched_at", "content_meta_is_representative",
+      "content_genres_value", "content_countries_value", "content_themes_value",
+      "content_genres_is_representative", "content_countries_is_representative", "content_themes_is_representative",
+    ]) {
+      try {
+        await sequelize.query(`DROP INDEX IF EXISTS \`${name}\`;`);
+      } catch (e: any) {
+        logger.error(`Migration: could not drop index ${name}: ${e.message}`);
+      }
+    }
 
     for (const model of Object.values(sequelize.models)) {
       if (model.name === "UserProgress") continue; // fully hand-managed above, not even a plain sync

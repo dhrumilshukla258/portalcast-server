@@ -18,13 +18,11 @@ export class ContentTheme extends Model {
   @Column(DataType.STRING)
   declare contentId: string;
 
-  @Index
   @Column(DataType.STRING)
   declare value: string;
 
   // See ContentGenre.ts for why this exists — denormalized copy of the parent
   // ContentMeta row's isRepresentative, kept in sync by recomputeRepresentatives().
-  @Index
   @Column(DataType.BOOLEAN)
   declare isRepresentative: boolean;
 

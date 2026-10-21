@@ -75,7 +75,6 @@ export class ContentMeta extends Model {
   // and instead had to materialize/sort a much larger joined result set,
   // which never completed in testing (multiple concurrent genre-row requests
   // hung indefinitely). Confirmed via real timing logs before/after this fix.
-  @Index
   @Column(DataType.DATE)
   declare enrichedAt: Date;
 
@@ -85,7 +84,6 @@ export class ContentMeta extends Model {
   // one groupKey). Lets Discover show one card per real title instead of one
   // per raw catalog entry, with a separate endpoint listing all variants
   // sharing a groupKey for the "which language?" picker on click.
-  @Index
   @Column(DataType.STRING)
   declare groupKey: string;
 
@@ -205,7 +203,6 @@ export class ContentMeta extends Model {
   // in listings. Filtering on this plain boolean instead of a live GROUP BY
   // avoids SQLite's undefined-row-per-group behavior for non-aggregated
   // GROUP BY queries.
-  @Index
   @Column(DataType.BOOLEAN)
   declare isRepresentative: boolean;
 

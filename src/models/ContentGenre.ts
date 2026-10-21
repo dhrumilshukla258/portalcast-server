@@ -19,7 +19,6 @@ export class ContentGenre extends Model {
   @Column(DataType.STRING)
   declare contentId: string;
 
-  @Index
   @Column(DataType.STRING)
   declare value: string;
 
@@ -30,7 +29,6 @@ export class ContentGenre extends Model {
   // that join, made unconditional during the title-grouping work, turned a
   // cheap single-table GROUP BY into a full scan across this table (~850k
   // rows) on every Discover page load and took the whole server down.
-  @Index
   @Column(DataType.BOOLEAN)
   declare isRepresentative: boolean;
 
