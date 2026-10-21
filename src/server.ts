@@ -1,3 +1,5 @@
+import { ContentCache } from "./models/ContentCache";
+import { runStorageMigrations } from "./db/storageMigrations";
 import { titleImageRoutes } from "./routes/admin/titleImages";
 import { evictImageCache } from "./content/imageCache";
 import { startPortalHealth, iptvHealth } from "./services/portalHealth";
@@ -38,7 +40,7 @@ import { userManagementRoutes } from "./routes/account/userManagement";
 import { discoverRoutes, discoverDetailsRoute } from "./routes/discover";
 import { socketService } from "./services/SocketService";
 
-import { initDB } from "./db";
+import { initDB, sequelize } from "./db";
 import { loadSettings, setting } from "./config/settings";
 import { settingsRoutes } from "./routes/admin/settings";
 import { migrateToProfiles, loadActiveProfileFromDB, encryptStoredCredentials } from "./config/server";
@@ -79,11 +81,17 @@ const init = async () => {
 
   await migrateToProfiles();
   await encryptStoredCredentials();
+  // One-time storage changes (db/storageMigrations.ts): backup first, then each step once.
+  await runStorageMigrations(sequelize);
 
   // Background jobs (services/jobs.ts). The runner starts after the server is listening.
   registerJob({ name: "backup", label: "Back up the database", dailyAtHour: 4, run: backupDatabase });
   registerJob({ name: "library-scan", label: "Scan local libraries", dailyAtHour: 3, run: () => scanLibraries() });
   registerJob({ name: "image-cache", label: "Trim the image cache", dailyAtHour: 5, run: evictImageCache });
+  registerJob({
+    name: "page-cache", label: "Remove expired page answers", dailyAtHour: 5,
+    run: async () => `${await ContentCache.destroy({ where: { expiresAt: { [Op.lt]: new Date() } } })} removed`,
+  });
 
   await loadActiveProfileFromDB();
   // Explicitly initialize provider after loading the active profile from DB,

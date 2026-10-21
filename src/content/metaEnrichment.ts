@@ -101,6 +101,7 @@ interface Resolved {
   rating: number | null;
   ratingCount: number | null;
   imdbId: string | null;
+  trailerKey: string | null;
   details: TitleDetails | null;
 }
 
@@ -164,6 +165,7 @@ async function resolveMeta(
       rating: tmdb.rating ?? null,
       ratingCount: tmdb.ratingCount ?? null,
       imdbId: tmdb.imdbId ?? null,
+      trailerKey: tmdb.trailerKey ?? null,
       details: tmdb.details ?? null,
     };
   }
@@ -185,6 +187,7 @@ async function resolveMeta(
     rating: null,
     ratingCount: null,
     imdbId: null,
+    trailerKey: null,
     details: null,
   };
 }
@@ -231,6 +234,7 @@ async function upsertContent(contentId: string, type: ContentType, name: string,
       // must not blank a rating the backfill already wrote.
       ...(resolved.rating != null ? { rating: resolved.rating, ratingCount: resolved.ratingCount } : {}),
       ...(resolved.imdbId ? { imdbId: resolved.imdbId } : {}),
+      ...(resolved.trailerKey ? { trailerKey: resolved.trailerKey } : {}),
     }, { transaction });
     if (resolved.details) await storeDetails(contentId, resolved.details, transaction);
     const keep: Record<string, any> = {};
@@ -323,7 +327,10 @@ async function backfillDetails(): Promise<void> {
     try {
       const meta = await fetchMetaByTmdbId(r.type === "series" ? "tv" : "movie", Number(r.tmdbId));
       if (meta?.details) {
-        await withBusyRetry(`[MetaEnrich] details ${r.id}`, () => ContentMeta.sequelize!.transaction({ type: Transaction.TYPES.IMMEDIATE }, (t) => storeDetails(r.id, meta.details, t)));
+        await withBusyRetry(`[MetaEnrich] details ${r.id}`, () => ContentMeta.sequelize!.transaction({ type: Transaction.TYPES.IMMEDIATE }, async (t) => {
+          await storeDetails(r.id, meta.details, t);
+          if (meta.trailerKey) await ContentMeta.update({ trailerKey: meta.trailerKey }, { where: { id: r.id }, transaction: t });
+        }));
         filled++;
       }
     } catch (e: any) {
@@ -872,7 +879,6 @@ async function fixYearMismatches(): Promise<void> {
     const item = portal.get(row.id);
     try {
       await xtreamCache.delete(cacheKey);
-      await xtreamCache.delete(`tmdb_web_${row.type === "movie" ? "movie" : "series"}_${portalId}`);
       const resolved = await resolveMeta(
         kind,
         cacheKey,

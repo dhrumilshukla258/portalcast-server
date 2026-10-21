@@ -1,3 +1,5 @@
+import { Op } from "sequelize";
+import { ContentMeta } from "@/models/ContentMeta";
 import { withArtUrls } from "@/content/library/art";
 import { logger } from "@/infra/logger";
 import { groupDataFor, ratingFields } from "@/content/titleRatings";
@@ -232,11 +234,23 @@ async function enrichArtworkFromTmdbRaw(items: any[], kind: "movie" | "series", 
   // Local-library titles carry their own art (folder images, else their matched TMDB art).
   const local = items.filter((it) => it?.is_local);
   if (local.length === items.length) return items.map((it) => withArtUrls(it, origin));
-  const cacheKeys = items.map((item: any) => {
+  // The title's stored details (content_meta, filled by enrichment): one indexed read for
+  // the page. This replaced a separate TMDB search per catalog item (tmdb_web_* cache),
+  // which could even pick different artwork than Discover for the same title.
+  const prefix = kind === "movie" ? "movie_" : "series_";
+  const ids = items.map((item: any) => {
     const itemId = item.id ?? item.stream_id ?? item.series_id;
-    return itemId ? `tmdb_web_${kind}_${itemId}` : undefined;
+    return itemId ? `${prefix}${itemId}` : undefined;
   });
-  const metaByKey = await xtreamCache.getMany<any>(cacheKeys.filter((k): k is string => !!k));
+  const wanted = ids.filter((k): k is string => !!k);
+  const rows = wanted.length
+    ? ((await ContentMeta.findAll({
+        where: { id: { [Op.in]: wanted } },
+        attributes: ["id", "poster", "backdrop", "backdropHd", "overview", "cast", "director", "trailerKey", "tmdbId"],
+        raw: true,
+      })) as any[])
+    : [];
+  const metaById = new Map(rows.map((r) => [r.id as string, r]));
 
   return Promise.all(
     items.map(async (item: any, idx: number) => {
@@ -252,18 +266,11 @@ async function enrichArtworkFromTmdbRaw(items: any[], kind: "movie" | "series", 
         ? item.backdrop_path
         : undefined;
 
-      const cacheKey = cacheKeys[idx]!;
-      const meta = metaByKey.get(cacheKey);
+      const meta = metaById.get(ids[idx]!);
 
-      if (meta === undefined || meta === null) {
-        if (!(item.screenshot_uri && existingBackdrop && item.actors && item.director)) {
-          const name = item.name || item.title || "";
-          const year = String(item.year || item.releaseDate || item.added || "").slice(0, 4);
-          const lookup = kind === "movie" ? fetchMovieMeta(name, year) : fetchTVMeta(name, year);
-          lookup
-            .then((fetched) => xtreamCache.set(cacheKey, fetched ?? { _not_found: true }))
-            .catch(() => {});
-        }
+      // Not enriched yet (new in the portal) or not on TMDB: the portal's own art. Enrichment
+      // matches new titles in the background; the next page load shows TMDB's.
+      if (!meta || !meta.tmdbId) {
         // item.screenshot_uri here is whatever the portal returned raw — proxy
         // it so the upstream host is never sent to the browser (see
         // proxiedImageUrl in portalAssets.ts). Every return path in this
@@ -274,23 +281,20 @@ async function enrichArtworkFromTmdbRaw(items: any[], kind: "movie" | "series", 
         return { ...item, screenshot_uri: proxiedImageUrl(item.screenshot_uri, origin), backdrop_path: existingBackdrop };
       }
 
-      if (meta && !meta._not_found) {
-        return {
-          ...item,
-          screenshot_uri: proxiedImageUrl(meta.poster || item.screenshot_uri, origin),
-          backdrop_path: meta.backdrop ? proxiedImageUrl(meta.backdrop, origin) : existingBackdrop,
-          // No `existingBackdrop` fallback here — that's a portal-supplied
-          // image of unknown resolution, so it can't be trusted as "high-res"
-          // the way a TMDB-confirmed backdropHd pick can. Only ever the
-          // TMDB pick, or nothing (AmbientBackdrop skips items without it).
-          backdrop_hd_path: meta.backdropHd ? proxiedImageUrl(meta.backdropHd, origin) : undefined,
-          description: item.description || meta.overview || item.description,
-          actors: item.actors || meta.cast || item.actors,
-          director: item.director || meta.director || item.director,
-          trailer_key: meta.trailerKey || undefined,
-        };
-      }
-      return { ...item, screenshot_uri: proxiedImageUrl(item.screenshot_uri, origin), backdrop_path: existingBackdrop };
+      return {
+        ...item,
+        screenshot_uri: proxiedImageUrl(meta.poster || item.screenshot_uri, origin),
+        backdrop_path: meta.backdrop ? proxiedImageUrl(meta.backdrop, origin) : existingBackdrop,
+        // No `existingBackdrop` fallback here — that's a portal-supplied
+        // image of unknown resolution, so it can't be trusted as "high-res"
+        // the way a TMDB-confirmed backdropHd pick can. Only ever the
+        // TMDB pick, or nothing (AmbientBackdrop skips items without it).
+        backdrop_hd_path: meta.backdropHd ? proxiedImageUrl(meta.backdropHd, origin) : undefined,
+        description: item.description || meta.overview || item.description,
+        actors: item.actors || meta.cast || item.actors,
+        director: item.director || meta.director || item.director,
+        trailer_key: meta.trailerKey || undefined,
+      };
     }),
   );
 }

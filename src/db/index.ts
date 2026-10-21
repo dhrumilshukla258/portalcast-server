@@ -270,7 +270,12 @@ export async function initDB() {
       ["tagline", "TEXT"], ["ageRating", "VARCHAR(255)"], ["runtime", "INTEGER"], ["studios", "TEXT"],
       ["collection", "VARCHAR(255)"], ["originalTitle", "VARCHAR(255)"], ["premiered", "VARCHAR(255)"],
       ["logo", "VARCHAR(255)"], ["writers", "TEXT"], ["detailsCheckedAt", "DATETIME"], ["artLocked", "JSON"],
+      ["trailerKey", "VARCHAR(255)"],
     ]);
+    // Episode id -> series (content/episodeIndex.ts), replacing ep_info_* rows of xtream_cache.
+    await sequelize.query(
+      "CREATE TABLE IF NOT EXISTS `episode_index` (`episodeId` INTEGER PRIMARY KEY, `seriesId` INTEGER NOT NULL, `episode` INTEGER)",
+    );
     await ensureColumns("media_files", [["nfo", "JSON"], ["thumb", "TEXT"], ["keyframes", "JSON"]]);
     await ensureColumns("media_files", [["season", "INTEGER"], ["episode", "INTEGER"], ["episodeEnd", "INTEGER"], ["episodeTitle", "VARCHAR(255)"]]);
     await ensureColumns("users", [

@@ -1,4 +1,6 @@
-﻿import { withArtUrls } from "@/content/library/art";
+﻿import { episodeLocation } from "@/content/episodeIndex";
+import { catalogItem } from "@/content/catalogUnion";
+import { withArtUrls } from "@/content/library/art";
 import { localSearch } from "@/content/library/catalog";
 import { withVersionLabels } from "@/content/versionLabel";
 import { localEpisodeFile } from "@/content/library/catalog";
@@ -489,9 +491,9 @@ export const movieRoutes: ServerRoute[] = [
           if (!isSeries) {
             // Unambiguous: `id` is the same stream_id mapVodItem cached under
             // `vod_info_${id}` during the normal catalog warm.
-            const vodInfo = await xtreamCache.get<any>(`vod_info_${id}`);
-            effectiveTitle = effectiveTitle || vodInfo?.info?.name || vodInfo?.movie_data?.name || undefined;
-            effectiveCategory = effectiveCategory || vodInfo?.info?.genre || undefined;
+            const item = await catalogItem("movie", String(id), await getActiveProfileId());
+            effectiveTitle = effectiveTitle || item?.name || undefined;
+            effectiveCategory = effectiveCategory || item?.genres_str || undefined;
           } else {
             // Stalker sometimes has every episode in a season share the SAME `id`
             // (the season pack's own catalog id), with `series` as the only thing
@@ -501,11 +503,13 @@ export const movieRoutes: ServerRoute[] = [
             // if it matches the `series` value THIS request actually sent. If they
             // disagree, `id` is shared across episodes and we can't tell which one
             // this is — skip the fallback rather than risk labeling the wrong episode.
-            const epInfo = await xtreamCache.get<any>(`ep_info_${id}`);
-            if (epInfo && String(epInfo.seriesNum) === String(series)) {
-              const seriesInfo = await xtreamCache.get<any>(`series_info_${epInfo.movieId}`);
-              const seasonEpisodes = seriesInfo?.episodes?.[String(epInfo.seasonId)] || [];
-              const epEntry = seasonEpisodes.find((e: any) => String(e.id) === String(id));
+            const epInfo = await episodeLocation(String(id));
+            if (epInfo && String(epInfo.episode) === String(series)) {
+              const seriesInfo = await xtreamCache.get<any>(`series_info_${epInfo.seriesId}`);
+              // Episodes are stored per season number: look the id up in every season (the
+              // old lookup used the portal's season id as the key, so it never matched).
+              const allEpisodes = Object.values(seriesInfo?.episodes || {}).flat() as any[];
+              const epEntry = allEpisodes.find((e: any) => String(e?.id) === String(id));
               if (!effectiveTitle && seriesInfo?.info?.name && epEntry?.title) {
                 effectiveTitle = `${seriesInfo.info.name} - ${epEntry.title}`;
               }
@@ -582,7 +586,7 @@ export const movieRoutes: ServerRoute[] = [
           const itemId = qItemId ? String(qItemId) : String(id);
           let hideable = !!qItemId;
           if (!qItemId && itemType === "movie" && id) {
-            hideable = !!(await xtreamCache.get<any>(`vod_info_${id}`).catch(() => null));
+            hideable = !!(await catalogItem("movie", String(id), await getActiveProfileId()).catch(() => null));
           }
           const tokenizedUrl = proxyUrlFor(rawUrl, userLabel, {
             kind: isSeries ? "series" : "movie",

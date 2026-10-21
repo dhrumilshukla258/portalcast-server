@@ -34,6 +34,8 @@ export interface CatalogUnion {
   raw: any[];
   browse: any[];
   catOf: Map<string, string>;
+  /** Portal item by its id, built on first use (catalogItem). */
+  byId?: Map<string, any>;
 }
 
 const entries = new Map<string, CatalogUnion>();
@@ -94,6 +96,25 @@ async function applyOverridesToUnion(type: CatalogType, raw: any[]): Promise<any
     result.sort((a, b) => order(a) - order(b));
   }
   return result;
+}
+
+/**
+ * One portal item of the "*" catalog by its id (stream_id / series_id), or null. Reads the
+ * in-memory catalog: no database call once it is built. Items in hidden categories are not
+ * in it, like everywhere else the catalog is browsed.
+ */
+export async function catalogItem(type: CatalogType, id: string | number, profileId: number | undefined): Promise<any | null> {
+  const union = await getCatalogUnion(type, profileId);
+  if (!union) return null;
+  if (!union.byId) {
+    const byId = new Map<string, any>();
+    for (const item of union.raw) {
+      const k = itemIdOf(type, item);
+      if (!byId.has(k)) byId.set(k, item);
+    }
+    union.byId = byId;
+  }
+  return union.byId.get(String(id)) ?? null;
 }
 
 /** The "*" catalog for `type`, rebuilt only when its fingerprint changed. Null when empty. */

@@ -1,3 +1,4 @@
+import { rememberEpisode } from "@/content/episodeIndex";
 import zlib from "zlib";
 import { promisify } from "util";
 import { Op } from "sequelize";
@@ -319,32 +320,9 @@ function toUnixAdded(added: any): string {
 
 export function mapVodItem(m: any, num: number, categoryId: string | number): any {
   const added = toUnixAdded(m.added);
-  if (m.cmd) xtreamCache.setDeferred(`vod_cmd_${m.id}`, m.cmd);
-  xtreamCache.setDeferred(`vod_info_${m.id}`, {
-    info: {
-      name:          m.name,
-      cover_big:     buildIconUrl(m.screenshot_uri),
-      movie_image:   buildIconUrl(m.screenshot_uri),
-      releasedate:   m.year || "",
-      director:      m.director || "",
-      actors:        m.actors || "",
-      plot:          m.description || "",
-      rating:        m.rating_imdb || 0,
-      backdrop_path: [],
-      duration_secs: parseInt(m.time) || 0,
-      genre:         m.genres_str || "",
-      age:           m.rating_mpaa || m.age || "",
-    },
-    movie_data: {
-      stream_id:           parseInt(m.id),
-      name:                m.name,
-      added,
-      category_id:         String(categoryId),
-      container_extension: "m3u8",
-      custom_sid:          "",
-      direct_source:       "",
-    },
-  });
+  // No per-movie rows any more (vod_info_*, vod_cmd_*, ~30,000 of them): nothing read
+  // vod_cmd_* since the Xtream emulation went, and vod_info_*'s two uses (stream label,
+  // broken-stream check) read the in-memory catalog (content/catalogUnion.ts catalogItem).
   return {
     num,
     name:                m.name,
@@ -711,15 +689,9 @@ export async function warmSeriesInfoCache(): Promise<void> {
 
           episodesMap[seasonNum] = effectiveEps.map((ep: any, idx: number) => {
             const epNum = parseInt(String(ep.series_number || (idx + 1)));
-            xtreamCache.setDeferred(`ep_info_${ep.id}`, {
-              movieId:   seriesId,
-              seasonId:  seasonIdInt,
-              seriesNum: epNum,
-            });
+            // Episode id -> series, in the compact episode_index table (content/episodeIndex.ts).
+            rememberEpisode(ep.id, seriesId, epNum);
             totalEpInfo++;
-            if (ep.cmd) {
-              xtreamCache.setDeferred(`ep_cmd_${ep.id}`, { cmd: ep.cmd, series_num: epNum });
-            }
             return {
               id:                  ep.id,
               episode_num:         epNum,

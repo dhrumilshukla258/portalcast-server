@@ -174,6 +174,10 @@ export class ContentMeta extends Model {
   @Column(DataType.TEXT)
   declare writers: string | null;
 
+  /** YouTube key of the title's trailer (from TMDB), shown on detail pages. */
+  @Column(DataType.STRING)
+  declare trailerKey: string | null;
+
   /** Custom artwork chosen in the admin page, per kind (content/customArt.ts): locked against refreshes. */
   @Column(DataType.JSON)
   declare artLocked: any | null;
