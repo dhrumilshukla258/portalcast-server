@@ -1,3 +1,4 @@
+import { withBusyRetry } from "@/infra/busyRetry";
 import { lockOf } from "@/content/customArt";
 import { ContentPerson } from "@/models/ContentPerson";
 import type { TitleDetails } from "@/content/tmdb";
@@ -322,7 +323,7 @@ async function backfillDetails(): Promise<void> {
     try {
       const meta = await fetchMetaByTmdbId(r.type === "series" ? "tv" : "movie", Number(r.tmdbId));
       if (meta?.details) {
-        await ContentMeta.sequelize!.transaction((t) => storeDetails(r.id, meta.details, t));
+        await withBusyRetry(`[MetaEnrich] details ${r.id}`, () => ContentMeta.sequelize!.transaction((t) => storeDetails(r.id, meta.details, t)));
         filled++;
       }
     } catch (e: any) {
@@ -813,6 +814,8 @@ async function runFixups(): Promise<void> {
   await step("fix-year-mismatches", fixYearMismatches);
   await step("backfill-ratings-creators", backfillRatingsAndCreators);
   await step("backfill-details", backfillDetails);
+  // Second pass: titles the first pass lost to "database is locked" (before writes retried).
+  await step("backfill-details-2", backfillDetails);
   await step("retry-unmatched", retryUnmatched);
   await step("reclean-channels", recleanChannelNames);
   // The TMDB passes write rows through upsertContent (groupKeyFor), so their groups are
