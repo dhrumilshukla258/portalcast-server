@@ -8,6 +8,7 @@
 // Items have the same shape as IPTV list items, so neither app needs to know where a title
 // comes from. No path ever leaves the server: clients see ids and short-lived tokens.
 
+import { artMarker } from "@/content/library/art";
 import { Op } from "sequelize";
 import { LocalItem } from "@/models/LocalItem";
 import { MediaFile } from "@/models/MediaFile";
@@ -73,6 +74,14 @@ function listItem(item: LocalItem, meta: ContentMeta | undefined, genres: string
     is_series: 0,
     is_local: 1,
     quality: best ? qualityLabel(best) : undefined,
+    tagline: meta?.tagline || undefined,
+    rating_mpaa: meta?.ageRating || undefined,
+    runtime: meta?.runtime || undefined,
+    studios: meta?.studios || undefined,
+    collection: meta?.collection || undefined,
+    writers: meta?.writers || undefined,
+    premiered: meta?.premiered || undefined,
+    logo_path: meta?.logo || undefined,
   };
 }
 
@@ -200,6 +209,12 @@ async function seriesWithMeta(items: LocalItem[]) {
         genres_str: (genresById.get(localContentId(i.id, "series")) ?? []).join(", ") || undefined,
         is_series: 1,
         is_local: 1,
+        tagline: meta?.tagline || undefined,
+        rating_mpaa: meta?.ageRating || undefined,
+        runtime: meta?.runtime || undefined,
+        studios: meta?.studios || undefined,
+        premiered: meta?.premiered || undefined,
+        logo_path: meta?.logo || undefined,
       };
     });
 }
@@ -274,7 +289,12 @@ function episodeItem(f: MediaFile, seriesId: string, base: any) {
     duration: f.duration ? Math.round(f.duration / 60) : undefined,
     container_extension: f.container || undefined,
     variantLabel: qualityLabel(f) || "Local file",
-    description: undefined,
+    description: f.nfo?.plot || undefined,
+    air_date: f.nfo?.premiered || undefined,
+    rating: f.nfo?.rating ? String(f.nfo.rating) : undefined,
+    director: f.nfo?.directors?.length ? f.nfo.directors.join(", ") : undefined,
+    // The episode's own thumbnail (Jellyfin metadata/ folder) beats TMDB's still.
+    ...(f.thumb ? { screenshot_uri: artMarker(`f${f.id}`, "still", Math.floor((f.mtimeMs || 0) / 1000)), local_still: 1 } : {}),
     audio_tracks: (f.audioTracks ?? []).map((t) => ({ language: t.language ?? null, codec: t.codec, channels: t.channels ?? null, title: t.title ?? null })),
     subtitle_tracks: [
       ...(f.subtitleTracks ?? []).map((t) => ({ language: t.language ?? null, codec: t.codec, forced: Boolean(t.forced), embedded: true })),

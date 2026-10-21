@@ -12,6 +12,8 @@
 //      progress is kept). A library folder that is gone or empty while it had files is
 //      skipped instead, so an unplugged disk never empties the library.
 
+import { parseNfoFull, type NfoData } from "@/content/library/nfo";
+import { ContentPerson } from "@/models/ContentPerson";
 import { findArt, artMarker } from "@/content/library/art";
 import fs from "fs";
 import path from "path";
@@ -46,8 +48,9 @@ export function localContentId(itemId: number, kind: string = "movie"): string {
 interface FoundFile {
   relPath: string; size: number; mtimeMs: number; versionLabel: string | null; sidecars: SidecarSubtitle[];
   season?: number | null; episode?: number | null; episodeEnd?: number | null; episodeTitle?: string | null;
+  nfo?: MediaFile["nfo"]; thumb?: string | null;
 }
-interface FoundTitle { relPath: string; name: string; year: string | null; tmdbId: number | null; imdbId: string | null; files: FoundFile[] }
+interface FoundTitle { relPath: string; name: string; year: string | null; tmdbId: number | null; imdbId: string | null; files: FoundFile[]; nfo?: NfoData | null }
 
 function readDir(dir: string): fs.Dirent[] {
   try {
@@ -65,12 +68,21 @@ function statOf(p: string): fs.Stats | null {
   }
 }
 
-function readNfo(p: string) {
+/** A Kodi/Jellyfin NFO file, fully parsed (content/library/nfo.ts), or null. */
+function readNfo(p: string): NfoData | null {
   try {
-    return parseNfo(fs.readFileSync(p, "utf-8").slice(0, 256 * 1024));
+    return parseNfoFull(fs.readFileSync(p, "utf-8").slice(0, 512 * 1024));
   } catch {
     return null;
   }
+}
+
+/** Jellyfin keeps an episode's thumbnail in metadata/<file>.jpg; Kodi beside it as <file>-thumb.jpg. */
+function episodeThumb(dir: string, base: string, relDir: string): string | null {
+  for (const rel of [path.join("metadata", base + ".jpg"), base + "-thumb.jpg", base + ".jpg", path.join("metadata", base + ".png")]) {
+    if (statOf(path.join(dir, rel))?.isFile()) return path.join(relDir, rel);
+  }
+  return null;
 }
 
 /** Every title under one library folder. */
@@ -115,6 +127,7 @@ function walk(root: string): FoundTitle[] {
           tmdbId: nfo?.tmdbId ?? parsed.tmdbId,
           imdbId: nfo?.imdbId ?? parsed.imdbId,
           files,
+          nfo,
         });
       } else {
         for (const v of videos) {
@@ -122,7 +135,7 @@ function walk(root: string): FoundTitle[] {
           if (!f) continue;
           const p = parseTitle(fileBase(v.name));
           const own = readNfo(path.join(dir, fileBase(v.name) + ".nfo"));
-          titles.push({ relPath: f.relPath, name: own?.title || p.name, year: own?.year || p.year, tmdbId: own?.tmdbId ?? p.tmdbId, imdbId: own?.imdbId ?? p.imdbId, files: [f] });
+          titles.push({ relPath: f.relPath, name: own?.title || p.name, year: own?.year || p.year, tmdbId: own?.tmdbId ?? p.tmdbId, imdbId: own?.imdbId ?? p.imdbId, files: [f], nfo: own });
         }
       }
     } else if (videos.length > 0) {
@@ -132,7 +145,7 @@ function walk(root: string): FoundTitle[] {
         if (!f) continue;
         const p = parseTitle(fileBase(v.name));
         const own = readNfo(path.join(dir, fileBase(v.name) + ".nfo"));
-        titles.push({ relPath: f.relPath, name: own?.title || p.name, year: own?.year || p.year, tmdbId: own?.tmdbId ?? p.tmdbId, imdbId: own?.imdbId ?? p.imdbId, files: [f] });
+        titles.push({ relPath: f.relPath, name: own?.title || p.name, year: own?.year || p.year, tmdbId: own?.tmdbId ?? p.tmdbId, imdbId: own?.imdbId ?? p.imdbId, files: [f], nfo: own });
       }
     }
 
@@ -167,6 +180,7 @@ function walkSeries(root: string): FoundTitle[] {
         const st = statOf(path.join(dir, e.name));
         if (!st) continue;
         const relDir = path.relative(root, dir);
+        const epNfo = readNfo(path.join(dir, base + ".nfo"));
         files.push({
           relPath: path.join(relDir, e.name), size: st.size, mtimeMs: st.mtimeMs, versionLabel: null,
           sidecars: subs
@@ -175,12 +189,17 @@ function walkSeries(root: string): FoundTitle[] {
               return ps ? { relPath: path.join(relDir, sb.name), language: ps.language, forced: ps.forced, format: path.extname(sb.name).slice(1).toLowerCase() } : null;
             })
             .filter((x): x is SidecarSubtitle => x !== null),
-          season: ep.season ?? seasonHint ?? 1, episode: ep.episode, episodeEnd: ep.episodeEnd, episodeTitle: ep.title,
+          season: ep.season ?? seasonHint ?? 1, episode: ep.episode, episodeEnd: ep.episodeEnd,
+          // The episode's NFO title beats what the file name says (often nothing useful).
+          episodeTitle: epNfo?.title || ep.title,
+          nfo: epNfo ? { title: epNfo.title, plot: epNfo.plot, rating: epNfo.rating, premiered: epNfo.premiered, runtime: epNfo.runtime, directors: epNfo.directors } : null,
+          thumb: episodeThumb(dir, base, relDir),
         });
       }
       if (depth >= 4) return;
       for (const e of entries) {
-        if (!e.isDirectory() || e.name.startsWith(".") || e.name.toLowerCase().endsWith(".trickplay")) continue;
+        // Jellyfin's metadata/ (episode thumbnails) and trickplay folders hold no episodes.
+        if (!e.isDirectory() || e.name.startsWith(".") || e.name.toLowerCase() === "metadata" || e.name.toLowerCase().endsWith(".trickplay")) continue;
         const season = seasonFromFolder(e.name);
         if (season === null && EXTRA_DIRS.has(e.name.toLowerCase())) continue;
         visit(path.join(dir, e.name), depth + 1, season ?? seasonHint);
@@ -195,6 +214,7 @@ function walkSeries(root: string): FoundTitle[] {
       tmdbId: nfo?.tmdbId ?? parsed.tmdbId,
       imdbId: nfo?.imdbId ?? parsed.imdbId,
       files,
+      nfo,
     });
   }
   return shows;
@@ -231,6 +251,60 @@ async function applyFolderArt(item: LocalItem): Promise<void> {
   if (art.backdrop) want.backdrop = want.backdropHd = artMarker(item.id, "backdrop", art.v);
   const changed = Object.entries(want).some(([k, v]) => (meta as any)[k] !== v);
   if (changed) await ContentMeta.update(want, { where: { id: contentId } });
+}
+
+/**
+ * A title's NFO (Jellyfin's or Kodi's) as a metadata source: it fills whatever TMDB did not
+ * give (description, cast, crew, genres, countries, age rating, tagline, runtime, studios,
+ * collection, IMDb id), and a locked NFO ("lockdata", your edits in Jellyfin) wins over TMDB.
+ * Folder art stays the logo when there is one. Run after every match and art pass.
+ */
+async function applyNfoMeta(item: LocalItem): Promise<void> {
+  const nfo = item.nfo as NfoData | null;
+  if (!nfo) return;
+  const contentId = localContentId(item.id, item.kind);
+  const meta = await ContentMeta.findByPk(contentId);
+  if (!meta) return;
+  const locked = nfo.locked;
+  const fill = (field: keyof ContentMeta, value: any) => (locked || !(meta as any)[field]) && value != null && value !== "";
+  const patch: Record<string, any> = {};
+  if (fill("overview", nfo.plot)) patch.overview = nfo.plot;
+  const cast = nfo.actors.slice(0, 8).map((a) => a.name).join(", ");
+  if (fill("cast", cast)) patch.cast = cast;
+  const crew = item.kind === "series" ? null : nfo.directors.join(", ");
+  if (crew && fill("director", crew)) patch.director = crew;
+  if (fill("imdbId", nfo.imdbId)) patch.imdbId = nfo.imdbId;
+  if (fill("tagline", nfo.tagline)) patch.tagline = nfo.tagline;
+  if (fill("ageRating", nfo.mpaa)) patch.ageRating = nfo.mpaa;
+  if (fill("runtime", nfo.runtime)) patch.runtime = nfo.runtime;
+  if (fill("studios", nfo.studios.join(", "))) patch.studios = nfo.studios.slice(0, 4).join(", ");
+  if (fill("collection", nfo.collection)) patch.collection = nfo.collection;
+  if (fill("originalTitle", nfo.originalTitle)) patch.originalTitle = nfo.originalTitle;
+  if (fill("premiered", nfo.premiered)) patch.premiered = nfo.premiered;
+  if (fill("writers", nfo.writers.join(", "))) patch.writers = nfo.writers.slice(0, 6).join(", ");
+  if (!meta.rating && nfo.rating) patch.rating = nfo.rating;
+  if (item.art?.logo) patch.logo = artMarker(item.id, "logo", item.art.v);
+  if (Object.keys(patch).length) await ContentMeta.update(patch, { where: { id: contentId } });
+
+  // Cast and crew: from the NFO when TMDB gave none, or when the NFO is locked.
+  const people = await ContentPerson.count({ where: { contentId } });
+  if ((people === 0 || locked) && (nfo.actors.length || nfo.directors.length)) {
+    await ContentPerson.destroy({ where: { contentId } });
+    await ContentPerson.bulkCreate([
+      ...nfo.actors.slice(0, 20).map((a, i) => ({ contentId, kind: "cast", name: a.name, role: a.role, sortOrder: i, tmdbPersonId: null, photo: null })),
+      ...nfo.directors.map((n, i) => ({ contentId, kind: "director", name: n, role: null, sortOrder: i, tmdbPersonId: null, photo: null })),
+      ...nfo.writers.slice(0, 6).map((n, i) => ({ contentId, kind: "writer", name: n, role: null, sortOrder: i, tmdbPersonId: null, photo: null })),
+    ]);
+  }
+  // Genres and countries: from the NFO when the title has none (or the NFO is locked).
+  for (const [Model, values] of [[ContentGenre, nfo.genres], [ContentCountry, nfo.countries]] as const) {
+    if (!values.length) continue;
+    const have = await (Model as any).count({ where: { contentId } });
+    if (have === 0 || locked) {
+      await (Model as any).destroy({ where: { contentId } });
+      await (Model as any).bulkCreate(values.map((value: string) => ({ contentId, value, isRepresentative: false })));
+    }
+  }
 }
 
 export interface ScanSummary {
@@ -310,12 +384,16 @@ async function scanOne(lib: Library): Promise<ScanSummary> {
         await item.save();
       }
       seenItemIds.add(item.id);
+      if (JSON.stringify(t.nfo ?? null) !== JSON.stringify(item.nfo ?? null)) {
+        item.nfo = t.nfo ?? null;
+        await item.save();
+      }
 
       for (const f of t.files) {
         let row = await MediaFile.findOne({ where: { libraryId: lib.id, root, relPath: f.relPath } });
         const changed = !row || row.size !== f.size || Math.abs(row.mtimeMs - f.mtimeMs) > 1;
         const episodeFields = kind === "series"
-          ? { season: f.season ?? null, episode: f.episode ?? null, episodeEnd: f.episodeEnd ?? null, episodeTitle: f.episodeTitle ?? null }
+          ? { season: f.season ?? null, episode: f.episode ?? null, episodeEnd: f.episodeEnd ?? null, episodeTitle: f.episodeTitle ?? null, nfo: f.nfo ?? null, thumb: f.thumb ?? null }
           : {};
         if (!row) {
           row = await MediaFile.create({ itemId: item.id, libraryId: lib.id, root, relPath: f.relPath, size: f.size, mtimeMs: f.mtimeMs, versionLabel: f.versionLabel, sidecars: f.sidecars, missingSince: null, ...episodeFields });
@@ -355,6 +433,7 @@ async function scanOne(lib: Library): Promise<ScanSummary> {
         }
       }
       await applyFolderArt(item);
+      await applyNfoMeta(item);
       if (item.matchedTmdbId) sum.matched++;
       else sum.unmatched++;
     }
@@ -416,6 +495,7 @@ export async function fixMatch(itemId: number, tmdbId: number | null): Promise<L
   item.matchedAt = new Date();
   await item.save();
   await applyFolderArt(item);
+  await applyNfoMeta(item);
   await recomputeRepresentatives();
   invalidateDiscoverIndex();
   clearDiscoverCache();

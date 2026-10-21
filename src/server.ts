@@ -32,7 +32,7 @@ import { adminRoutes } from "./routes/contentmanager";
 import { authRoutes } from "./routes/account/auth";
 import { userRoutes } from "./routes/account/user";
 import { userManagementRoutes } from "./routes/account/userManagement";
-import { discoverRoutes } from "./routes/discover";
+import { discoverRoutes, discoverDetailsRoute } from "./routes/discover";
 import { socketService } from "./services/SocketService";
 
 import { initDB } from "./db";
@@ -128,6 +128,7 @@ const init = async () => {
   server.route(userRoutes);
   server.route(userManagementRoutes);
   server.route(discoverRoutes);
+  server.route(discoverDetailsRoute);
 
   // Rate limiter for unauthenticated public endpoints (stream/media routes)
   // Limits are settings (Admin → Settings), read on every request.

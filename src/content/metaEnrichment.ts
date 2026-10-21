@@ -1,3 +1,5 @@
+import { ContentPerson } from "@/models/ContentPerson";
+import type { TitleDetails } from "@/content/tmdb";
 import { setting } from "@/config/settings";
 import { enrichFromOmdb } from "@/content/omdb";
 import { syncImdbRatings } from "@/content/imdbRatings";
@@ -97,6 +99,7 @@ interface Resolved {
   rating: number | null;
   ratingCount: number | null;
   imdbId: string | null;
+  details: TitleDetails | null;
 }
 
 /** The portal's own plot, when it is a real sentence ("-" and blanks are not). */
@@ -128,7 +131,7 @@ async function resolveMeta(
   // a poster-only legacy entry would permanently leave that title without them (xtreamCache
   // entries don't expire on plain .get() reads) — treat a legacy-shaped hit as a miss and
   // re-fetch fresh instead of degrading quietly.
-  const isLegacyShape = tmdb && !("_not_found" in tmdb) && (!("originalLanguage" in tmdb) || !("releaseYear" in tmdb) || !("rating" in tmdb) || !("imdbId" in tmdb));
+  const isLegacyShape = tmdb && !("_not_found" in tmdb) && (!("originalLanguage" in tmdb) || !("releaseYear" in tmdb) || !("rating" in tmdb) || !("imdbId" in tmdb) || !("details" in tmdb));
   if (!tmdb || isLegacyShape) {
     const fetched = kind === "movie" ? await fetchMovieMeta(name, year) : await fetchTVMeta(name, year);
     tmdb = fetched || { _not_found: true };
@@ -159,6 +162,7 @@ async function resolveMeta(
       rating: tmdb.rating ?? null,
       ratingCount: tmdb.ratingCount ?? null,
       imdbId: tmdb.imdbId ?? null,
+      details: tmdb.details ?? null,
     };
   }
 
@@ -179,6 +183,7 @@ async function resolveMeta(
     rating: null,
     ratingCount: null,
     imdbId: null,
+    details: null,
   };
 }
 
@@ -222,6 +227,7 @@ async function upsertContent(contentId: string, type: ContentType, name: string,
       ...(resolved.rating != null ? { rating: resolved.rating, ratingCount: resolved.ratingCount } : {}),
       ...(resolved.imdbId ? { imdbId: resolved.imdbId } : {}),
     }, { transaction });
+    if (resolved.details) await storeDetails(contentId, resolved.details, transaction);
     await replaceTags(ContentGenre, contentId, resolved.genres, transaction);
     await replaceTags(ContentCountry, contentId, resolved.countries, transaction);
     await replaceTags(ContentTheme, contentId, resolved.themes, transaction);
@@ -258,6 +264,63 @@ export async function enrichLocalTitle(opts: {
 
 /** The catalog category of every local-library title ("My Library" in the apps). */
 export const LOCAL_CATEGORY = "local";
+
+/**
+ * Writes a title's detail-page data (tagline, age rating, runtime, studios, collection,
+ * logo, writers) and replaces its cast and crew (content_people). Only filled values are
+ * written, so a sparse source never blanks what is there.
+ */
+export async function storeDetails(contentId: string, d: TitleDetails, transaction?: Transaction): Promise<void> {
+  const patch: Record<string, any> = { detailsCheckedAt: new Date() };
+  if (d.tagline) patch.tagline = d.tagline;
+  if (d.ageRating) patch.ageRating = d.ageRating;
+  if (d.runtime) patch.runtime = d.runtime;
+  if (d.studios.length) patch.studios = d.studios.join(", ");
+  if (d.collection) patch.collection = d.collection;
+  if (d.originalTitle) patch.originalTitle = d.originalTitle;
+  if (d.premiered) patch.premiered = d.premiered;
+  if (d.logo) patch.logo = d.logo;
+  const writers = d.people.filter((p) => p.kind === "writer").map((p) => p.name);
+  if (writers.length) patch.writers = [...new Set(writers)].slice(0, 6).join(", ");
+  await ContentMeta.update(patch, { where: { id: contentId }, transaction });
+  if (d.people.length) {
+    await ContentPerson.destroy({ where: { contentId }, transaction });
+    await ContentPerson.bulkCreate(
+      d.people.map((p) => ({ contentId, kind: p.kind, name: p.name, role: p.role, sortOrder: p.order, tmdbPersonId: p.tmdbPersonId, photo: p.photo })),
+      { transaction },
+    );
+  }
+}
+
+/**
+ * Titles matched before details were stored get them from TMDB again by id, newest first,
+ * about 8 a second. A title TMDB answered for is marked (detailsCheckedAt) and never asked
+ * again, so a restart resumes where it stopped.
+ */
+async function backfillDetails(): Promise<void> {
+  const rows = (await ContentMeta.findAll({
+    where: { tmdbId: { [Op.ne]: null }, detailsCheckedAt: null },
+    attributes: ["id", "type", "tmdbId", "year", "isRepresentative"],
+    raw: true,
+  })) as any[];
+  rows.sort((a, b) => (Number(b.year) || 0) - (Number(a.year) || 0) || Number(!!b.isRepresentative) - Number(!!a.isRepresentative));
+  let filled = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    try {
+      const meta = await fetchMetaByTmdbId(r.type === "series" ? "tv" : "movie", Number(r.tmdbId));
+      if (meta?.details) {
+        await ContentMeta.sequelize!.transaction((t) => storeDetails(r.id, meta.details, t));
+        filled++;
+      }
+    } catch (e: any) {
+      logger.error(`[MetaEnrich] details ${r.id}: ${e.message}`);
+    }
+    await sleep(120);
+    if ((i + 1) % 2000 === 0) logger.info(`[MetaEnrich] details: ${i + 1}/${rows.length} checked, ${filled} filled`);
+  }
+  logger.info(`[MetaEnrich] details: ${filled} of ${rows.length} titles filled in`);
+}
 
 async function enrichMovies(): Promise<void> {
   const genres = await readGenres("movie");
@@ -737,6 +800,7 @@ async function runFixups(): Promise<void> {
   await step("backfill-credits", backfillCreditsAndOverview);
   await step("fix-year-mismatches", fixYearMismatches);
   await step("backfill-ratings-creators", backfillRatingsAndCreators);
+  await step("backfill-details", backfillDetails);
   await step("retry-unmatched", retryUnmatched);
   await step("reclean-channels", recleanChannelNames);
   // The TMDB passes write rows through upsertContent (groupKeyFor), so their groups are

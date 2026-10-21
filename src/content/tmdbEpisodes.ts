@@ -131,7 +131,7 @@ export async function withTmdbEpisodes(
       if (!e) return item;
       const name = String(item.name || item.title || "");
       const out: any = { ...item };
-      if (e.still) out.screenshot_uri = proxiedImageUrl(e.still, origin);
+      if (e.still && !item.local_still) out.screenshot_uri = proxiedImageUrl(e.still, origin);
       if (!String(item.description || "").trim() && e.overview) out.description = e.overview;
       if (e.name && isPlaceholderTitle(strippedTitle(name))) out.name = `Episode ${n}. ${e.name}`;
       if (!(Number(item.time) > 0) && e.runtime) out.time = String(e.runtime);

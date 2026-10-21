@@ -1,3 +1,4 @@
+import { ContentPerson } from "@/models/ContentPerson";
 import { artUrl } from "@/content/library/art";
 import { ratingFields } from "@/content/titleRatings";
 import { stripReleaseNoise, channelOf } from "@/content/titleClean";
@@ -91,6 +92,15 @@ function toMediaItem(row: any, genresById: Map<string, string[]>, countriesById:
     ...ratingFields(row),
     // A title you own on the NAS (its card is the local version when there is one).
     is_local: row.portalCategoryId === "local" ? 1 : undefined,
+    // Detail fields, as detailed as Jellyfin's (TMDB, or a local title's NFO).
+    tagline: row.tagline || undefined,
+    rating_mpaa: row.ageRating || undefined,
+    runtime: row.runtime || undefined,
+    studios: row.studios || undefined,
+    collection: row.collection || undefined,
+    writers: row.writers || undefined,
+    premiered: row.premiered || undefined,
+    logo_path: row.logo ? proxiedImageUrl(row.logo, origin) : undefined,
   };
 }
 
@@ -106,6 +116,56 @@ async function tagsByContentId(Model: typeof ContentGenre | typeof ContentCountr
   return map;
 }
 
+
+/**
+ * Everything a detail page shows beyond the card: tagline, age rating, runtime, studios,
+ * collection, writers, logo, and the cast and crew with characters and photos. `id` is any
+ * content id ("movie_123", "series_L4"); fields the row lacks are taken from another
+ * version of the same title (its group).
+ */
+async function titleDetails(id: string, origin: string) {
+  const row = await ContentMeta.findByPk(id);
+  if (!row) return null;
+  const group = row.groupKey ? await ContentMeta.findAll({ where: { groupKey: row.groupKey } }) : [row];
+  const members = [row, ...group.filter((g) => g.id !== row.id)];
+  const first = (f: string) => members.map((m: any) => m[f]).find((v) => v != null && v !== "") ?? null;
+  // People: the first version that has any.
+  let people: ContentPerson[] = [];
+  for (const m of members) {
+    people = await ContentPerson.findAll({ where: { contentId: m.id }, order: [["sortOrder", "ASC"]] });
+    if (people.length) break;
+  }
+  const by = (kind: string) => people.filter((p) => p.kind === kind).map((p) => ({ name: p.name, role: p.role, photo: p.photo ? proxiedImageUrl(p.photo, origin) : null }));
+  return {
+    id,
+    tagline: first("tagline"),
+    ageRating: first("ageRating"),
+    runtime: first("runtime"),
+    studios: first("studios"),
+    collection: first("collection"),
+    originalTitle: first("originalTitle"),
+    premiered: first("premiered"),
+    writers: first("writers"),
+    logo: first("logo") ? proxiedImageUrl(first("logo"), origin) : null,
+    cast: by("cast"),
+    directors: by("director"),
+    writersPeople: by("writer"),
+    creators: by("creator"),
+  };
+}
+
+export const discoverDetailsRoute = {
+  method: "GET" as const,
+  path: "/api/v2/discover/details",
+  handler: async (request: any, h: any) => {
+    const q = request.query as any;
+    // A content id, or type + the catalog id the apps browse by ("movie" + "123").
+    const id = q.id ? String(q.id) : q.type && q.raw ? `${q.type === "series" ? "series" : "movie"}_${q.raw}` : "";
+    if (!/^(movie|series)_[\w.-]+$/.test(id)) return h.response({ error: "Give id (movie_123) or type and raw" }).code(400);
+    const d = await titleDetails(id, getPublicOrigin(request));
+    return d ?? h.response({ error: "Unknown title" }).code(404);
+  },
+};
 
 export const discoverRoutes: ServerRoute[] = [
   {

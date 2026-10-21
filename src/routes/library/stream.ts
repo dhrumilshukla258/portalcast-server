@@ -61,12 +61,20 @@ export const localStreamRoutes: ServerRoute[] = [
     handler: async (request, h) => {
       const q = request.query as any;
       const a = String(q.a || "");
-      if (!/^\d+\.(poster|backdrop|logo)\.\d+$/.test(a) || !verifyArt(a, q.s)) return h.response("Not found").code(404);
-      const [itemId, kind] = a.split(".");
-      const item = await LocalItem.findByPk(Number(itemId), { attributes: ["id", "root", "relPath", "art"] });
-      const name = (item?.art as any)?.[kind];
-      if (!item || !name) return h.response("Not found").code(404);
-      const file = path.join(item.root, item.relPath, name);
+      if (!/^f?\d+\.(poster|backdrop|logo|still)\.\d+$/.test(a) || !verifyArt(a, q.s)) return h.response("Not found").code(404);
+      const [id, kind] = a.split(".");
+      let file: string | null = null;
+      if (id.startsWith("f")) {
+        // An episode still beside its video.
+        const mf = await MediaFile.findByPk(Number(id.slice(1)), { attributes: ["id", "root", "thumb"] });
+        if (mf?.thumb) file = path.join(mf.root, mf.thumb);
+      } else {
+        const item = await LocalItem.findByPk(Number(id), { attributes: ["id", "root", "relPath", "art"] });
+        const name = (item?.art as any)?.[kind];
+        if (item && name) file = path.join(item.root, item.relPath, name);
+      }
+      if (!file) return h.response("Not found").code(404);
+      const name = file;
       const type = IMAGE_MIME[path.extname(name).toLowerCase()];
       if (!type || !fs.existsSync(file)) return h.response("Not found").code(404);
       // The version in the URL changes when the file does, so devices may keep it for a year.

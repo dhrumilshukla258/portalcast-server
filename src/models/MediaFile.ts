@@ -64,6 +64,14 @@ export class MediaFile extends Model {
   @Column(DataType.STRING)
   declare episodeTitle: string | null;
 
+  /** An episode's own NFO (title, plot, rating, aired, runtime, directors). */
+  @Column(DataType.JSON)
+  declare nfo: { title?: string | null; plot?: string | null; rating?: number | null; premiered?: string | null; runtime?: number | null; directors?: string[] } | null;
+
+  /** An episode's thumbnail beside it (Jellyfin: metadata/<file>.jpg), relative to `root`. */
+  @Column(DataType.TEXT)
+  declare thumb: string | null;
+
   /** From the file name ("2160p", "Director's Cut") or the probed resolution. */
   @Column(DataType.STRING)
   declare versionLabel: string | null;

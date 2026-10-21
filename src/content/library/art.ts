@@ -13,10 +13,11 @@ import fs from "fs";
 import path from "path";
 import { serverSecret } from "@/infra/serverSecret";
 
-export type ArtKind = "poster" | "backdrop" | "logo";
+export type ArtKind = "poster" | "backdrop" | "logo" | "still";
 export interface LocalArt { poster?: string; backdrop?: string; logo?: string; v?: number }
 
-const NAMES: Record<ArtKind, string[]> = {
+type FolderArtKind = Exclude<ArtKind, "still">;
+const NAMES: Record<FolderArtKind, string[]> = {
   poster: ["poster", "folder", "cover", "default", "movie", "show"],
   backdrop: ["backdrop", "fanart", "background", "art", "landscape"],
   logo: ["logo", "clearlogo"],
@@ -36,7 +37,7 @@ export function findArt(dir: string): LocalArt | null {
   const lower = new Map(names.map((n) => [n.toLowerCase(), n]));
   const art: LocalArt = {};
   let v = 0;
-  for (const kind of Object.keys(NAMES) as ArtKind[]) {
+  for (const kind of Object.keys(NAMES) as FolderArtKind[]) {
     for (const base of NAMES[kind]) {
       const hit = EXTS.map((e) => lower.get(base + e)).find(Boolean);
       if (hit) {
@@ -51,8 +52,9 @@ export function findArt(dir: string): LocalArt | null {
   return art;
 }
 
-export function artMarker(itemId: number, kind: ArtKind, v = 0): string {
-  return `${PREFIX}${itemId}:${kind}:${v}`;
+/** `id` is a title id, or "f<fileId>" for an episode still. */
+export function artMarker(id: number | string, kind: ArtKind, v = 0): string {
+  return `${PREFIX}${id}:${kind}:${v}`;
 }
 
 export function isArtMarker(u: unknown): boolean {
@@ -84,6 +86,7 @@ const FIELDS = ["screenshot_uri", "cover", "backdrop_path", "backdrop_hd_path", 
 /** Turns every artwork marker in a list item into its URL. */
 export function withArtUrls<T extends Record<string, any>>(item: T, origin?: string): T {
   const out: any = { ...item };
+  if (isArtMarker(out.logo)) out.logo = artUrl(out.logo, origin);
   for (const f of FIELDS) if (isArtMarker(out[f])) out[f] = artUrl(out[f], origin);
   return out;
 }

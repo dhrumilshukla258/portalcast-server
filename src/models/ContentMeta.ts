@@ -141,6 +141,45 @@ export class ContentMeta extends Model {
   @Column(DataType.INTEGER)
   declare imdbVotes: number;
 
+  // Detail-page data, as detailed as Jellyfin's NFO files (TMDB, or a local title's NFO).
+  // Cast and crew with photos live in content_people.
+  @Column(DataType.TEXT)
+  declare tagline: string | null;
+
+  /** Age rating: "PG-13", "TV-14", "U/A 13+". */
+  @Column(DataType.STRING)
+  declare ageRating: string | null;
+
+  /** Minutes (a series: its usual episode length). */
+  @Column(DataType.INTEGER)
+  declare runtime: number | null;
+
+  /** Studios (movie) or networks (series), comma-separated. */
+  @Column(DataType.TEXT)
+  declare studios: string | null;
+
+  @Column(DataType.STRING)
+  declare collection: string | null;
+
+  @Column(DataType.STRING)
+  declare originalTitle: string | null;
+
+  /** YYYY-MM-DD. */
+  @Column(DataType.STRING)
+  declare premiered: string | null;
+
+  /** Transparent title logo (URL, or a local-art marker). */
+  @Column(DataType.STRING)
+  declare logo: string | null;
+
+  /** Writers, comma-separated. */
+  @Column(DataType.TEXT)
+  declare writers: string | null;
+
+  /** When the details backfill got TMDB's answer (even an empty one). */
+  @Column(DataType.DATE)
+  declare detailsCheckedAt: Date | null;
+
   // When the ratings backfill got TMDB's answer for this title (even one without a rating
   // or IMDb id), so a restart does not ask again.
   @Column(DataType.DATE)

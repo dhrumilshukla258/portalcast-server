@@ -58,6 +58,110 @@ export interface TmdbMeta {
   ratingCount: number | null;
   // "tt0111161": movies carry it on the details, series under external_ids.
   imdbId: string | null;
+  // Everything else a detail page shows, as detailed as Jellyfin's NFO files.
+  details: TitleDetails;
+}
+
+export interface TitlePerson {
+  kind: "cast" | "director" | "writer" | "creator";
+  name: string;
+  /** Character (cast) or job ("Screenplay"). */
+  role: string | null;
+  order: number;
+  tmdbPersonId: number | null;
+  photo: string | null;
+}
+
+export interface TitleDetails {
+  tagline: string | null;
+  /** Age rating: "PG-13", "TV-14", "U/A 13+". */
+  ageRating: string | null;
+  /** Minutes (a series: its usual episode length). */
+  runtime: number | null;
+  /** Production companies (movie) or networks (series), most important first. */
+  studios: string[];
+  /** "The Dark Knight Collection". */
+  collection: string | null;
+  originalTitle: string | null;
+  /** First release / first air date, YYYY-MM-DD. */
+  premiered: string | null;
+  /** Transparent title logo (original size). */
+  logo: string | null;
+  people: TitlePerson[];
+}
+
+const CERT_COUNTRIES = ["US", "IN", "GB", "CA", "AU"];
+
+function ageRatingOf(detail: any, kind: "movie" | "tv"): string | null {
+  if (kind === "movie") {
+    const results: any[] = detail?.release_dates?.results || [];
+    for (const c of CERT_COUNTRIES) {
+      const rel = results.find((r) => r.iso_3166_1 === c);
+      const cert = (rel?.release_dates || []).map((d: any) => String(d.certification || "").trim()).find(Boolean);
+      if (cert) return cert;
+    }
+    return null;
+  }
+  const results: any[] = detail?.content_ratings?.results || [];
+  for (const c of CERT_COUNTRIES) {
+    const r = results.find((x) => x.iso_3166_1 === c && String(x.rating || "").trim());
+    if (r) return String(r.rating).trim();
+  }
+  return null;
+}
+
+function logoOf(detail: any): string | null {
+  const logos: any[] = detail?.images?.logos || [];
+  const pick = [...logos].sort(
+    (a, b) =>
+      Number(b.iso_639_1 === "en") - Number(a.iso_639_1 === "en") ||
+      Number(b.file_path?.endsWith(".png")) - Number(a.file_path?.endsWith(".png")) ||
+      (b.vote_average || 0) - (a.vote_average || 0),
+  )[0];
+  return pick?.file_path ? `${IMG_BASE}/original${pick.file_path}` : null;
+}
+
+const WRITER_JOBS = new Set(["Screenplay", "Writer", "Story", "Novel", "Author", "Teleplay", "Characters"]);
+
+function peopleOf(detail: any, kind: "movie" | "tv"): TitlePerson[] {
+  const photo = (p: any) => (p?.profile_path ? `${IMG_BASE}/w185${p.profile_path}` : null);
+  const out: TitlePerson[] = [];
+  const credits = kind === "tv" ? detail?.aggregate_credits ?? detail?.credits : detail?.credits;
+  (credits?.cast || []).slice(0, 20).forEach((c: any, i: number) => {
+    if (!c?.name) return;
+    const role = c.character ?? c.roles?.[0]?.character ?? null;
+    out.push({ kind: "cast", name: c.name, role: role || null, order: c.order ?? i, tmdbPersonId: c.id ?? null, photo: photo(c) });
+  });
+  const crew: any[] = detail?.credits?.crew || [];
+  const seen = new Set<string>();
+  crew.forEach((c: any, i: number) => {
+    if (!c?.name) return;
+    const kindOf = c.job === "Director" ? "director" : WRITER_JOBS.has(c.job) ? "writer" : null;
+    if (!kindOf || seen.has(`${kindOf}:${c.name}`)) return;
+    seen.add(`${kindOf}:${c.name}`);
+    out.push({ kind: kindOf, name: c.name, role: kindOf === "writer" ? c.job : null, order: i, tmdbPersonId: c.id ?? null, photo: photo(c) });
+  });
+  (detail?.created_by || []).forEach((c: any, i: number) => {
+    if (c?.name) out.push({ kind: "creator", name: c.name, role: null, order: i, tmdbPersonId: c.id ?? null, photo: photo(c) });
+  });
+  return out;
+}
+
+function detailsOf(detail: any, kind: "movie" | "tv"): TitleDetails {
+  const runtime = kind === "movie" ? detail?.runtime : (detail?.episode_run_time || [])[0] ?? detail?.last_episode_to_air?.runtime;
+  const studios = (kind === "movie" ? detail?.production_companies : detail?.networks) || [];
+  const premiered = kind === "movie" ? detail?.release_date : detail?.first_air_date;
+  return {
+    tagline: String(detail?.tagline || "").trim() || null,
+    ageRating: ageRatingOf(detail, kind),
+    runtime: Number(runtime) > 0 ? Number(runtime) : null,
+    studios: studios.map((x: any) => x?.name).filter(Boolean).slice(0, 4),
+    collection: kind === "movie" ? detail?.belongs_to_collection?.name || null : null,
+    originalTitle: (kind === "movie" ? detail?.original_title : detail?.original_name) || null,
+    premiered: /^\d{4}-\d{2}-\d{2}$/.test(String(premiered || "")) ? premiered : null,
+    logo: logoOf(detail),
+    people: peopleOf(detail, kind),
+  };
 }
 
 interface Credits {
@@ -154,6 +258,7 @@ function buildMeta(detail: any, kind: "movie" | "tv"): TmdbMeta {
     countries,
     keywordIds: extractKeywordIds(detail, kind),
     releaseYear,
+    details: detailsOf(detail, kind),
   };
 }
 
@@ -168,8 +273,11 @@ function buildMeta(detail: any, kind: "movie" | "tv"): TmdbMeta {
 // lot of catalog titles (esp. Indian/regional content) have zero backdrops tagged that way,
 // silently emptying the candidate list this was added to widen in the first place.
 async function fetchDetail(kind: "movie" | "tv", id: number): Promise<any | null> {
+  // release_dates / content_ratings carry the age rating; images include logos;
+  // aggregate_credits gives a series' whole cast with their characters.
+  const extra = kind === "movie" ? "release_dates" : "content_ratings,aggregate_credits";
   return tmdbGet(
-    `/${kind}/${id}?append_to_response=credits,videos,keywords,images,external_ids&include_image_language=null,en`
+    `/${kind}/${id}?append_to_response=credits,videos,keywords,images,external_ids,${extra}&include_image_language=null,en`
   );
 }
 

@@ -55,6 +55,10 @@ export class LocalItem extends Model {
   @Column(DataType.JSON)
   declare art: { poster?: string; backdrop?: string; logo?: string; v?: number } | null;
 
+  /** The title's NFO file, parsed (content/library/nfo.ts), when it has one. */
+  @Column(DataType.JSON)
+  declare nfo: any | null;
+
   /** Set when none of its files are on disk any more; removed after 7 days. */
   @Column(DataType.DATE)
   declare missingSince: Date | null;

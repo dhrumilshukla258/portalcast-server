@@ -1,3 +1,4 @@
+import { ContentPerson } from "../models/ContentPerson";
 import { Library } from "../models/Library";
 import { LocalItem } from "../models/LocalItem";
 import { MediaFile } from "../models/MediaFile";
@@ -43,7 +44,7 @@ export const sequelize = new Sequelize({
     User, DeviceCode, UserProgress, ContentCache,
     ContentMeta, ContentGenre, ContentCountry, ContentTheme,
     StreamFailure, MediaInfo, SubtitleFile, SecurityEvent, RefreshToken,
-    Library, LocalItem, MediaFile,
+    Library, LocalItem, MediaFile, ContentPerson,
   ],
   logging: false,
 });
@@ -223,7 +224,13 @@ export async function initDB() {
     // of ~100k updates would scan the whole table.
     await sequelize.query("CREATE INDEX IF NOT EXISTS `idx_content_meta_imdbId` ON `content_meta` (`imdbId`);");
     // Local library (models/MediaFile.ts): episode columns added after the table first shipped.
-    await ensureColumns("local_items", [["art", "JSON"]]);
+    await ensureColumns("local_items", [["art", "JSON"], ["nfo", "JSON"]]);
+    await ensureColumns("content_meta", [
+      ["tagline", "TEXT"], ["ageRating", "VARCHAR(255)"], ["runtime", "INTEGER"], ["studios", "TEXT"],
+      ["collection", "VARCHAR(255)"], ["originalTitle", "VARCHAR(255)"], ["premiered", "VARCHAR(255)"],
+      ["logo", "VARCHAR(255)"], ["writers", "TEXT"], ["detailsCheckedAt", "DATETIME"],
+    ]);
+    await ensureColumns("media_files", [["nfo", "JSON"], ["thumb", "TEXT"]]);
     await ensureColumns("media_files", [["season", "INTEGER"], ["episode", "INTEGER"], ["episodeEnd", "INTEGER"], ["episodeTitle", "VARCHAR(255)"]]);
     await ensureColumns("users", [
       ["openSubtitlesUsername", "VARCHAR(255)"],
