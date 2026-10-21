@@ -1,4 +1,6 @@
-﻿import { ServerRoute } from "@hapi/hapi";
+﻿import { isLocalTitleId, localSeasons, localEpisodes, localSeriesPage, localSeriesCategory } from "@/content/library/catalog";
+import { LOCAL_CATEGORY } from "@/content/metaEnrichment";
+import { ServerRoute } from "@hapi/hapi";
 import { withVideoInfo } from "@/content/mediaInfo";
 import {
   writeJSON,
@@ -72,6 +74,24 @@ export const seriesRoutes: ServerRoute[] = [
           seasonNumber = 0,
           ...others
         } = query;
+
+        // Local library shows ("L<id>", content/library/catalog.ts): list, seasons, episodes.
+        if (isLocalTitleId(movieId)) {
+          if (!Number(seasonId) && !String(seasonId).startsWith("L")) {
+            const seasons = await localSeasons(String(movieId));
+            rememberSeasonNumbers(seasons.data);
+            return seasons;
+          }
+          const eps = await localEpisodes(String(movieId), String(seasonId), Number(page) || 1);
+          const m = /S(\d+)$/.exec(String(seasonId));
+          eps.data = await withTmdbEpisodes(eps.data, movieId, seasonId, m ? Number(m[1]) : seasonNumber, getPublicOrigin(request));
+          return eps;
+        }
+        if (String(category) === LOCAL_CATEGORY && !Number(movieId)) {
+          const pageData = await localSeriesPage(Number(page) || 1, String(search || ""));
+          pageData.data = await enrichArtworkFromTmdb(pageData.data, "series", getPublicOrigin(request));
+          return pageData;
+        }
 
         if (category == 0 && movieId == 0) {
           return h.redirect("/api/v2/series-groups");
@@ -433,14 +453,17 @@ export const seriesRoutes: ServerRoute[] = [
         if (channels.length === 0) {
           return h.redirect("/api/v2/refresh-series-groups");
         }
+        // Local library (content/library): "My Library" first, when it has shows.
+        const local = await localSeriesCategory();
+        const groups = [...(local ? [local] : []), ...(await applyGenreOverrides(channels, "series"))];
         return {
           success: true,
           page: Number(1),
           pageAtaTime: Number(1),
-          total_items: channels.length,
-          actual_length: channels.length,
-          total_loaded: channels.length,
-          data: await applyGenreOverrides(channels, "series"),
+          total_items: groups.length,
+          actual_length: groups.length,
+          total_loaded: groups.length,
+          data: groups,
           errors: false,
           isPortal: initialConfig.providerType === "stalker",
         };

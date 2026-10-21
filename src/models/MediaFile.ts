@@ -51,6 +51,19 @@ export class MediaFile extends Model {
   @Column(DataType.FLOAT)
   declare mtimeMs: number;
 
+  /** Series episodes: season (0 = specials), episode, last episode of a multi-episode file, title from the name. */
+  @Column(DataType.INTEGER)
+  declare season: number | null;
+
+  @Column(DataType.INTEGER)
+  declare episode: number | null;
+
+  @Column(DataType.INTEGER)
+  declare episodeEnd: number | null;
+
+  @Column(DataType.STRING)
+  declare episodeTitle: string | null;
+
   /** From the file name ("2160p", "Director's Cut") or the probed resolution. */
   @Column(DataType.STRING)
   declare versionLabel: string | null;

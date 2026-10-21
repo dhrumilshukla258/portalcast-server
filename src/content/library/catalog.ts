@@ -139,13 +139,170 @@ export async function localPlayLink(fileId: string, userLabel: string, title?: s
   const id = Number(String(fileId).slice(2));
   const file = await MediaFile.findByPk(id);
   if (!file || file.missingSince) return null;
+  const episode = file.episode != null;
   const token = mintStreamToken(`local:${file.id}`, userLabel, undefined, {
-    kind: "movie",
+    kind: episode ? "series" : "movie",
     label: title,
     category: LOCAL_CATEGORY_TITLE,
-    itemType: "movie",
-    itemId: `L${file.itemId}`,
+    itemType: episode ? "episode" : "movie",
+    itemId: episode ? `LF${file.id}` : `L${file.itemId}`,
     hideable: false,
   });
   return `/api/local/stream?t=${token}`;
+}
+
+// ---- Series ----------------------------------------------------------------------------
+//   GET /api/v2/series-groups                     -> "My Library" first, when a library has shows
+//   GET /api/v2/series?category=local             -> pages of local shows (series_id "L<itemId>")
+//   GET /api/v2/series?movieId=L<id>              -> seasons ("L<id>S<n>", Specials = season 0)
+//   GET /api/v2/series?movieId=L<id>&seasonId=..  -> episodes; an episode's id IS its file id
+//                                                    ("LF<fileId>"), so progress, resume and
+//                                                    "next episode" work unchanged in the apps
+//   GET /api/v2/movies?movieId=L<id>&episodeId=LF<n> -> that one file
+
+export async function localSeriesCategory(): Promise<any | null> {
+  const n = await LocalItem.count({ where: { kind: "series", missingSince: null } });
+  if (n === 0) return null;
+  return { id: LOCAL_CATEGORY, title: LOCAL_CATEGORY_TITLE, alias: LOCAL_CATEGORY, censored: 0, number: 0, type: "series", isLocal: true };
+}
+
+async function seriesWithMeta(items: LocalItem[]) {
+  const contentIds = items.map((i) => localContentId(i.id, "series"));
+  const metas = await ContentMeta.findAll({ where: { id: { [Op.in]: contentIds } } });
+  const metaById = new Map(metas.map((m) => [m.id, m]));
+  const genreRows = (await ContentGenre.findAll({ where: { contentId: { [Op.in]: contentIds } }, raw: true })) as any[];
+  const genresById = new Map<string, string[]>();
+  for (const g of genreRows) genresById.set(g.contentId, [...(genresById.get(g.contentId) ?? []), g.value]);
+  const counts = new Map<number, number>();
+  for (const f of await MediaFile.findAll({ where: { itemId: { [Op.in]: items.map((i) => i.id) }, missingSince: null }, attributes: ["itemId"] })) {
+    counts.set(f.itemId, (counts.get(f.itemId) ?? 0) + 1);
+  }
+  return items
+    .filter((i) => counts.has(i.id))
+    .map((i) => {
+      const meta = metaById.get(localContentId(i.id, "series"));
+      const id = `L${i.id}`;
+      return {
+        id,
+        series_id: id,
+        num: i.id,
+        name: meta?.trimmedName || meta?.name || i.name,
+        title: meta?.trimmedName || meta?.name || i.name,
+        category_id: LOCAL_CATEGORY,
+        year: meta?.year || i.year || undefined,
+        added: Math.floor(new Date(i.createdAt).getTime() / 1000),
+        screenshot_uri: meta?.poster || undefined,
+        backdrop_path: meta?.backdrop || undefined,
+        backdrop_hd_path: meta?.backdropHd || undefined,
+        description: meta?.overview || undefined,
+        actors: meta?.cast || undefined,
+        director: meta?.director || undefined,
+        genres_str: (genresById.get(localContentId(i.id, "series")) ?? []).join(", ") || undefined,
+        is_series: 1,
+        is_local: 1,
+      };
+    });
+}
+
+export async function localSeriesList(): Promise<any[]> {
+  const items = await LocalItem.findAll({ where: { kind: "series", missingSince: null }, order: [["createdAt", "DESC"]] });
+  return seriesWithMeta(items);
+}
+
+export async function localSeriesPage(page: number, search: string, pageSize = 14) {
+  let list = await localSeriesList();
+  if (search) list = searchCatalog("local:series", list, search) as any[];
+  const offset = (Math.max(1, page) - 1) * pageSize;
+  const data = list.slice(offset, offset + pageSize);
+  return { success: true, page, pageAtaTime: 1, total_items: list.length, actual_length: pageSize, total_loaded: data.length, data, errors: false, isPortal: false };
+}
+
+const emptyPage = () => ({ success: true, page: 1, pageAtaTime: 1, total_items: 0, actual_length: 14, total_loaded: 0, data: [] as any[], errors: false, isPortal: false });
+
+/** The best file per episode of one show (two copies of S01E02: the larger picture wins). */
+async function episodeFiles(itemId: number): Promise<MediaFile[]> {
+  const files = await MediaFile.findAll({ where: { itemId, missingSince: null } });
+  const best = new Map<string, MediaFile>();
+  for (const f of files) {
+    if (f.episode == null) continue;
+    const key = `${f.season ?? 1}:${f.episode}`;
+    const cur = best.get(key);
+    if (!cur || (f.height ?? 0) > (cur.height ?? 0)) best.set(key, f);
+  }
+  return [...best.values()].sort((a, b) => (a.season ?? 1) - (b.season ?? 1) || (a.episode ?? 0) - (b.episode ?? 0));
+}
+
+export async function localSeasons(seriesId: string) {
+  const itemId = Number(String(seriesId).slice(1));
+  const item = await LocalItem.findByPk(itemId);
+  if (!item || item.kind !== "series") return emptyPage();
+  const [show] = await seriesWithMeta([item]);
+  const bySeason = new Map<number, number[]>();
+  for (const f of await episodeFiles(itemId)) bySeason.set(f.season ?? 1, [...(bySeason.get(f.season ?? 1) ?? []), f.episode!]);
+  const seasons = [...bySeason.keys()].sort((a, b) => (a === 0 ? 1 : b === 0 ? -1 : a - b)); // Specials last
+  const data = seasons.map((n) => ({
+    id: `L${itemId}S${n}`,
+    name: n === 0 ? "Specials" : `Season ${n}`,
+    number: n,
+    season_number: n,
+    is_season: 1,
+    series_id: `L${itemId}`,
+    series: bySeason.get(n),
+    screenshot_uri: show?.screenshot_uri,
+    category_id: LOCAL_CATEGORY,
+  }));
+  return { ...emptyPage(), total_items: data.length, total_loaded: data.length, data };
+}
+
+function episodeItem(f: MediaFile, seriesId: string, base: any) {
+  const ep = f.episode!;
+  const label = f.episodeEnd && f.episodeEnd > ep ? `Episodes ${ep}-${f.episodeEnd}` : `Episode ${ep}`;
+  return {
+    ...base,
+    id: `LF${f.id}`,
+    stream_id: `LF${f.id}`,
+    series_id: seriesId,
+    season_id: `${seriesId}S${f.season ?? 1}`,
+    name: f.episodeTitle ? `${label}. ${f.episodeTitle}` : label,
+    title: f.episodeTitle ? `${label}. ${f.episodeTitle}` : label,
+    series_number: f.season ?? 1,
+    episode_num: ep,
+    episode_number: ep,
+    is_episode: 1,
+    is_series: 1,
+    time: f.duration ? String(Math.round(f.duration / 60)) : undefined,
+    duration: f.duration ? Math.round(f.duration / 60) : undefined,
+    container_extension: f.container || undefined,
+    variantLabel: qualityLabel(f) || "Local file",
+    description: undefined,
+    audio_tracks: (f.audioTracks ?? []).map((t) => ({ language: t.language ?? null, codec: t.codec, channels: t.channels ?? null, title: t.title ?? null })),
+    subtitle_tracks: [
+      ...(f.subtitleTracks ?? []).map((t) => ({ language: t.language ?? null, codec: t.codec, forced: Boolean(t.forced), embedded: true })),
+      ...(f.sidecars ?? []).map((s) => ({ language: s.language, codec: s.format, forced: s.forced, embedded: false })),
+    ],
+  };
+}
+
+export async function localEpisodes(seriesId: string, seasonId: string, page: number, pageSize = 14) {
+  const itemId = Number(String(seriesId).slice(1));
+  const m = /^L\d+S(\d+)$/.exec(String(seasonId));
+  const item = await LocalItem.findByPk(itemId);
+  if (!item || !m) return emptyPage();
+  const season = Number(m[1]);
+  const [show] = await seriesWithMeta([item]);
+  const base = { category_id: LOCAL_CATEGORY, is_local: 1, screenshot_uri: show?.screenshot_uri, genres_str: show?.genres_str, year: show?.year };
+  const all = (await episodeFiles(itemId)).filter((f) => (f.season ?? 1) === season).map((f) => episodeItem(f, `L${itemId}`, base));
+  const offset = (Math.max(1, page) - 1) * pageSize;
+  const data = all.slice(offset, offset + pageSize);
+  return { ...emptyPage(), page, total_items: all.length, total_loaded: data.length, data };
+}
+
+/** One episode file, for the "resolve the file" call (movies?movieId=L<id>&episodeId=LF<n>). */
+export async function localEpisodeFile(seriesId: string, fileId: string) {
+  const f = await MediaFile.findByPk(Number(String(fileId).slice(2)));
+  if (!f || f.missingSince || `L${f.itemId}` !== String(seriesId)) return emptyPage();
+  const item = await LocalItem.findByPk(f.itemId);
+  const [show] = item ? await seriesWithMeta([item]) : [undefined];
+  const data = [episodeItem(f, String(seriesId), { category_id: LOCAL_CATEGORY, is_local: 1, screenshot_uri: show?.screenshot_uri })];
+  return { ...emptyPage(), total_items: 1, total_loaded: 1, data };
 }

@@ -87,7 +87,8 @@ export const libraryAdminRoutes: ServerRoute[] = [
       if (!name) return h.response({ error: "Give the library a name" }).code(400);
       const { folders, error } = cleanFolders(body.folders);
       if (error) return h.response({ error }).code(400);
-      const lib = await Library.create({ name, kind: "movies", folders, enabled: true });
+      const kind = body.kind === "series" ? "series" : "movies";
+      const lib = await Library.create({ name, kind, folders, enabled: true });
       recordFromRequest(request, "setting_changed", `library ${lib.id} created`, (admin as any).userId ?? null);
       scanLibraries(lib.id).catch((e) => logger.error(`[library] first scan of ${lib.name} failed: ${e?.message ?? e}`));
       return describe(lib);
@@ -179,16 +180,16 @@ export const libraryAdminRoutes: ServerRoute[] = [
       if (q.filter === "unmatched") Object.assign(where, { matchedTmdbId: null, missingSince: null });
       else if (q.filter === "missing") where.missingSince = { [Op.ne]: null };
       const items = await LocalItem.findAll({ where, order: [["matchedTmdbId", "ASC"], ["name", "ASC"]], limit: 500 });
-      const metas = await ContentMeta.findAll({ where: { id: { [Op.in]: items.map((i) => localContentId(i.id)) } }, attributes: ["id", "poster", "year", "trimmedName"] });
+      const metas = await ContentMeta.findAll({ where: { id: { [Op.in]: items.map((i) => localContentId(i.id, i.kind)) } }, attributes: ["id", "poster", "year", "trimmedName"] });
       const metaById = new Map(metas.map((m) => [m.id, m]));
       const term = String(q.q || "").toLowerCase().trim();
       return {
         items: items
           .filter((i) => !term || i.name.toLowerCase().includes(term) || i.relPath.toLowerCase().includes(term))
           .map((i) => {
-            const m = metaById.get(localContentId(i.id));
+            const m = metaById.get(localContentId(i.id, i.kind));
             return {
-              id: i.id, name: i.name, year: i.year, folder: i.relPath, matchedTmdbId: i.matchedTmdbId,
+              id: i.id, kind: i.kind, name: i.name, year: i.year, folder: i.relPath, matchedTmdbId: i.matchedTmdbId,
               locked: i.tmdbIdLocked != null, missingSince: i.missingSince, poster: m?.poster ?? null,
               matchedTitle: m?.trimmedName ?? null, matchedYear: m?.year ?? null,
             };
@@ -204,7 +205,7 @@ export const libraryAdminRoutes: ServerRoute[] = [
       const q = request.query as any;
       const query = String(q.q || "").trim();
       if (!query) return { items: [] };
-      return { items: await searchTmdbCandidates("movie", query, q.year ? String(q.year) : null) };
+      return { items: await searchTmdbCandidates(q.kind === "series" ? "tv" : "movie", query, q.year ? String(q.year) : null) };
     },
   },
   {

@@ -16,7 +16,7 @@ export class LocalItem extends Model {
   @Column(DataType.INTEGER)
   declare libraryId: number;
 
-  /** "movie" (phase 1). */
+  /** "movie" or "series". */
   @Column(DataType.STRING)
   declare kind: string;
 

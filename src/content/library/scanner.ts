@@ -31,16 +31,21 @@ import { invalidateDiscoverIndex } from "@/content/discoverIndex";
 import { probeFile, resolutionLabel } from "@/content/library/probe";
 import {
   EXTRA_DIRS, SUBTITLE_EXTS, isExtraFile, isVideoFile, parseNfo, parseSubtitleName, parseTitle, versionLabelFor,
+  parseEpisode, seasonFromFolder,
 } from "@/content/library/naming";
 
 const MISSING_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_DEPTH = 6;
 
-export function localContentId(itemId: number): string {
-  return `movie_L${itemId}`;
+/** The catalog row of a local title: "movie_L<id>" or "series_L<id>". */
+export function localContentId(itemId: number, kind: string = "movie"): string {
+  return `${kind === "series" ? "series" : "movie"}_L${itemId}`;
 }
 
-interface FoundFile { relPath: string; size: number; mtimeMs: number; versionLabel: string | null; sidecars: SidecarSubtitle[] }
+interface FoundFile {
+  relPath: string; size: number; mtimeMs: number; versionLabel: string | null; sidecars: SidecarSubtitle[];
+  season?: number | null; episode?: number | null; episodeEnd?: number | null; episodeTitle?: string | null;
+}
 interface FoundTitle { relPath: string; name: string; year: string | null; tmdbId: number | null; imdbId: string | null; files: FoundFile[] }
 
 function readDir(dir: string): fs.Dirent[] {
@@ -132,12 +137,66 @@ function walk(root: string): FoundTitle[] {
 
     if (depth >= MAX_DEPTH) return;
     for (const e of entries) {
-      if (!e.isDirectory() || e.name.startsWith(".") || EXTRA_DIRS.has(e.name.toLowerCase())) continue;
+      // Jellyfin's trickplay thumbnails ("<video>.trickplay") and extras folders hold no titles.
+      if (!e.isDirectory() || e.name.startsWith(".") || e.name.toLowerCase().endsWith(".trickplay") || EXTRA_DIRS.has(e.name.toLowerCase())) continue;
       visit(path.join(dir, e.name), depth + 1);
     }
   };
   visit(root, 0);
   return titles;
+}
+
+/** Every show under one series library folder: each top-level folder is a show. */
+function walkSeries(root: string): FoundTitle[] {
+  const shows: FoundTitle[] = [];
+  for (const showDir of readDir(root)) {
+    if (!showDir.isDirectory() || showDir.name.startsWith(".") || EXTRA_DIRS.has(showDir.name.toLowerCase())) continue;
+    const showPath = path.join(root, showDir.name);
+    const parsed = parseTitle(showDir.name);
+    const nfo = readNfo(path.join(showPath, "tvshow.nfo"));
+    const files: FoundFile[] = [];
+    const visit = (dir: string, depth: number, seasonHint: number | null) => {
+      const entries = readDir(dir);
+      const subs = entries.filter((e) => e.isFile() && SUBTITLE_EXTS.has(path.extname(e.name).toLowerCase()));
+      for (const e of entries) {
+        if (!e.isFile() || !isVideoFile(e.name) || isExtraFile(e.name) || e.name.startsWith(".")) continue;
+        const base = path.basename(e.name, path.extname(e.name));
+        const ep = parseEpisode(base, seasonHint);
+        if (!ep) continue; // not an episode (no SxxEyy and no season folder): left out
+        const st = statOf(path.join(dir, e.name));
+        if (!st) continue;
+        const relDir = path.relative(root, dir);
+        files.push({
+          relPath: path.join(relDir, e.name), size: st.size, mtimeMs: st.mtimeMs, versionLabel: null,
+          sidecars: subs
+            .map((sb) => {
+              const ps = parseSubtitleName(sb.name, base);
+              return ps ? { relPath: path.join(relDir, sb.name), language: ps.language, forced: ps.forced, format: path.extname(sb.name).slice(1).toLowerCase() } : null;
+            })
+            .filter((x): x is SidecarSubtitle => x !== null),
+          season: ep.season ?? seasonHint ?? 1, episode: ep.episode, episodeEnd: ep.episodeEnd, episodeTitle: ep.title,
+        });
+      }
+      if (depth >= 4) return;
+      for (const e of entries) {
+        if (!e.isDirectory() || e.name.startsWith(".") || e.name.toLowerCase().endsWith(".trickplay")) continue;
+        const season = seasonFromFolder(e.name);
+        if (season === null && EXTRA_DIRS.has(e.name.toLowerCase())) continue;
+        visit(path.join(dir, e.name), depth + 1, season ?? seasonHint);
+      }
+    };
+    visit(showPath, 0, null);
+    if (files.length === 0) continue;
+    shows.push({
+      relPath: showDir.name,
+      name: nfo?.title || parsed.name,
+      year: nfo?.year || parsed.year,
+      tmdbId: nfo?.tmdbId ?? parsed.tmdbId,
+      imdbId: nfo?.imdbId ?? parsed.imdbId,
+      files,
+    });
+  }
+  return shows;
 }
 
 async function waitWhileWatching(): Promise<void> {
@@ -196,6 +255,7 @@ export async function scanLibraries(onlyId?: number): Promise<string> {
 }
 
 async function scanOne(lib: Library): Promise<ScanSummary> {
+  const kind = lib.kind === "series" ? "series" : "movie";
   const sum: ScanSummary = { titles: 0, added: 0, probed: 0, matched: 0, unmatched: 0, missing: 0, removed: 0, skippedFolders: [] };
   const seenFileIds = new Set<number>();
   const seenItemIds = new Set<number>();
@@ -204,7 +264,7 @@ async function scanOne(lib: Library): Promise<ScanSummary> {
   for (const root of lib.folders || []) {
     const known = await MediaFile.count({ where: { libraryId: lib.id, root } });
     const st = statOf(root);
-    const found = st?.isDirectory() ? walk(root) : [];
+    const found = st?.isDirectory() ? (kind === "series" ? walkSeries(root) : walk(root)) : [];
     if (found.length === 0 && known > 0) {
       // Folder gone or empty although it had files: a disk is probably offline.
       sum.skippedFolders.push(root);
@@ -217,7 +277,7 @@ async function scanOne(lib: Library): Promise<ScanSummary> {
       let item = await LocalItem.findOne({ where: { libraryId: lib.id, root, relPath: t.relPath } });
       const nameChanged = item && (item.name !== t.name || (item.year ?? null) !== (t.year ?? null) || (item.tmdbIdHint ?? null) !== (t.tmdbId ?? null));
       if (!item) {
-        item = await LocalItem.create({ libraryId: lib.id, kind: "movie", root, relPath: t.relPath, name: t.name, year: t.year, tmdbIdHint: t.tmdbId, missingSince: null });
+        item = await LocalItem.create({ libraryId: lib.id, kind, root, relPath: t.relPath, name: t.name, year: t.year, tmdbIdHint: t.tmdbId, missingSince: null });
         sum.added++;
       } else if (nameChanged || item.missingSince) {
         Object.assign(item, { name: t.name, year: t.year, tmdbIdHint: t.tmdbId, missingSince: null });
@@ -229,10 +289,13 @@ async function scanOne(lib: Library): Promise<ScanSummary> {
       for (const f of t.files) {
         let row = await MediaFile.findOne({ where: { libraryId: lib.id, root, relPath: f.relPath } });
         const changed = !row || row.size !== f.size || Math.abs(row.mtimeMs - f.mtimeMs) > 1;
+        const episodeFields = kind === "series"
+          ? { season: f.season ?? null, episode: f.episode ?? null, episodeEnd: f.episodeEnd ?? null, episodeTitle: f.episodeTitle ?? null }
+          : {};
         if (!row) {
-          row = await MediaFile.create({ itemId: item.id, libraryId: lib.id, root, relPath: f.relPath, size: f.size, mtimeMs: f.mtimeMs, versionLabel: f.versionLabel, sidecars: f.sidecars, missingSince: null });
+          row = await MediaFile.create({ itemId: item.id, libraryId: lib.id, root, relPath: f.relPath, size: f.size, mtimeMs: f.mtimeMs, versionLabel: f.versionLabel, sidecars: f.sidecars, missingSince: null, ...episodeFields });
         } else {
-          Object.assign(row, { itemId: item.id, size: f.size, mtimeMs: f.mtimeMs, sidecars: f.sidecars, missingSince: null });
+          Object.assign(row, { itemId: item.id, size: f.size, mtimeMs: f.mtimeMs, sidecars: f.sidecars, missingSince: null, ...episodeFields });
           if (f.versionLabel) row.versionLabel = f.versionLabel;
         }
         if (changed || !row.probedAt) {
@@ -257,8 +320,8 @@ async function scanOne(lib: Library): Promise<ScanSummary> {
       if (!item.matchedAt || retryDue) {
         try {
           let tmdbId = item.tmdbIdLocked ?? item.tmdbIdHint ?? null;
-          if (!tmdbId && t.imdbId) tmdbId = await findTmdbIdByImdb(t.imdbId, "movie");
-          const matched = await enrichLocalTitle({ contentId: localContentId(item.id), type: "movie", name: item.name, year: item.year, tmdbId });
+          if (!tmdbId && t.imdbId) tmdbId = await findTmdbIdByImdb(t.imdbId, kind === "series" ? "tv" : "movie");
+          const matched = await enrichLocalTitle({ contentId: localContentId(item.id, kind), type: kind, name: item.name, year: item.year, tmdbId });
           item.matchedTmdbId = matched ?? null;
           item.matchedAt = new Date();
           await item.save();
@@ -298,7 +361,7 @@ async function scanOne(lib: Library): Promise<ScanSummary> {
 
 /** Removes a local title and its catalog row. Watch progress is kept. */
 export async function removeItem(item: LocalItem): Promise<void> {
-  const contentId = localContentId(item.id);
+  const contentId = localContentId(item.id, item.kind);
   await MediaFile.destroy({ where: { itemId: item.id } });
   await ContentGenre.destroy({ where: { contentId } });
   await ContentCountry.destroy({ where: { contentId } });
@@ -321,7 +384,8 @@ export async function fixMatch(itemId: number, tmdbId: number | null): Promise<L
   const item = await LocalItem.findByPk(itemId);
   if (!item) return null;
   item.tmdbIdLocked = tmdbId;
-  const matched = await enrichLocalTitle({ contentId: localContentId(item.id), type: "movie", name: item.name, year: item.year, tmdbId: tmdbId ?? item.tmdbIdHint });
+  const kind = item.kind === "series" ? "series" : "movie";
+  const matched = await enrichLocalTitle({ contentId: localContentId(item.id, kind), type: kind, name: item.name, year: item.year, tmdbId: tmdbId ?? item.tmdbIdHint });
   item.matchedTmdbId = matched ?? null;
   item.matchedAt = new Date();
   await item.save();

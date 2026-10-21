@@ -14,7 +14,7 @@ export class Library extends Model {
   @Column(DataType.STRING)
   declare name: string;
 
-  /** "movies" (phase 1). */
+  /** "movies" or "series". */
   @Column(DataType.STRING)
   declare kind: string;
 

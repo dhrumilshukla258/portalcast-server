@@ -1,4 +1,5 @@
-﻿import { isLocalTitleId, isLocalFileId, localMovieCategory, localMoviesPage, localTitleFiles, localPlayLink } from "@/content/library/catalog";
+﻿import { localEpisodeFile } from "@/content/library/catalog";
+import { isLocalTitleId, isLocalFileId, localMovieCategory, localMoviesPage, localTitleFiles, localPlayLink } from "@/content/library/catalog";
 import { LOCAL_CATEGORY } from "@/content/metaEnrichment";
 import { unsealCmd } from "@/infra/sealedCmd";
 import { ServerRoute } from "@hapi/hapi";
@@ -149,7 +150,11 @@ export const movieRoutes: ServerRoute[] = [
         } = query;
 
         // Local library titles ("L<id>") and the My Library category (content/library/catalog.ts).
-        if (isLocalTitleId(movieId)) return localTitleFiles(String(movieId));
+        if (isLocalTitleId(movieId)) {
+          // An episode of a local show (the apps resolve the episode file this way).
+          if (isLocalFileId(episodeId)) return localEpisodeFile(String(movieId), String(episodeId));
+          return localTitleFiles(String(movieId));
+        }
         if (String(category) === LOCAL_CATEGORY && !Number(movieId)) {
           const pageData = await localMoviesPage(Number(page) || 1, String(search || ""));
           pageData.data = await enrichArtworkFromTmdb(pageData.data, "movie", getPublicOrigin(request));

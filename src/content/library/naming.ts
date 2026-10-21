@@ -114,3 +114,52 @@ export function parseNfo(xml: string): { title: string | null; year: string | nu
     imdbId: imdbRaw && /^tt\d+$/.test(imdbRaw) ? imdbRaw : null,
   };
 }
+
+// ---- Series --------------------------------------------------------------------------
+//   The Office (2005)/Season 01/The Office S01E02 - Diversity Day.mkv
+//   Friends/Season 1/Friends - 1x02 - The One with the Sonogram.mkv
+//   Show/Specials/Show S00E01.mkv                (season 0)
+//   Show/Season 2/E05.mkv  or  Show/Season 2/05 - Title.mkv  (season from the folder)
+
+const SEASON_DIR_RE = /^(?:season|series|staffel|saison|temporada|stagione)[\s._-]*(\d{1,3})$/i;
+
+/** The season a folder stands for ("Season 01" -> 1, "Specials" -> 0), or null. */
+export function seasonFromFolder(name: string): number | null {
+  const n = name.trim();
+  if (/^(specials?|extras? season|season[\s._-]*0+)$/i.test(n)) return 0;
+  const m = n.match(SEASON_DIR_RE) ?? n.match(/^s(\d{1,3})$/i);
+  return m ? Number(m[1]) : null;
+}
+
+export interface ParsedEpisode {
+  season: number | null;
+  episode: number;
+  episodeEnd: number | null;
+  title: string | null;
+}
+
+function tidyEpisodeTitle(rest: string): string | null {
+  let s = rest.replace(/^[\s._\-–:]+/, "");
+  if (!/\s/.test(s)) s = s.replace(/[._]/g, " ");
+  const q = s.match(QUALITY_WORDS);
+  if (q && q.index! >= 0) s = s.slice(0, q.index);
+  s = s.replace(/[\s._\-–]+$/, "").replace(/\s{2,}/g, " ").trim();
+  return s && !/^\d+$/.test(s) ? s : null;
+}
+
+/** Season and episode from an episode file name (extension removed). */
+export function parseEpisode(fileBase: string, seasonHint: number | null): ParsedEpisode | null {
+  // S01E02, S01E02E03, S01E02-E03, s1e2
+  let m = fileBase.match(/\bS(\d{1,3})[\s._-]?E(\d{1,4})(?:[\s._-]?(?:-|E)[\s._-]?E?(\d{1,4}))?/i);
+  if (m) return { season: Number(m[1]), episode: Number(m[2]), episodeEnd: m[3] ? Number(m[3]) : null, title: tidyEpisodeTitle(fileBase.slice(m.index! + m[0].length)) };
+  // 1x02, 01x02-03
+  m = fileBase.match(/\b(\d{1,2})x(\d{2,3})(?:-(\d{2,3}))?\b/i);
+  if (m) return { season: Number(m[1]), episode: Number(m[2]), episodeEnd: m[3] ? Number(m[3]) : null, title: tidyEpisodeTitle(fileBase.slice(m.index! + m[0].length)) };
+  if (seasonHint === null) return null;
+  // Inside a season folder: "E05", "Ep 5", "Episode 5", or a leading number "05 - Title".
+  m = fileBase.match(/\b(?:E|Ep|Episode)[\s._-]?(\d{1,4})\b/i);
+  if (m) return { season: seasonHint, episode: Number(m[1]), episodeEnd: null, title: tidyEpisodeTitle(fileBase.slice(m.index! + m[0].length)) };
+  m = fileBase.match(/^(\d{1,3})(?=[\s._-]|$)/);
+  if (m) return { season: seasonHint, episode: Number(m[1]), episodeEnd: null, title: tidyEpisodeTitle(fileBase.slice(m[0].length)) };
+  return null;
+}
