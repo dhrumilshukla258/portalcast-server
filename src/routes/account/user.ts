@@ -81,7 +81,13 @@ export const userRoutes: ServerRoute[] = [
       if (!user || typeof user.userId !== "number") return h.response({ error: "Unauthorized" }).code(401);
       const id = String(request.params.id);
       if (!CONTENT_ID.test(id)) return h.response({ error: "Not a title id" }).code(400);
-      await deleteProgress(user.userId, await getActiveProfileId(), watchedMarker(id));
+      // Not watched: the marker goes, and so does the title's history, so it can show up in
+      // suggestions again (My List > Watched > Not watched).
+      const profileId = await getActiveProfileId();
+      await deleteProgress(user.userId, profileId, watchedMarker(id));
+      for (const r of await progressRows(user.userId, profileId)) {
+        if (contentIdsOf(r).includes(id)) await deleteProgress(user.userId, profileId, String(r.mediaId));
+      }
       return { success: true };
     },
   },

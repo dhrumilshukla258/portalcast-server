@@ -30,9 +30,21 @@ import { titleRows, titleWithGroup, titlePeople, variantRows, personTitles } fro
 import { homeRows, similarTitles, type HomeType } from "@/content/home";
 import { listOf, addToList, removeFromList, MAX_LIST, CONTENT_ID } from "@/content/myList";
 import { peopleOfTitles } from "@/content/people";
+import { hiddenFor } from "@/content/notInterested";
 import { createHash } from "crypto";
 
 const PAGE_SIZE = 40;
+
+/** Cards for these content ids, in this order (the shape My List's cards have). */
+async function cardsOf(ids: string[], request: any): Promise<any[]> {
+  if (!ids.length) return [];
+  const origin = getPublicOrigin(request);
+  const { rows, genres, countries } = await titleRows(ids);
+  return withVideoInfo(
+    ids.map((x) => rows.get(x)).filter(Boolean).map((r: any) => toMediaItem(r, genres, countries, origin)),
+    await getActiveProfileId(), "movie", (x: any) => (x.type === "movie" ? x.id : undefined),
+  );
+}
 
 function unauthorized(h: any) {
   return h.response({ error: "Unauthorized" }).code(401);
@@ -455,6 +467,38 @@ export const discoverRoutes: ServerRoute[] = [
         profileId, "movie", (x: any) => (x.type === "movie" ? x.id : undefined),
       );
       return h.response({ data }).header("Cache-Control", "private, no-store");
+    },
+  },
+  {
+    // My List's "Not interested" section: the titles kept off this viewer's Home, newest
+    // first, as cards (undo: DELETE /api/user/hidden/{id}).
+    method: "GET",
+    path: "/api/user/hidden/cards",
+    handler: async (request, h) => {
+      const user = authCheck(request);
+      if (!user || !user.userId) return unauthorized(h);
+      const ids = [...(await hiddenFor(user.userId))].slice(0, 300);
+      return h.response({ data: await cardsOf(ids, request) }).header("Cache-Control", "private, no-store");
+    },
+  },
+  {
+    // My List's "Watched" section: titles watched to the end or marked watched, newest first
+    // (undo: DELETE /api/user/watched/{id}, which forgets them).
+    method: "GET",
+    path: "/api/user/watched",
+    handler: async (request, h) => {
+      const user = authCheck(request);
+      if (!user || !user.userId) return unauthorized(h);
+      const profileId = await getActiveProfileId();
+      const rows = (await recentProgress(user.userId, profileId, 1000)).filter((r: any) => !!r.completed);
+      const ids: string[] = [];
+      const seen = new Set<string>();
+      for (const r of rows) {
+        const id = contentIdsOf(r)[0];
+        if (id && /^(movie|series)_/.test(id) && !seen.has(id)) { seen.add(id); ids.push(id); }
+        if (ids.length >= 300) break;
+      }
+      return h.response({ data: await cardsOf(ids, request) }).header("Cache-Control", "private, no-store");
     },
   },
   {
