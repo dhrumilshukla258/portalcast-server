@@ -624,7 +624,7 @@ export class StalkerAPI implements IProvider {
 
         try {
           const requestLimit = await getRequestLimit();
-          const response = await pacedRequest((background) => requestLimit(async () => {
+          const response = await pacedRequest(this.getBaseUrl(), (background) => requestLimit(async () => {
             return httpRequest(
               url,
               { ...params, uid: this.uid, JsHttpRequest: "1-xml" },

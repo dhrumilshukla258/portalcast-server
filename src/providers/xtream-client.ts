@@ -174,7 +174,7 @@ export class XtreamClient implements IProvider {
       return this.inFlight.get(cacheKey)!;
     }
 
-    const request = pacedRequest(() => axios
+    const request = pacedRequest(this.baseUrl, () => axios
       .get(this.getApiUrl(), {
         params: {
           username: this.username,
