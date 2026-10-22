@@ -19,6 +19,8 @@
 // progress or the catalog changes; a stale answer is served while new rows are built, so a
 // Home open never waits for more than the first build.
 
+import { QueryTypes } from "sequelize";
+import { sequelize } from "@/db";
 import { getDiscoverIndex, type DiscoverIndex } from "@/content/discoverIndex";
 import { getHiddenContentKeySet } from "@/content/overrides";
 import { titleKeyOf } from "@/content/people";
@@ -27,10 +29,11 @@ import { titleWithGroup, titlePeople, personTitles } from "@/content/catalog/car
 import { allViewerRows, recentProgress, isWatched, progressType, contentIdsOf, viewerGeneration, type ProgressRow } from "@/content/viewers";
 
 export type HomeType = "all" | "movie" | "series";
-export interface HomeRow { key: string; kind: "because" | "picks" | "person" | "popular"; title: string; ids: string[] }
+export interface HomeRow { key: string; kind: "because" | "picks" | "person" | "popular" | "trending" | "toprated"; title: string; ids: string[] }
 export interface HomeRows { rows: HomeRow[]; genreOrder: string[]; builtAt: number }
 
 const MIN_ROW = 6;
+const CHART_SIZE = 40;
 const ROW_SIZE = 40;
 const SIMILAR = 30;
 const HALF_LIFE_DAYS = 30;
@@ -139,6 +142,65 @@ export async function similarTitles(id: string, limit = 20): Promise<string[]> {
   return sc.top(limit, (r) => !own.has(r) && idx.type[r] === idx.type[r0] && !hidden.has(idx.ids[r]) && sc.s[r] >= 6).map((r) => idx.ids[r]);
 }
 
+// ── charts: the same for every viewer, made once per catalog change ────────────
+
+interface Charts { trending: Record<"movie" | "series", string[]>; topRated: Record<"movie" | "series", string[]> }
+let chartsCache: { gen: number; value: Promise<Charts> } | null = null;
+
+/**
+ * Trending now: titles first shown in the last six months, most voted first (votes stand in for
+ * popularity: no trending data comes from TMDB). Top rated: IMDb's rating among well-known
+ * titles (50k votes for movies, 20k for series), TMDB's when too few have one. Representative
+ * titles only (one card per title).
+ */
+function charts(): Promise<Charts> {
+  if (chartsCache && chartsCache.gen === catalogGen) return chartsCache.value;
+  const value = (async () => {
+    // Every copy with a TMDB id, folded per title (type + TMDB id): versions of one title can
+    // sit in separate groups ("Avatar ... HD", "... Eng Dub"), and a rating is often stored on
+    // another version than the representative one. One card per title: its representative copy.
+    const copies = (await sequelize.query(
+      "SELECT id, type, tmdbId, isRepresentative, premiered, imdbRating, imdbVotes, rating, ratingCount FROM content_meta WHERE tmdbId IS NOT NULL",
+      { type: QueryTypes.SELECT },
+    )) as any[];
+    interface Title { type: "movie" | "series"; rep: string | null; premiered: number; imdbRating: number; imdbVotes: number; rating: number; ratingCount: number }
+    const titles = new Map<string, Title>();
+    for (const c of copies) {
+      const type = c.type === "series" ? "series" : "movie";
+      const key = `${type}:${c.tmdbId}`;
+      let t = titles.get(key);
+      if (!t) titles.set(key, (t = { type, rep: null, premiered: NaN, imdbRating: 0, imdbVotes: 0, rating: 0, ratingCount: 0 }));
+      if (Number(c.isRepresentative) && (!t.rep || String(c.id) < t.rep)) t.rep = String(c.id);
+      const p = Date.parse(String(c.premiered ?? ""));
+      if (Number.isFinite(p) && !(p >= t.premiered)) t.premiered = Number.isFinite(t.premiered) ? Math.min(t.premiered, p) : p;
+      if ((Number(c.imdbVotes) || 0) > t.imdbVotes) { t.imdbVotes = Number(c.imdbVotes); t.imdbRating = Number(c.imdbRating) || 0; }
+      if ((Number(c.ratingCount) || 0) > t.ratingCount) { t.ratingCount = Number(c.ratingCount); t.rating = Number(c.rating) || 0; }
+    }
+    const now = Date.now(), since = now - 183 * 86_400_000;
+    const votes = (t: Title) => Math.max(t.imdbVotes, t.ratingCount);
+    const out: Charts = { trending: { movie: [], series: [] }, topRated: { movie: [], series: [] } };
+    for (const type of ["movie", "series"] as const) {
+      const mine = [...titles.values()].filter((t) => t.type === type && t.rep);
+      out.trending[type] = mine
+        .filter((t) => t.premiered >= since && t.premiered <= now + 86_400_000 && votes(t) >= 20)
+        .sort((a, b) => votes(b) - votes(a) || a.rep!.localeCompare(b.rep!))
+        .slice(0, CHART_SIZE).map((t) => t.rep!);
+      const minVotes = type === "series" ? 20_000 : 50_000;
+      let top = mine.filter((t) => t.imdbRating > 0 && t.imdbVotes >= minVotes)
+        .sort((a, b) => b.imdbRating - a.imdbRating || b.imdbVotes - a.imdbVotes);
+      if (top.length < 12) {
+        top = mine.filter((t) => t.rating > 0 && t.ratingCount >= 1000)
+          .sort((a, b) => b.rating - a.rating || b.ratingCount - a.ratingCount);
+      }
+      out.topRated[type] = top.slice(0, CHART_SIZE).map((t) => t.rep!);
+    }
+    return out;
+  })();
+  chartsCache = { gen: catalogGen, value };
+  value.catch(() => { if (chartsCache?.value === value) chartsCache = null; });
+  return value;
+}
+
 export async function buildHomeRows(userId: number, profileId: number, type: HomeType): Promise<HomeRows> {
   const idx = await getDiscoverIndex();
   const hidden = await getHiddenContentKeySet();
@@ -219,6 +281,24 @@ export async function buildHomeRows(userId: number, profileId: number, type: Hom
   }
   const popular = take([...votes.entries()].filter(([r]) => ok(r)).sort((a, b) => b[1] - a[1] || a[0] - b[0]).map(([r]) => r));
   if (popular.length >= MIN_ROW) rows.push({ key: "popular", kind: "popular", title: "Popular on this server", ids: commit(popular) });
+
+  // Trending now and Top rated (the same for everyone): first on the Movies and Series pages,
+  // after the personal rows on Home. Hidden titles are left out; watched ones stay (a chart).
+  const ch = await charts();
+  const chartRows: HomeRow[] = [];
+  const chart = (ids: string[]) => ids.filter((id) => !hidden.has(id)).slice(0, ROW_SIZE);
+  if (type === "all") {
+    for (const t of ["movie", "series"] as const) {
+      const ids = chart(ch.trending[t]);
+      if (ids.length >= MIN_ROW) chartRows.push({ key: `trending:${t}`, kind: "trending", title: `Trending now · ${t === "movie" ? "Movies" : "Series"}`, ids });
+    }
+    rows.push(...chartRows);
+  } else {
+    const trending = chart(ch.trending[type]), top = chart(ch.topRated[type]);
+    if (trending.length >= MIN_ROW) chartRows.push({ key: `trending:${type}`, kind: "trending", title: "Trending now", ids: trending });
+    if (top.length >= MIN_ROW) chartRows.push({ key: `toprated:${type}`, kind: "toprated", title: "Top rated", ids: top });
+    rows.unshift(...chartRows);
+  }
 
   return { rows, genreOrder, builtAt: Date.now() };
 }

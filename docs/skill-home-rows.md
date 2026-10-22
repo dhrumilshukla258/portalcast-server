@@ -10,6 +10,10 @@ The personal rows of Home/Discover, prepared per viewer (plan Phase 2). Code: `s
 | Top picks for you | Genre weights of everything watched (a title watched 30 days ago counts half), language weights, the viewer's 10 most-weighted people |
 | More with *name* | The person in two or more watched titles with the most weight: their other titles |
 | Popular on this server | What other viewers watched in the last 30 days, one vote per viewer |
+| Trending now (Phase 6) | The same for everyone: titles first shown in the last six months, most voted first (votes stand in for popularity). Home: "Trending now · Movies" and "· Series" after the personal rows; Movies/Series pages: first |
+| Top rated (Phase 6, Movies/Series pages) | IMDb rating among well-known titles (50k votes for movies, 20k for series), TMDB's when fewer than 12 have one |
+
+Charts are folded per title (type + TMDB id) across every copy: versions can sit in separate groups, and ratings are often stored on another version than the representative one. One card per title (its representative copy); hidden titles left out. Made once per catalog change.
 
 Rules: a row needs 6 titles; a title is in at most two rows; only representative titles (one card per title), never a version of something watched, never a hidden title; `type` keeps one type. `genreOrder` lists the viewer's genres, most watched first, for the genre rows the apps page through `/discover/browse`. Continue Watching stays with `GET /api/user/progress`.
 
