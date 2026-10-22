@@ -13,6 +13,7 @@ import { localStreamRoutes } from "./routes/library/stream";
 import { scanLibraries } from "./content/library/scanner";
 import { setupRoutes, needsSetup } from "./routes/account/setup";
 import { registerJob, startJobs } from "./services/jobs";
+import { prefillCardPosters } from "./content/posterPrefill";
 import { runIntegrityCheck } from "./services/integrity";
 import { backupDatabase } from "./services/backup";
 import { refreshChannelLogos, resolveTmdbChannelLogos } from "./content/channels";
@@ -107,6 +108,7 @@ const init = async () => {
   registerJob({ name: "integrity", label: "Check stored data for repeats", dailyAtHour: 5, run: runIntegrityCheck });
   registerJob({ name: "library-scan", label: "Scan local libraries", dailyAtHour: 3, run: () => scanLibraries() });
   registerJob({ name: "image-cache", label: "Trim the image cache", dailyAtHour: 5, run: evictImageCache });
+  registerJob({ name: "poster-prefill", label: "Fetch card posters ahead (w342)", dailyAtHour: 2, run: prefillCardPosters });
   registerJob({
     name: "people", label: "Remove unused cast lists", dailyAtHour: 5,
     run: async () => { const r = await tidyPeople(); markPeopleChanged(); return r; },

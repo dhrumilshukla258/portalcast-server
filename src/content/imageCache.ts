@@ -130,6 +130,35 @@ export async function cachedImage(size: string, file: string): Promise<Buffer | 
   return job;
 }
 
+/**
+ * Puts an image in the cache folder if it is not there yet, without keeping it in memory (a
+ * background pre-fill must not push out what viewers are looking at). "cached" when it was
+ * there already, "fetched" when downloaded, "missing" when TMDB has no such image or failed.
+ */
+export async function prefetchToDisk(size: string, file: string): Promise<"cached" | "fetched" | "missing"> {
+  if (!validCacheRequest(size, file)) return "missing";
+  const target = path.join(imageCacheFolder(), size, file);
+  try {
+    await fs.promises.access(target);
+    return "cached";
+  } catch {
+    /* not there yet */
+  }
+  try {
+    const res = await axios.get(`https://image.tmdb.org/t/p/${size}/${file}`, { responseType: "arraybuffer", timeout: 15000, maxContentLength: 25 * 1024 * 1024 });
+    saveInBackground(target, Buffer.from(res.data));
+    return "fetched";
+  } catch {
+    return "missing";
+  }
+}
+
+/** The TMDB size and file of an image.tmdb.org URL, or null. */
+export function tmdbImageParts(url: string): { size: string; file: string } | null {
+  const m = TMDB_RE.exec(url);
+  return m ? { size: m[1], file: m[2] } : null;
+}
+
 /** Nightly: removes least recently used images until the cache is under 90% of its cap. */
 export async function evictImageCache(): Promise<string> {
   const capBytes = Number(setting<number>("imageCacheGb")) * 1024 ** 3;
