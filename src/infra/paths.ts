@@ -32,7 +32,7 @@ export const dataDir = path.dirname(databasePath);
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
 /**
- * Uploads (avatars, carousel images). Older setups pointed DATABASE_PATH at the database
+ * Uploads (avatars; images from older versions stay served). Older setups pointed DATABASE_PATH at the database
  * file and kept uploads beside it; that still wins when set. Otherwise uploads live in the
  * data folder. Docker's default layout resolves both ways to /app/data/uploads.
  */

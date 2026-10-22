@@ -1,6 +1,6 @@
 // What a byte buffer actually is, by content, never by extension or a claimed
 // Content-Type. Used for every image that enters or passes through the server: avatar
-// and carousel uploads, portal logo/poster relays, the image proxy. A file that claims
+// uploads, portal logo/poster relays, the image proxy. A file that claims
 // to be .png but is HTML, a script or an executable is rejected.
 
 export type ImageKind = "png" | "jpg" | "gif" | "webp" | "bmp" | "ico" | "avif" | "svg";

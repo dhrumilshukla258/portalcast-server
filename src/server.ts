@@ -358,7 +358,6 @@ const init = async () => {
       path.startsWith("/api/v2/refresh-") ||
       path.startsWith("/api/profiles") ||
       path.startsWith("/api/config") ||
-      path.startsWith("/api/upload") ||
       path === "/api/v2/reset-movies" ||
       path === "/api/v2/get-token";
 
