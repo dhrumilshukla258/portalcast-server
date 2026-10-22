@@ -18,7 +18,7 @@ import { authCheck } from "@/auth/jwt";
 import { ContentMeta, ContentType } from "@/models/ContentMeta";
 import { ContentGenre } from "@/models/ContentGenre";
 import { ContentTheme } from "@/models/ContentTheme";
-import { recentProgress } from "@/content/viewers";
+import { recentProgress, isWatched, progressType, contentIdsOf } from "@/content/viewers";
 import { getActiveProfileId } from "@/routes/stalkerV2/shared";
 import { getHiddenContentKeys, getHiddenContentKeySet } from "@/content/overrides";
 import { getDiscoverIndex, facetsFor, browse as browseIndex, recommend, type BrowseQuery } from "@/content/discoverIndex";
@@ -27,6 +27,8 @@ import { logger } from "@/infra/logger";
 import { proxiedImageUrl } from "@/providers/portalAssets";
 import { getPublicOrigin } from "@/infra/publicUrl";
 import { titleRows, titleWithGroup, titlePeople, variantRows, personTitles } from "@/content/catalog/cards";
+import { homeRows, type HomeType } from "@/content/home";
+import { createHash } from "crypto";
 
 const PAGE_SIZE = 40;
 
@@ -362,6 +364,39 @@ export const discoverRoutes: ServerRoute[] = [
   },
 
   {
+    // Home's personal rows, prepared per viewer (content/home.ts, plan Phase 2): "Because you
+    // watched X" (up to 3), "Top picks for you", "More with <person>", "Popular on this
+    // server", as cards, and genreOrder (the viewer's genres, most watched first) for the
+    // genre rows the apps page through. ETag over the answer: an unchanged Home is a 304.
+    // Continue Watching stays with /api/user/progress.
+    method: "GET",
+    path: "/api/v2/home",
+    handler: async (request, h) => {
+      const userPayload = authCheck(request);
+      if (!userPayload) return unauthorized(h);
+      const t = (request.query as any).type;
+      const type: HomeType = t === "movie" || t === "series" ? t : "all";
+      const profileId = await getActiveProfileId();
+      if (profileId === undefined || userPayload.userId === undefined) return { rows: [], genreOrder: [] };
+      const home = await homeRows(userPayload.userId, profileId, type);
+      const origin = getPublicOrigin(request);
+      const allIds = [...new Set(home.rows.flatMap((r) => r.ids))];
+      const { rows: byId, genres, countries } = await titleRows(allIds);
+      const cards = await withVideoInfo(
+        allIds.map((id) => byId.get(id)).filter(Boolean).map((r: any) => toMediaItem(r, genres, countries, origin)),
+        profileId, "movie", (x: any) => (x.type === "movie" ? x.id : undefined),
+      );
+      const card = new Map(cards.map((c: any) => [String(c.id), c]));
+      const rows = home.rows
+        .map((r) => ({ key: r.key, kind: r.kind, title: r.title, data: r.ids.map((id) => card.get(id)).filter(Boolean) }))
+        .filter((r) => r.data.length > 0);
+      const body = { rows, genreOrder: home.genreOrder };
+      // The tag is the answer itself (cards included), so a renamed title is never a stale 304.
+      return h.response(body).etag(createHash("sha1").update(JSON.stringify(body)).digest("base64url").slice(0, 22));
+    },
+  },
+
+  {
     // "Because you watched X" — content-based recommendations from the user's own
     // UserProgress rows, no cross-user data. For each watched mediaId with a matching
     // ContentMeta row, find other items sharing >=1 genre + the same original_language,
@@ -392,66 +427,15 @@ export const discoverRoutes: ServerRoute[] = [
       // before that field existed. `completed` rows always count regardless
       // of the stored percent (a completed episode may have a short/odd
       // duration that make percent-based math unreliable).
-      const MIN_WATCH_PERCENT = 20;
-      const watchPercent = (p: any): number | null => {
-        let meta = p.meta;
-        if (typeof meta === "string") {
-          try { meta = JSON.parse(meta); } catch { meta = null; }
-        }
-        if (meta && typeof meta.progressPercent === "number") return meta.progressPercent;
-        if (meta && typeof meta.duration === "number" && meta.duration > 0 && typeof p.progress === "number") {
-          return (p.progress / meta.duration) * 100;
-        }
-        return null;
-      };
-      // UserProgress.mediaId is the portal's own playback-FILE id, not
-      // ContentMeta's catalog id — for anything opened via Discover, those are
-      // proven to genuinely differ (confirmed via real traffic: a movie
-      // fetched via category=1 came back reporting an unrelated file id, and
-      // that file id was never a valid catalog lookup key at all — same root
-      // cause behind several other fixes this session). webui's saveProgress
-      // (VideoContext.tsx) now stores ContentMeta's own id directly in
-      // `meta.catalogId` when it's known, specifically so this lookup doesn't
-      // have to guess — prefer that, falling back to the old
-      // movie_{mediaId}/series_{mediaId} guess only for older progress rows
-      // saved before this existed.
-      const catalogIdFor = (p: any): string | null => {
-        let meta = p.meta;
-        if (typeof meta === "string") {
-          try { meta = JSON.parse(meta); } catch { meta = null; }
-        }
-        return (meta && typeof meta === "object" && meta.catalogId) || null;
-      };
-      // Same meta payload also carries the type webui saved at playback time
-      // (useProgressTracking.ts: `type: contentType`) — prefer that, falling
-      // back to the movie_/series_ catalogId prefix for older rows that
-      // predate the explicit field.
-      const rowType = (p: any): "movie" | "series" | null => {
-        let meta = p.meta;
-        if (typeof meta === "string") {
-          try { meta = JSON.parse(meta); } catch { meta = null; }
-        }
-        if (meta && typeof meta === "object" && (meta.type === "movie" || meta.type === "series")) {
-          return meta.type;
-        }
-        const catalogId = catalogIdFor(p);
-        if (catalogId?.startsWith("movie_")) return "movie";
-        if (catalogId?.startsWith("series_")) return "series";
-        return null;
-      };
-      let progress = allProgress.filter(
-        (p: any) => p.completed || (watchPercent(p) ?? 0) >= MIN_WATCH_PERCENT
-      );
+      // What counts as watching, and which title a row is (content/viewers.ts).
+      let progress = allProgress.filter((p: any) => isWatched(p));
       if (typeFilter) {
-        progress = progress.filter((p: any) => rowType(p) === typeFilter);
+        progress = progress.filter((p: any) => progressType(p) === typeFilter);
       }
       progress = progress.slice(0, 20);
       if (progress.length === 0) return { data: [], basedOnTitle: null };
 
-      const watchedIds = progress.flatMap((p: any) => {
-        const catalogId = catalogIdFor(p);
-        return catalogId ? [catalogId] : [`movie_${p.mediaId}`, `series_${p.mediaId}`];
-      });
+      const watchedIds = progress.flatMap((p: any) => contentIdsOf(p));
       const watchedMeta = await ContentMeta.findAll({
         where: { id: { [Op.in]: watchedIds } },
         include: [{ model: ContentGenre, as: "ContentGenres" }],
@@ -468,10 +452,7 @@ export const discoverRoutes: ServerRoute[] = [
       // The single most-recently-watched title, used purely to label the row
       // ("Because You Watched X") — the actual ranking below still considers
       // genre overlap across all up-to-20 recent watches, not just this one.
-      const mostRecentCatalogId = catalogIdFor(progress[0]);
-      const mostRecentIds = mostRecentCatalogId
-        ? [mostRecentCatalogId]
-        : [`movie_${progress[0].mediaId}`, `series_${progress[0].mediaId}`];
+      const mostRecentIds = contentIdsOf(progress[0]);
       const mostRecentWatched = (watchedMeta as any[]).find((m) => mostRecentIds.includes(m.id));
       // ContentMeta match can miss (unenriched portal item, or a stale
       // movie_{mediaId}/series_{mediaId} guess for pre-catalogId rows) even

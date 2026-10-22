@@ -94,6 +94,17 @@ export async function progressRows(userId: number | undefined, profileId: number
   return [...v.values()].sort((a, b) => binaryCmp(a.mediaId, b.mediaId)).map(clone);
 }
 
+/** Every viewer's rows (copies), for server-wide figures such as what is popular here. Call
+ *  after viewersReady(). */
+export function allViewerRows(): { userId: number; profileId: number; rows: ProgressRow[] }[] {
+  const out: { userId: number; profileId: number; rows: ProgressRow[] }[] = [];
+  for (const v of viewers.values()) {
+    const rows = [...v.values()].map(clone);
+    if (rows.length) out.push({ userId: rows[0].userId, profileId: rows[0].profileId, rows });
+  }
+  return out;
+}
+
 /** A viewer's rows, most recently updated first (copies). */
 export async function recentProgress(userId: number | undefined, profileId: number | undefined, limit: number): Promise<ProgressRow[]> {
   const rows = await progressRows(userId, profileId);
@@ -186,4 +197,61 @@ export async function sealProgressLinks(): Promise<void> {
   }
   logger.info(`[MetaEnrich] progress records: sealed the stream link in ${sealed} of ${rows.length}`);
   if (sealed) await reload();
+}
+
+// ── what a progress row says (shared by recommendations and Home rows) ────────
+
+/** A row counts as watching (a taste signal) once this much of it was played, or it is done. */
+export const MIN_WATCH_PERCENT = 20;
+
+/** The row's meta as an object (it can come back as JSON text from this table). */
+function metaOf(p: any): any {
+  let meta = p.meta;
+  if (typeof meta === "string") {
+    try { meta = JSON.parse(meta); } catch { meta = null; }
+  }
+  return meta;
+}
+
+/**
+ * How much of it was watched, in percent: `meta.progressPercent` (computed by the client at
+ * save time), else progress / meta.duration for older rows; null when unknown.
+ */
+export function watchPercent(p: any): number | null {
+  const meta = metaOf(p);
+  if (meta && typeof meta.progressPercent === "number") return meta.progressPercent;
+  if (meta && typeof meta.duration === "number" && meta.duration > 0 && typeof p.progress === "number") {
+    return (p.progress / meta.duration) * 100;
+  }
+  return null;
+}
+
+/** Completed, or watched at least MIN_WATCH_PERCENT: a genuine signal, not an open-and-close. */
+export function isWatched(p: any): boolean {
+  return !!p.completed || (watchPercent(p) ?? 0) >= MIN_WATCH_PERCENT;
+}
+
+/**
+ * The catalog id (content_meta id) the client stored in meta.catalogId. mediaId is the
+ * portal's playback-file id, which for titles opened from Discover differs from it.
+ */
+export function catalogIdOf(p: any): string | null {
+  const meta = metaOf(p);
+  return (meta && typeof meta === "object" && meta.catalogId) || null;
+}
+
+/** movie / series: meta.type, else the catalogId prefix; null when unknown. */
+export function progressType(p: any): "movie" | "series" | null {
+  const meta = metaOf(p);
+  if (meta && typeof meta === "object" && (meta.type === "movie" || meta.type === "series")) return meta.type;
+  const catalogId = catalogIdOf(p);
+  if (catalogId?.startsWith("movie_")) return "movie";
+  if (catalogId?.startsWith("series_")) return "series";
+  return null;
+}
+
+/** Content ids a row may be: its catalogId, else both movie_/series_ guesses. */
+export function contentIdsOf(p: any): string[] {
+  const catalogId = catalogIdOf(p);
+  return catalogId ? [catalogId] : [`movie_${p.mediaId}`, `series_${p.mediaId}`];
 }

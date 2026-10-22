@@ -47,6 +47,7 @@ import { discoverRoutes, discoverDetailsRoute, personRoute, peopleSearchRoute } 
 import { buildPeopleIndex, markPeopleChanged } from "./content/peopleSearch";
 import { startCatalogSnapshot } from "./content/catalog/store";
 import { viewersReady } from "./content/viewers";
+import { markHomeStale } from "./content/home";
 import { onDiscoverCacheClear } from "./services/discoverCache";
 import { socketService } from "./services/SocketService";
 
@@ -501,6 +502,8 @@ const init = async () => {
   // On: started now, since the "All" lists wait for it (a saved file loads in about 0.5 s).
   setTimeout(() => void startCatalogSnapshot().catch((e) => logger.warn(`[catalog] start failed: ${e?.message ?? e}`)), setting<boolean>("catalogSnapshot") ? 0 : 60_000).unref?.();
   onDiscoverCacheClear(markPeopleChanged);
+  // Catalog changed (enrichment, edits): Home rows are rebuilt on the next open (content/home.ts).
+  onDiscoverCacheClear(markHomeStale);
   // Channel logos for Discover (content/channels.ts): portal logos now, TMDB network logos
   // a minute later in the background (one-time, cached; retried weekly for misses).
   refreshChannelLogos();

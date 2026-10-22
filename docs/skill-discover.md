@@ -53,6 +53,7 @@ All under `/api/v2/discover/`, gated by the global Bearer-JWT `onPreHandler` in 
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET` | `/facets` | Genre/country/theme/language values + counts; `networks` (channels/platforms, with logos) for `type=series` |
+| `GET` | `/api/v2/home` | The personal rows, prepared per viewer: [[skill-home-rows]] |
 | `GET` | `/browse` | Paginated listing (40), filterable by any combination of `genre`/`country`/`language`/`theme`/`network`/`type` |
 | `GET` | `/recommendations` | Per-user "Because You Watched" — genre-overlap ranking from the user's own `UserProgress`, no cross-user data |
 | `GET` | `/variants?id=` | All rows sharing the anchor row's `groupKey`, labeled by audio/subtitle language + quality tags |
