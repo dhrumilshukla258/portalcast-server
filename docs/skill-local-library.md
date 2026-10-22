@@ -95,3 +95,7 @@ ExoPlayer plays MKV/MP4 directly. Audio the TV cannot decode (DTS, TrueHD) falls
 ## Not built
 
 Writing NFO files: the owner's library already has Jellyfin's NFOs, and nightly database backups cover recovery, so PortalCast reads NFOs but does not write them.
+
+## Artwork sizes (Phase 4, 2026-10-22)
+
+`/api/images/local?a=&s=` takes an optional `w` (342, 780, 1280): a JPEG scaled to that width, made once with ffmpeg and kept in `<image cache folder>/local/` under the signed address and width (a changed file has a new version in its address, so a new copy). At most two conversions at a time; without ffmpeg or on failure the original is served (`content/library/artSizes.ts`, `test/art-sizes.test.ts`). The TV and webui ask for `w` on cards (342) and backdrops (780/1280). NAS posters are often 2-5 MB.

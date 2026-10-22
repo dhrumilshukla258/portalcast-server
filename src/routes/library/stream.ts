@@ -3,6 +3,7 @@ import { customArtPath } from "@/content/customArt";
 import { validCacheRequest, cachedImage } from "@/content/imageCache";
 import { LocalItem } from "@/models/LocalItem";
 import { verifyArt } from "@/content/library/art";
+import { scaledArt, ART_WIDTHS } from "@/content/library/artSizes";
 import { spawn } from "child_process";
 import { ServerRoute } from "@hapi/hapi";
 import fs from "fs";
@@ -163,6 +164,13 @@ export const localStreamRoutes: ServerRoute[] = [
       const name = file;
       const type = IMAGE_MIME[path.extname(name).toLowerCase()];
       if (!type || !(await fs.promises.access(file).then(() => true, () => false))) return h.response("Not found").code(404);
+      // `w` (342, 780, 1280): a copy scaled to that width (content/library/artSizes.ts), else
+      // the original. Not signed: it only picks a smaller copy of what the signature allows.
+      const width = Number(q.w);
+      if (q.w !== undefined && ART_WIDTHS.has(width)) {
+        const scaled = await scaledArt(file, `${a}.${q.s}`, width);
+        if (scaled) return h.response(fs.createReadStream(scaled)).type("image/jpeg").header("Cache-Control", "public, max-age=31536000, immutable");
+      }
       // The version in the URL changes when the file does, so devices may keep it for a year.
       return h.response(fs.createReadStream(file)).type(type).header("Cache-Control", "public, max-age=31536000, immutable");
     },
