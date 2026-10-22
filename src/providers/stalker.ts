@@ -20,6 +20,7 @@ import type { LimitFunction } from "p-limit";
 import { logger } from "@/infra/logger";
 import { CircuitBreaker } from "@/streaming/circuitBreaker";
 import { requestMetrics, PortalRequestCategory } from "@/services/RequestMetrics";
+import { recordLinkTime, type LinkKind } from "@/services/linkTimings";
 
 // p-limit is ESM-only (v4+); ts-node-dev runs this file as CommonJS, so a
 // static import throws ERR_REQUIRE_ESM at dev-server startup. Load it lazily
@@ -589,6 +590,9 @@ export class StalkerAPI implements IProvider {
       }
     }
 
+    // Play links are timed (services/linkTimings.ts: the measurement before link prefetch).
+    const linkKind: LinkKind | null = params.action === "create_link" ? (params.type === "itv" ? "live" : params.type === "vod" ? "movie" : "other") : null;
+    const linkStart = Date.now();
     const execute = async (): Promise<T> => {
       let attempts = 0;
       const maxAttempts = 2;
@@ -655,6 +659,7 @@ export class StalkerAPI implements IProvider {
           }
 
           this.breaker.recordSuccess();
+          if (linkKind) recordLinkTime(linkKind, Date.now() - linkStart, true);
           if (cacheable) {
             const ttl = this.getCacheTTL(params.action);
             this.cache.set(cacheKey, response, ttl);
@@ -663,6 +668,7 @@ export class StalkerAPI implements IProvider {
         } catch (error: any) {
           const statusCode = axios.isAxiosError(error) ? error.response?.status : undefined;
           requestMetrics.record(classifyStalkerRequest(params), "error", statusCode);
+          if (linkKind) recordLinkTime(linkKind, Date.now() - linkStart, false);
 
           const isAuthError =
             (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) ||
