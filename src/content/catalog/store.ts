@@ -61,11 +61,14 @@ export function catalogReady(): Promise<CatalogSnapshot | null> {
 /** Keys written after the snapshot was built, per log table ("title", "tags", "person"...). */
 export interface CatalogChanges {
   snap: CatalogSnapshot;
-  keys: Map<string, Set<string>>;
+  /** Per log table: key -> the sequence number of its latest change. */
+  keys: Map<string, Map<string, number>>;
+  /** Highest sequence number seen. */
+  seq: number;
   has(tbl: string, key: string): boolean;
 }
 
-let changeState: { snap: CatalogSnapshot; seq: number; keys: Map<string, Set<string>> } | null = null;
+let changeState: { snap: CatalogSnapshot; seq: number; keys: Map<string, Map<string, number>> } | null = null;
 let changeSync: Promise<void> | null = null;
 
 /**
@@ -85,9 +88,9 @@ export async function catalogChanges(): Promise<CatalogChanges | null> {
     for (;;) {
       const rows = await changesSince(sequelize, state.seq);
       for (const r of rows) {
-        let set = state.keys.get(r.tbl);
-        if (!set) state.keys.set(r.tbl, (set = new Set()));
-        set.add(r.key);
+        let byKey = state.keys.get(r.tbl);
+        if (!byKey) state.keys.set(r.tbl, (byKey = new Map()));
+        byKey.set(r.key, r.seq);
         if (r.seq > state.seq) state.seq = r.seq;
       }
       if (rows.length < 5000) break; // changesSince returns at most 5000 rows per call
@@ -96,7 +99,7 @@ export async function catalogChanges(): Promise<CatalogChanges | null> {
   changeSync = read;
   await read;
   if (changeSync === read) changeSync = null;
-  return { snap, keys: state.keys, has: (tbl, key) => !!state.keys.get(tbl)?.has(key) };
+  return { snap, keys: state.keys, seq: state.seq, has: (tbl, key) => !!state.keys.get(tbl)?.has(key) };
 }
 
 /** The cache list under `key`, at cache version `version`, is the one in the snapshot. */

@@ -48,7 +48,10 @@ async function makeDb(): Promise<string> {
   await exec(db, "INSERT INTO people (id, tmdbPersonId, name, photo, birthday, biography) VALUES (2, NULL, 'Carrie-Anne Moss', '/p.jpg', '1967-08-21', ?)", ["A biography that is longer than one chunk of sixty-four bytes, to cross."]);
   await exec(db, "INSERT INTO people (id, tmdbPersonId, name) VALUES (5, 9999, 'No credits')");
   await exec(db, "CREATE TABLE title_people (titleKey TEXT, personId INTEGER, kind TEXT, role TEXT, sortOrder INTEGER)");
-  for (const r of [["movie:603", 2, "cast", "Trinity", 1], ["movie:603", 1, "cast", "Neo", 0], ["movie:603", 1, "director", null, 5], ["movie:603", 77, "cast", "Orphan", 2], ["series_7", 2, "creator", null, 0]]) {
+  // Ties on sortOrder (directors and writers restart at 0) come out as the database's unique
+  // index reads them: kind name, then person id, then role (bytes).
+  for (const r of [["movie:603", 2, "cast", "Trinity", 1], ["movie:603", 1, "cast", "Neo", 0], ["movie:603", 1, "director", null, 5], ["movie:603", 77, "cast", "Orphan", 2], ["series_7", 2, "creator", null, 0],
+    ["movie:9", 2, "writer", null, 0], ["movie:9", 1, "writer", "Story", 0], ["movie:9", 1, "director", null, 0], ["movie:9", 1, "writer", "Screenplay", 0], ["movie:9", 5, "producer", null, 0]]) {
     await exec(db, "INSERT INTO title_people VALUES (?,?,?,?,?)", r);
   }
   await exec(db, "CREATE TABLE xtream_cache (key TEXT PRIMARY KEY, value BLOB)");
@@ -136,6 +139,9 @@ test("credits come in billing order; people details are sparse but complete", as
   const credits = snap.creditsOf("movie:603").map((c) => [snap.person(c.person).name, c.kind, c.role, c.order]);
   assert.deepEqual(credits, [["Keanu Reeves", "cast", "Neo", 0], ["Carrie-Anne Moss", "cast", "Trinity", 1], ["Keanu Reeves", "director", null, 5]]);
   assert.deepEqual(snap.creditsOf("movie:1"), []);
+  assert.deepEqual(snap.creditsOf("movie:9").map((c) => [c.kind, snap.person(c.person).id, c.role]),
+    [["director", 1, null], ["producer", 5, null], ["writer", 1, "Screenplay"], ["writer", 1, "Story"], ["writer", 2, null]],
+    "ties by kind name, person id, role; an unknown kind keeps its name");
   assert.equal(out.counts.peopleWithDetails, 1);
   const moss = snap.person(snap.personIndex(2));
   assert.deepEqual(moss, {
@@ -145,8 +151,8 @@ test("credits come in billing order; people details are sparse but complete", as
   assert.equal(snap.person(snap.personIndex(1)).birthday, null);
   assert.equal(snap.person(snap.personIndex(5)).tmdbPersonId, 9999);
   assert.equal(snap.personIndex(3), -1);
-  assert.deepEqual(snap.personCredits(snap.personIndex(2)).map((c) => [c.titleKey, c.kind]).sort(), [["movie:603", "cast"], ["series_7", "creator"]]);
-  assert.deepEqual(snap.personCredits(snap.personIndex(5)), []);
+  assert.deepEqual(snap.personCredits(snap.personIndex(2)).map((c) => [c.titleKey, c.kind]).sort(), [["movie:603", "cast"], ["movie:9", "writer"], ["series_7", "creator"]]);
+  assert.deepEqual(snap.personCredits(snap.personIndex(5)), [{ titleKey: "movie:9", kind: "producer", role: null, order: 0 }]);
 });
 
 test("list entries rebuild exactly, whatever their shape", async () => {

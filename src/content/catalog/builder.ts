@@ -168,6 +168,20 @@ function workerMain(): void {
     for (let i = 0; i < n; i++) if (c[at + i] !== b[i]) return false;
     return true;
   };
+  // Byte order of two pooled texts (SQLite's BINARY collation; id 0 = NULL compares as "").
+  const lenOf = (id: number) => {
+    if (!id) return 0;
+    const st = starts[id], c = pool.chunk(st), at = st % CHUNK;
+    return Math.min((id + 1 < count ? starts[id + 1] : pool.end) - st, c.length - at);
+  };
+  const poolCmp = (x: number, y: number): number => {
+    const lx = lenOf(x), ly = lenOf(y), n = Math.min(lx, ly);
+    if (n > 0) {
+      const cx = pool.chunk(starts[x]), ax = starts[x] % CHUNK, cy = pool.chunk(starts[y]), ay = starts[y] % CHUNK;
+      for (let i = 0; i < n; i++) { const d = cx[ax + i] - cy[ay + i]; if (d !== 0) return d; }
+    }
+    return lx - ly;
+  };
   const intern = (v: any): number => {
     if (v === null || v === undefined) return 0;
     const str = typeof v === "string" ? v : String(v);
@@ -258,6 +272,15 @@ function workerMain(): void {
       for (let i = 0; i < copyCount; i++) if (!Number.isNaN(tmdbCol[i])) withTmdb.push(i);
       withTmdb.sort((a, b) => typeCode[a] - typeCode[b] || tmdbCol[a] - tmdbCol[b] || a - b);
       sections["copy.byTmdb"] = Int32Array.from(withTmdb);
+      // Copies by group (all versions of a title share a groupKey): sorted by the groupKey's pool
+      // id, then copy (rowid) order. Equal texts have one pool id, so a group is one run.
+      const groupCol = sections["copy.groupKey"] as Uint32Array | undefined;
+      if (groupCol) {
+        const grouped: number[] = [];
+        for (let i = 0; i < copyCount; i++) if (groupCol[i]) grouped.push(i);
+        grouped.sort((a, b) => groupCol[a] - groupCol[b] || a - b);
+        sections["copy.byGroup"] = Int32Array.from(grouped);
+      }
       cols.forEach((c) => { if (c.kind === "num") sections[`copy.${c.name}`] = narrowNum(sections[`copy.${c.name}`]); });
       const idLookup = (id: string) => { // binary search in byId (no 132k-entry map)
         let lo = 0, hi = byId.length - 1;
@@ -330,7 +353,8 @@ function workerMain(): void {
       stage("people");
 
       // ── credits: grouped by title key (billing order inside), and by person ──
-      const KIND: Record<string, number> = { cast: 1, director: 2, creator: 3, writer: 4 };
+      // Kinds as a dictionary (cast, director, writer, creator today; any other is kept as is).
+      const kindIndex = new Map<string, number>(), kindStrs: string[] = [];
       const nCred = await countOf("title_people");
       const keyIndex = new Map<string, number>();
       const keyStrs: string[] = [];
@@ -341,7 +365,10 @@ function workerMain(): void {
         const key = String(r[1]);
         let k = keyIndex.get(key);
         if (k === undefined) { k = keyStrs.length; keyIndex.set(key, k); keyStrs.push(key); }
-        cKey.push(k); cPerson.push(p); cKind.push(KIND[r[3]] ?? 0); cRole.push(intern(r[4])); cOrder.push(Number(r[5]) || 0);
+        const kindName = String(r[3]);
+        let kc = kindIndex.get(kindName);
+        if (kc === undefined) { kc = kindStrs.length; if (kc > 255) throw new Error("too many credit kinds"); kindIndex.set(kindName, kc); kindStrs.push(kindName); }
+        cKey.push(k); cPerson.push(p); cKind.push(kc); cRole.push(intern(r[4])); cOrder.push(Number(r[5]) || 0);
       });
       keyIndex.clear();
       const nc = cKey.length;
@@ -354,13 +381,23 @@ function workerMain(): void {
       for (let i = 0; i < keyStrs.length; i++) keyOff[i + 1] += keyOff[i];
       const kcur = keyOff.slice(0, keyStrs.length), byKey = new Int32Array(nc);
       for (let k = 0; k < nc; k++) byKey[kcur[keyRank[keys[k]]]++] = k;
+      // Billing order as the database answers it: ORDER BY sortOrder over rows read through the
+      // unique index (titleKey, kind, personId, IFNULL(role, '')), and SQLite's sort keeps that
+      // order for ties (142k tied pairs on live data: directors and writers restart at 0).
       for (let i = 0; i < keyStrs.length; i++) {
         const seg = byKey.subarray(keyOff[i], keyOff[i + 1]);
-        if (seg.length > 1) seg.sort((a, b) => orders[a] - orders[b] || a - b);
+        if (seg.length > 1) {
+          seg.sort((a, b) => orders[a] - orders[b]
+            || (kindStrs[kinds[a]] < kindStrs[kinds[b]] ? -1 : kindStrs[kinds[a]] > kindStrs[kinds[b]] ? 1 : 0)
+            || personIds[persons[a]] - personIds[persons[b]]
+            || poolCmp(roles[a], roles[b])
+            || a - b);
+        }
       }
       sections["credit.keys"] = Uint32Array.from(keyOrder, (k) => intern(keyStrs[k]));
       keyStrs.length = 0;
       sections["credit.keyOff"] = keyOff;
+      sections["credit.kindDict"] = Uint32Array.from(kindStrs, (k) => intern(k));
       // Credits stored in key order, so a key's credits are one contiguous run.
       const credPerson = Int32Array.from(byKey, (k) => persons[k]);
       sections["credit.person"] = credPerson;

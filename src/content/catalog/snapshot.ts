@@ -4,7 +4,6 @@
 import { INT_NULL, type Section } from "./builder";
 
 export type TagKind = "genre" | "country" | "theme";
-export const CREDIT_KINDS = ["", "cast", "director", "creator", "writer"] as const;
 const PERSON_DETAILS = ["knownFor", "birthday", "deathday", "placeOfBirth", "detailsCheckedAt", "biography"] as const;
 
 /** chunk[p..] starts with q. */
@@ -151,11 +150,24 @@ export class CatalogSnapshot {
     }
     if (at < 0) return [];
     const person = this.s["credit.person"] as Int32Array, kind = this.s["credit.kind"] as Uint8Array;
-    const role = this.s["credit.role"] as Uint32Array, order = this.s["credit.order"];
+    const role = this.s["credit.role"] as Uint32Array, order = this.s["credit.order"], kinds = this.s["credit.kindDict"] as Uint32Array;
     const out: CreditRow[] = [];
     for (let k = keyOff[at]; k < keyOff[at + 1]; k++) {
-      out.push({ person: person[k], kind: CREDIT_KINDS[kind[k]] ?? "", role: this.str(role[k]), order: order[k] });
+      out.push({ person: person[k], kind: this.str(kinds[kind[k]]) ?? "", role: this.str(role[k]), order: order[k] });
     }
+    return out;
+  }
+
+  /** Copies sharing copy i's groupKey (every version of the title), in copy order; [i] when
+   *  it has none. */
+  groupOf(i: number): number[] {
+    const col = this.s["copy.groupKey"] as Uint32Array, order = this.s["copy.byGroup"] as Int32Array;
+    const g = col[i];
+    if (!g) return [i];
+    let lo = 0, hi = order.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (col[order[m]] < g) lo = m + 1; else hi = m; }
+    const out: number[] = [];
+    for (let k = lo; k < order.length && col[order[k]] === g; k++) out.push(order[k]);
     return out;
   }
 
@@ -193,10 +205,11 @@ export class CatalogSnapshot {
     // The key of credit c: the last key whose run starts at or before c (binary search).
     const keyOf = (c: number) => { let lo = 0, hi = keys.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (keyOff[m] <= c) lo = m; else hi = m - 1; } return lo; };
     const kind = this.s["credit.kind"] as Uint8Array, role = this.s["credit.role"] as Uint32Array, order = this.s["credit.order"];
+    const kinds = this.s["credit.kindDict"] as Uint32Array;
     const out = [];
     for (let k = off[i]; k < off[i + 1]; k++) {
       const c = list[k];
-      out.push({ titleKey: this.str(keys[keyOf(c)])!, kind: CREDIT_KINDS[kind[c]] ?? "", role: this.str(role[c]), order: order[c] });
+      out.push({ titleKey: this.str(keys[keyOf(c)])!, kind: this.str(kinds[kind[c]]) ?? "", role: this.str(role[c]), order: order[c] });
     }
     return out;
   }

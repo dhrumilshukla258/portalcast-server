@@ -2,7 +2,7 @@ import { fetchPerson } from "@/content/tmdb";
 import { personDetails, personCredits } from "@/content/people";
 import { searchPeople, peopleIndexReady } from "@/content/peopleSearch";
 import { getCached, setCached } from "@/services/discoverCache";
-import { peopleOf, titleKeyOf } from "@/content/people";
+import { titleKeyOf } from "@/content/people";
 import { LOCAL_CATEGORY } from "@/content/metaEnrichment";
 import { localVersionLabel } from "@/content/library/catalog";
 import { categoryNames, iptvVersionLabel } from "@/content/versionLabel";
@@ -27,7 +27,7 @@ import { UNCATEGORIZED_GENRE } from "@/content/metaEnrichment";
 import { logger } from "@/infra/logger";
 import { proxiedImageUrl } from "@/providers/portalAssets";
 import { getPublicOrigin } from "@/infra/publicUrl";
-import { titleRows } from "@/content/catalog/cards";
+import { titleRows, titleWithGroup, titlePeople, variantRows } from "@/content/catalog/cards";
 
 const PAGE_SIZE = 40;
 
@@ -130,14 +130,15 @@ async function tagsByContentId(Model: typeof ContentGenre | typeof ContentCountr
  * version of the same title (its group).
  */
 async function titleDetails(id: string, origin: string) {
-  const row = await ContentMeta.findByPk(id);
-  if (!row) return null;
-  const group = row.groupKey ? await ContentMeta.findAll({ where: { groupKey: row.groupKey } }) : [row];
-  const members = [row, ...group.filter((g) => g.id !== row.id)];
+  // The title and every version of it, and their people: from the catalog snapshot when it
+  // is on, with anything written since read from the database (content/catalog/cards.ts).
+  const found = await titleWithGroup(id);
+  if (!found) return null;
+  const { row, members } = found;
   const first = (f: string) => members.map((m: any) => m[f]).find((v) => v != null && v !== "") ?? null;
   // People: this copy's own list (a locked NFO) first, then the title's shared list, then
   // any other version's (content/people.ts).
-  const people = await peopleOf([row.id, titleKeyOf(row as any), ...members.flatMap((m) => [m.id, titleKeyOf(m as any)])]);
+  const people = await titlePeople([row.id, titleKeyOf(row as any), ...members.flatMap((m: any) => [m.id, titleKeyOf(m as any)])]);
   // `id` opens the person's page (GET /api/v2/people/{id}).
   const by = (kind: string) => people.filter((p) => p.kind === kind).map((p) => ({ id: p.id, name: p.name, role: p.role, photo: p.photo ? proxiedImageUrl(p.photo, origin) : null }));
   return {
@@ -560,24 +561,16 @@ export const discoverRoutes: ServerRoute[] = [
       const { id } = request.query as { id?: string };
       if (!id) return h.response({ error: "Missing id" }).code(400);
 
-      const anchor = await ContentMeta.findByPk(id, { raw: true });
-      if (!anchor || !(anchor as any).groupKey) return { variants: [] };
-
-      const hiddenForVariants = await getHiddenContentKeys();
-      const rows = await ContentMeta.findAll({
-        where: {
-          groupKey: (anchor as any).groupKey,
-          ...(hiddenForVariants.length > 0 ? { id: { [Op.notIn]: hiddenForVariants } } : {}),
-        },
-        order: [["isRepresentative", "DESC"], ["name", "ASC"]],
-      });
+      // Every version sharing the title's groupKey, representative first, then by name
+      // (content/catalog/cards.ts: the snapshot when on, the database otherwise).
+      const rows = await variantRows(id, await getHiddenContentKeys());
+      if (rows.length === 0) return { variants: [] };
 
       const ids = rows.map((r: any) => r.id);
       const profileId = await getActiveProfileId();
       await ensureMediaInfoLoaded();
-      const [genresById, countriesById, names] = await Promise.all([
-        tagsByContentId(ContentGenre, ids),
-        tagsByContentId(ContentCountry, ids),
+      const [{ genres: genresById, countries: countriesById }, names] = await Promise.all([
+        titleRows(ids),
         categoryNames(profileId),
       ]);
       // Local-library versions say "Local" and their files' languages (the title has no tags).

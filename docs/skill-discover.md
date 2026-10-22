@@ -57,7 +57,7 @@ All under `/api/v2/discover/`, gated by the global Bearer-JWT `onPreHandler` in 
 | `GET` | `/recommendations` | Per-user "Because You Watched" — genre-overlap ranking from the user's own `UserProgress`, no cross-user data |
 | `GET` | `/variants?id=` | All rows sharing the anchor row's `groupKey`, labeled by audio/subtitle language + quality tags |
 
-Cards (browse, rows, recommendations) take their rows and genre/country tags from `content/catalog/cards.ts` `titleRows()`: the catalog snapshot when the `catalogSnapshot` setting is on (a title written since the snapshot was built, per the change log read on each call, comes from the database), else the database ([[skill-catalog-snapshot]]).
+Cards (browse, rows, recommendations), title details (versions, cast and crew) and the versions picker take their data from `content/catalog/cards.ts` (`titleRows`, `titleWithGroup`, `titlePeople`, `variantRows`): the catalog snapshot when the `catalogSnapshot` setting is on (a title written since the snapshot was built, per the change log read on each call, comes from the database), else the database ([[skill-catalog-snapshot]]).
 
 `toMediaItem()` maps a `ContentMeta` row to the shape the webui's `MediaCard`/`MainContentGrid` already expects — matching the portal catalog's own field conventions (`screenshot_uri`, comma-joined `actors`) so Discover results render through existing components with no special-casing.
 

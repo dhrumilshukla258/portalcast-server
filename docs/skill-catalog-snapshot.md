@@ -2,7 +2,7 @@
 
 The whole catalog packed in memory as typed arrays, so pages can be answered without the database (plan Phase 1). Code: `src/content/catalog/`. Setting `catalogSnapshot` (group Catalog, default off, applies on restart).
 
-**Status:** Phase 1b in progress. With the setting on: "All Movies" / "All Series" (pages, search, Discover's open-by-id) read the snapshot (`all.ts`), and so do Discover's cards on browse, rows and recommendations (`cards.ts`). Still on today's code: Discover's ranking and facets (`discoverIndex`), details, variants, person pages, people search. The setting stays off live until those move too and `catalogUnion`, the title search view, `discoverIndex` and the people search index (about 246 MB of heap on the working copy) are removed.
+**Status:** Phase 1b in progress. With the setting on: "All Movies" / "All Series" (pages, search, Discover's open-by-id) read the snapshot (`all.ts`), and so do Discover's cards on browse, rows and recommendations, title details (versions, cast and crew) and the versions picker (`cards.ts`). Still on today's code: Discover's ranking and facets (`discoverIndex`), person pages, people search. The setting stays off live until those move too and `catalogUnion`, the title search view, `discoverIndex` and the people search index (about 246 MB of heap on the working copy) are removed.
 
 ## Files
 
@@ -14,7 +14,7 @@ The whole catalog packed in memory as typed arrays, so pages can be answered wit
 | `changes.ts` | Change capture: triggers that log changed keys to `catalog_changes` |
 | `store.ts` | Load at start, rebuild after changes, status for admin; which cache version of each list the snapshot holds |
 | `views.ts` | The "All" view: browse with overrides, search, id lookups, changed lists |
-| `cards.ts` | Card rows and tags for a page of titles (Discover): the snapshot, or the database for titles changed since it was built |
+| `cards.ts` | Discover's title data: card rows and tags, a title's group, the versions list, cast and crew; anything changed since the build is read from the database |
 | `all.ts` | What the routes call for "All": the view when the setting is on, `catalogUnion` when off (the one place that chooses) |
 
 ## What is in it
@@ -24,7 +24,8 @@ One row per `content_meta` row ("copy"), person, credit and IPTV list entry, as 
 - **Text** is stored once in a pool (8 MB chunks) and referenced by a 32-bit id. The same plot on three IPTV copies, a poster path, a role name: one copy each. 2.7 million distinct texts on the working copy.
 - **Numbers**: whole-number columns are `Int32Array` (NULL = `INT_NULL`) or `Int16Array` when every value fits; others `Float64Array` (NULL = NaN). Dates are epoch milliseconds.
 - **Tags** (genre, country, theme): a value dictionary plus offsets both ways, so "tags of a copy" and "copies with a tag" are both a slice.
-- **Credits**: grouped by title key in billing order, plus a per-person list.
+- **Credits**: grouped by title key in billing order, plus a per-person list. Ties on `sortOrder` (142k on live data: directors and writers restart at 0) are ordered as the database returns them: kind name, person id, role (bytes), the unique index's order, which SQLite's sort keeps. Kinds are a dictionary.
+- **Groups**: copies sorted by groupKey (as pool id), so every version of a title is one run.
 - **Person details** (birthday, biography...) are sparse: rows only for people that have any.
 - **IPTV list entries**: each entry is its key list ("shape", four on live data) plus each value's JSON text from the pool. `listItem(k)` rebuilds the exact cached JSON; `listField(k, key)` reads one value without rebuilding the entry. Each entry's item id, with an index by (type, id).
 - **Title search**: built with `normalizeText` from `content/searchIndex.ts` (passed to the worker as source, so there is one normalizer): sorted ASCII vocabulary of words and joined word pairs, postings per term, an exact-term hash table for the typo pass, and each entry's normalized title and year.
@@ -57,6 +58,12 @@ Measured on the working copy (production build): search p95 35.6 -> 8.8 ms for m
 ## Discover cards (cards.ts)
 
 `titleRows(ids)` gives the content_meta columns and genre/country tags of a page of titles. A title whose row or tags were written after the snapshot was built, or that is not in it, is read from the database. `catalogChanges()` (store.ts) knows which: one indexed read of the change log per call, returning only rows newer than the last call, so a write made a moment ago is seen. Checked with 148 Discover answers (about 5,600 cards) identical off vs on, as stored and after renaming a title, changing a rating and adding a country following the build; median answer 15.1 -> 7.9 ms.
+
+## Details, versions, cast (cards.ts)
+
+- `titleWithGroup(id)`, `variantRows(id, hidden)` and `titlePeople(keys)` answer what `titleDetails` and `/discover/variants` read with `findByPk`, `findAll({ groupKey })` and `peopleOf`. Versions are ordered representative first, then by name in byte order (SQLite's BINARY collation), ties in stored order.
+- A group is read from the database when any title changed since the build belonged to it then or belongs to it now (the changed titles' current groupKeys are read once per change). A cast list is, when its credits changed or any person on it did.
+- Checked: all 76,471 cast lists equal to `peopleOf` in order; 2,586 details and variants answers identical off vs on, and 2,600 after moving a version to another group, reordering a cast and renaming a person following the build. Median 6.9 -> 1.95 ms, p95 11.1 -> 3.3 ms.
 
 ## Changes and rebuilds
 
