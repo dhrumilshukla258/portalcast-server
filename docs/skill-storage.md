@@ -40,6 +40,7 @@ Each table has a natural key, and the database refuses a second row with it. Wri
 
 - `content/tags.ts` replaces a title's tags as a set, each value once (TMDB and NFO lists can repeat a genre; that is how 8 repeated rows got in).
 - A name-only credit (NFO cast, no TMDB id) is the TMDB person when the full name has two or more words and exactly one TMDB person carries it; otherwise a separate name-only person. One-word and shared names are never guessed.
+- Watch progress has one writer too: `content/viewers.ts`, the in-memory viewer store ([[skill-user-system]]).
 - `test/ownership.test.ts` fails if any other module writes these tables (`npm test`; it also checks its own patterns catch the write forms used here).
 - Storage steps `unique-tags`, `unique-credits`, `merge-name-only-people` converted the live data (on the working copy: 8 repeated tag rows removed, 0 repeated credits, 40 name-only persons merged; 9 s plus the backup).
 - All of this packed in memory for reading: [[skill-catalog-snapshot]].

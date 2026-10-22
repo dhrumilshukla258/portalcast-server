@@ -1,6 +1,7 @@
 // Rule: one module owns the writes to each table (plan, "Stop duplication at the source").
-// Fails when any other file writes to the tag tables or the people tables, so a new writer
-// cannot bypass the deduplication and the unique keys those modules apply.
+// Fails when any other file writes to the tag tables, the people tables or watch progress, so
+// a new writer cannot bypass the deduplication and unique keys those modules apply, or (for
+// progress) the in-memory viewer store that must see every write.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -11,6 +12,7 @@ const SRC = path.join(__dirname, "..", "src");
 const OWNERS: Record<string, string[]> = {
   tags: ["content/tags.ts"],
   people: ["content/people.ts"],
+  progress: ["content/viewers.ts"],
 };
 // One-time storage steps and schema setup may touch any table.
 const ALWAYS_ALLOWED = ["db/storageMigrations.ts", "db/index.ts"];
@@ -29,6 +31,8 @@ const RULES = [
   { owner: "tags", pattern: sqlWrite(TAG_TABLES) },
   { owner: "tags", pattern: /\b(?:ContentGenre|ContentCountry|ContentTheme)\.(?:create|bulkCreate|destroy|update|upsert)\b/ },
   { owner: "people", pattern: sqlWrite(PEOPLE_TABLES) },
+  { owner: "progress", pattern: sqlWrite("user_progress") },
+  { owner: "progress", pattern: /\bUserProgress\.(?:create|bulkCreate|destroy|update|upsert)\b/ },
 ];
 
 function files(dir: string): string[] {
@@ -48,13 +52,16 @@ test("the write patterns catch the forms used in this code", () => {
     "UPDATE `content_genres` SET isRepresentative = 1",
     "await ContentGenre.destroy({ where: { contentId } })",
     "await ContentTheme.bulkCreate(rows)",
+    "await UserProgress.upsert({ userId })",
+    "await UserProgress.destroy({ where: { mediaId } })",
+    "DELETE FROM user_progress WHERE userId = ?",
   ]) assert.ok(caught(s), s);
-  for (const s of ["SELECT id FROM people WHERE name = ?", "ContentGenre.findAll({ where })", "CREATE INDEX idx_people_name ON people (name)"]) {
+  for (const s of ["SELECT id FROM people WHERE name = ?", "ContentGenre.findAll({ where })", "CREATE INDEX idx_people_name ON people (name)", "UserProgress.findAll()"]) {
     assert.ok(!caught(s), s);
   }
 });
 
-test("only the owning module writes the tag and people tables", () => {
+test("only the owning module writes the tag, people and progress tables", () => {
   const offenders: string[] = [];
   for (const file of files(SRC)) {
     const rel = path.relative(SRC, file).split(path.sep).join("/");

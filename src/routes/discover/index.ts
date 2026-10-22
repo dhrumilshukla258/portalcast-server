@@ -18,7 +18,7 @@ import { authCheck } from "@/auth/jwt";
 import { ContentMeta, ContentType } from "@/models/ContentMeta";
 import { ContentGenre } from "@/models/ContentGenre";
 import { ContentTheme } from "@/models/ContentTheme";
-import { UserProgress } from "@/models/UserProgress";
+import { recentProgress } from "@/content/viewers";
 import { getActiveProfileId } from "@/routes/stalkerV2/shared";
 import { getHiddenContentKeys, getHiddenContentKeySet } from "@/content/overrides";
 import { getDiscoverIndex, facetsFor, browse as browseIndex, recommend, type BrowseQuery } from "@/content/discoverIndex";
@@ -381,12 +381,8 @@ export const discoverRoutes: ServerRoute[] = [
       const typeFilter = typeFilterRaw === "movie" || typeFilterRaw === "series" ? typeFilterRaw : null;
 
       const profileId = await getActiveProfileId();
-      const allProgress = await UserProgress.findAll({
-        where: { userId: userPayload.userId, profileId },
-        order: [["updatedAt", "DESC"]],
-        limit: 40,
-        raw: true,
-      });
+      // The 40 most recent rows, from the viewer store (content/viewers.ts).
+      const allProgress = await recentProgress(userPayload.userId, profileId, 40);
 
       // A row someone opened and immediately closed (a few seconds in) is not
       // a genuine signal of taste — only count it toward recommendations once

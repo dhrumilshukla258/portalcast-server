@@ -6,7 +6,7 @@ import { setting } from "@/config/settings";
 import { enrichFromOmdb } from "@/content/omdb";
 import { syncImdbRatings } from "@/content/imdbRatings";
 import { findTvmazeShow } from "@/content/tvmaze";
-import { sealCmd, isUpstreamLink } from "@/infra/sealedCmd";
+import { deleteProgressForMedia, sealProgressLinks } from "@/content/viewers";
 import { channelOf } from "@/content/titleClean";
 import { Op, Transaction } from "sequelize";
 import { xtreamCache, catchupScan } from "@/services/xtreamCache";
@@ -19,7 +19,6 @@ import { ContentGenre } from "@/models/ContentGenre";
 import { replaceTags, removeAllTags, markTagsRepresentative, representativeTagStatements } from "@/content/tags";
 import { ContentCountry } from "@/models/ContentCountry";
 import { ContentTheme } from "@/models/ContentTheme";
-import { UserProgress } from "@/models/UserProgress";
 import { SystemConfig } from "@/models/SystemConfig";
 import { clearDiscoverCache } from "@/services/discoverCache";
 import { normalizeTitleKey, stripReleaseNoise } from "@/content/titleClean";
@@ -619,7 +618,7 @@ export async function pruneContentMeta(contentId: string, portalCategoryId?: str
   // ContentMeta was already pruned by an earlier version of this function,
   // before this cleanup existed) so it also retroactively catches those.
   try {
-    const deleted = await UserProgress.destroy({ where: { mediaId: contentId } });
+    const deleted = await deleteProgressForMedia(contentId);
     if (deleted > 0) {
       logger.info(`[MetaEnrich] Removed ${deleted} orphaned UserProgress row(s) for pruned content ${contentId}`);
     }
@@ -884,26 +883,6 @@ async function fixYearMismatches(): Promise<void> {
  * 2026-10-20: CDN links a browser had received for an episode): sealed in place, so
  * resuming still works and nothing readable is left (infra/sealedCmd.ts).
  */
-export async function sealProgressLinks(): Promise<void> {
-  const rows = await UserProgress.findAll();
-  let sealed = 0;
-  for (const row of rows) {
-    // Comes back as JSON text on this table; parsed here, written back as an object (the
-    // column stringifies it once: writing the text back would encode it twice).
-    const stored: any = row.meta;
-    let meta: any = stored;
-    if (typeof stored === "string") {
-      try { meta = JSON.parse(stored); } catch { continue; }
-    }
-    if (!meta || typeof meta !== "object" || !isUpstreamLink(meta.cmd)) continue;
-    const next = { ...meta, cmd: sealCmd(meta.cmd) };
-    row.meta = next;
-    row.changed("meta", true);
-    await row.save();
-    sealed++;
-  }
-  logger.info(`[MetaEnrich] progress records: sealed the stream link in ${sealed} of ${rows.length}`);
-}
 
 /**
  * Ratings and IMDb ids were not stored, and series had no creators (only a "Director" credit was read,

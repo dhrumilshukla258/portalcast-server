@@ -46,6 +46,7 @@ import { userManagementRoutes } from "./routes/account/userManagement";
 import { discoverRoutes, discoverDetailsRoute, personRoute, peopleSearchRoute } from "./routes/discover";
 import { buildPeopleIndex, markPeopleChanged } from "./content/peopleSearch";
 import { startCatalogSnapshot } from "./content/catalog/store";
+import { viewersReady } from "./content/viewers";
 import { onDiscoverCacheClear } from "./services/discoverCache";
 import { socketService } from "./services/SocketService";
 
@@ -479,6 +480,8 @@ const init = async () => {
 
   // In-memory Discover index (facets/browse): build now instead of on the first request.
   primeDiscoverIndex();
+  // Watch progress in memory (content/viewers.ts): loaded now, so no request waits for it.
+  viewersReady().catch((e) => logger.warn(`[viewers] load failed (retried on the next request): ${e?.message ?? e}`));
   // The "All" catalogs and their search indexes (content/catalogUnion.ts warms the index as
   // soon as a catalog exists), so the first search after a restart does not wait ~1.5 s.
   setTimeout(() => {

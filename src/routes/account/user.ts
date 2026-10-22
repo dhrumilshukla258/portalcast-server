@@ -10,7 +10,7 @@ import axios from "axios";
 import { subtitleKeysFor, forgetSubtitleKeys } from "@/content/subtitleKeys";
 import { logger } from "@/infra/logger";
 import { User } from "../../models/User";
-import { UserProgress } from "../../models/UserProgress";
+import { progressRows, saveProgress, deleteProgress } from "@/content/viewers";
 import { ConfigProfile } from "../../models/ConfigProfile";
 import { authCheck } from "../../auth/jwt";
 import { encryptSecret } from "../../auth/crypto";
@@ -137,9 +137,8 @@ export const userRoutes: ServerRoute[] = [
 
       try {
         const profileId = await getActiveProfileId();
-        const progressRecords = await UserProgress.findAll({
-          where: { userId: userPayload.userId, profileId }
-        });
+        // From the viewer store (content/viewers.ts), in the table's order.
+        const progressRecords = await progressRows(userPayload.userId, profileId);
         // Sequelize's SQLite JSON column doesn't reliably auto-parse `meta` on
         // read in this setup — it can come back as the raw stored string
         // instead of a nested object, which serializes over HTTP as a
@@ -149,7 +148,7 @@ export const userRoutes: ServerRoute[] = [
         // field reads as undefined at runtime without this — normalize here.
         const origin = getPublicOrigin(request);
         const plainRows = progressRecords.map((r) => {
-          const plain = r.toJSON() as any;
+          const plain = r as any;
           if (typeof plain.meta === "string") {
             try { plain.meta = JSON.parse(plain.meta); } catch { /* leave as-is */ }
           }
@@ -191,15 +190,15 @@ export const userRoutes: ServerRoute[] = [
         }
 
         const profileId = await getActiveProfileId();
-        await UserProgress.upsert({
-          userId: userPayload.userId,
+        await saveProgress(
+          userPayload.userId,
           profileId,
-          mediaId: String(mediaId),
-          progress: Number(progress || 0),
-          completed: !!completed,
+          String(mediaId),
+          Number(progress || 0),
+          !!completed,
           // An upstream stream link a client sends along is stored sealed, never readable.
-          meta: meta && typeof meta === "object" && "cmd" in meta ? { ...meta, cmd: sealCmd(meta.cmd) } : meta ?? {}
-        });
+          meta && typeof meta === "object" && "cmd" in meta ? { ...meta, cmd: sealCmd(meta.cmd) } : meta ?? {},
+        );
 
         return { success: true };
       } catch (error) {
@@ -220,9 +219,7 @@ export const userRoutes: ServerRoute[] = [
       try {
         const profileId = await getActiveProfileId();
         // Delete all progress for this profile
-        await UserProgress.destroy({
-          where: { userId: userPayload.userId, profileId }
-        });
+        await deleteProgress(userPayload.userId, profileId);
 
         // Clear recents
         const user = await User.findByPk(userPayload.userId);
@@ -255,13 +252,7 @@ export const userRoutes: ServerRoute[] = [
       try {
         const { mediaId } = request.params;
         const profileId = await getActiveProfileId();
-        await UserProgress.destroy({
-          where: {
-            userId: userPayload.userId,
-            profileId,
-            mediaId: String(mediaId),
-          },
-        });
+        await deleteProgress(userPayload.userId, profileId, String(mediaId));
         return { success: true };
       } catch (error) {
         logger.error({ err: error }, "Error deleting progress");

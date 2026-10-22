@@ -42,6 +42,8 @@ Tracks per-user, per-profile watch progress.
 
 Upserted on each progress update (userId + profileId + mediaId is the unique key).
 
+**Viewer store (`src/content/viewers.ts`, 2026-10-22).** Every viewer's rows are kept in memory and read from there (`GET /api/user/progress`, recommendations, Home rows next). It is the only writer of the table (`test/ownership.test.ts`): a write goes to SQLite, then the stored row is read back into memory, so memory equals the table, timestamps included; writes to one row run one at a time; bulk changes (pruned title, merged duplicates, sealing old stream links) reload the store. Loaded at start. 78 rows / 5 viewers on the live data. Checked against the table after new rows, updates, 20 concurrent saves, deletes, repoint, prune and clearing a viewer: equal at every step. `onViewerChange` tells derived data (Home rows) that a viewer's progress changed.
+
 `mediaId` shares the same `movie_{id}`/`series_{id}` shape as `ContentMeta`'s primary key. When content is pruned as no-longer-present on the portal, any `UserProgress` row pointing at it is deleted too (otherwise it'd be a permanently orphaned Continue Watching entry) — see [[skill-content-lifecycle]].
 
 ### ContentCache (`src/models/ContentCache.ts`)

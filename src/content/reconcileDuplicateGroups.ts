@@ -1,6 +1,6 @@
 import { ContentMeta } from "@/models/ContentMeta";
 import { removeAllTags, markTagsRepresentative } from "@/content/tags";
-import { UserProgress } from "@/models/UserProgress";
+import { repointProgress } from "@/content/viewers";
 import { normalizeTitleKey } from "@/content/titleClean";
 import { clearDiscoverCache } from "@/services/discoverCache";
 import { logger } from "@/infra/logger";
@@ -105,11 +105,7 @@ export async function reconcileDuplicateGroups(): Promise<void> {
         // any progress row's mediaId happens to equal the loser's id (can
         // happen for movies, where mediaId sometimes IS the catalog id),
         // repoint it to the surviving row so Continue Watching doesn't break.
-        const repointed = await UserProgress.update(
-          { mediaId: winner.id },
-          { where: { mediaId: loser.id } }
-        );
-        userProgressRepointed += repointed[0] || 0;
+        userProgressRepointed += await repointProgress(loser.id, winner.id);
       }
 
       await ContentMeta.update(
