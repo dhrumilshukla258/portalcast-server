@@ -44,7 +44,8 @@ import { adminRoutes } from "./routes/contentmanager";
 import { authRoutes } from "./routes/account/auth";
 import { userRoutes } from "./routes/account/user";
 import { userManagementRoutes } from "./routes/account/userManagement";
-import { discoverRoutes, discoverDetailsRoute, personRoute, peopleSearchRoute } from "./routes/discover";
+import { discoverRoutes, discoverDetailsRoute, personRoute, peopleSearchRoute, peopleBrowseRoute } from "./routes/discover";
+import { fillPeopleGenders } from "./content/peopleGender";
 import { buildPeopleIndex, markPeopleChanged } from "./content/peopleSearch";
 import { startCatalogSnapshot } from "./content/catalog/store";
 import { viewersReady } from "./content/viewers";
@@ -115,6 +116,7 @@ const init = async () => {
     name: "people", label: "Remove unused cast lists", dailyAtHour: 5,
     run: async () => { const r = await tidyPeople(); markPeopleChanged(); return r; },
   });
+  registerJob({ name: "people-gender", label: "Fill in people's gender from TMDB (People tab)", everyMs: 10 * 60 * 1000, run: fillPeopleGenders });
   registerJob({ name: "sports", label: "Fetch the sports schedule", everyMs: 60 * 60 * 1000, run: refreshSports });
   registerJob({
     name: "page-cache", label: "Remove expired page answers", dailyAtHour: 5,
@@ -173,6 +175,7 @@ const init = async () => {
   server.route(discoverDetailsRoute);
   server.route(personRoute);
   server.route(peopleSearchRoute);
+  server.route(peopleBrowseRoute);
   server.route(sportsRoutes);
   // Is the IPTV portal reachable (services/portalHealth.ts)? Signed-in clients only.
   server.route({ method: "GET", path: "/api/v2/health/iptv", handler: () => iptvHealth() });

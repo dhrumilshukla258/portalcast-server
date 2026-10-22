@@ -297,6 +297,9 @@ export async function initDB() {
     await ensureColumns("people", [
       ["biography", "TEXT"], ["knownFor", "VARCHAR(64)"], ["birthday", "VARCHAR(16)"], ["deathday", "VARCHAR(16)"],
       ["placeOfBirth", "VARCHAR(255)"], ["detailsCheckedAt", "DATETIME"],
+      // TMDB's gender: 1 female, 2 male, 3 non-binary, 0 TMDB has none; NULL not asked yet
+      // (content/peopleGender.ts fills it in). For the People tab's Actors / Actresses.
+      ["gender", "INTEGER"],
     ]);
     // A person's titles are found by TMDB id ("movie:<tmdbId>" keys).
     await sequelize.query("CREATE INDEX IF NOT EXISTS `idx_content_meta_type_tmdb` ON `content_meta` (`type`, `tmdbId`)");

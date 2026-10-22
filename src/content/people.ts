@@ -21,6 +21,8 @@ export interface PersonEntry {
   order: number;
   tmdbPersonId: number | null;
   photo: string | null;
+  /** TMDB's gender (0 not set, 1 female, 2 male, 3 non-binary); absent for NFO names. */
+  gender?: number | null;
 }
 
 const TMDB_W185 = "https://image.tmdb.org/t/p/w185/";
@@ -28,6 +30,9 @@ const db = () => ContentMeta.sequelize!;
 
 const packPhoto = (p: string | null) => (p && p.startsWith(TMDB_W185) ? p.slice(TMDB_W185.length - 1) : p);
 export const unpackPhoto = (p: string | null) => (p && p.startsWith("/") ? `${TMDB_W185}${p.slice(1)}` : p);
+
+// A known gender (1-3) wins; "TMDB has none" (0) only replaces "not asked yet" (NULL).
+const GENDER_MERGE = "CASE WHEN excluded.gender > 0 THEN excluded.gender ELSE COALESCE(people.gender, excluded.gender) END";
 
 /** The shared key of a title row: "<type>:<tmdbId>", or its content id when TMDB has none. */
 export function titleKeyOf(row: { id: string; type: string; tmdbId?: number | null }): string {
@@ -82,9 +87,10 @@ export async function storePeople(titleKey: string, people: PersonEntry[], trans
   for (let i = 0; i < withId.length; i += 200) {
     const slice = withId.slice(i, i + 200);
     await q(
-      `INSERT INTO people (tmdbPersonId, name, photo) VALUES ${slice.map(() => "(?, ?, ?)").join(", ")}
-       ON CONFLICT(tmdbPersonId) DO UPDATE SET name = excluded.name, photo = COALESCE(excluded.photo, people.photo)`,
-      slice.flatMap((p) => [p.tmdbPersonId, p.name, packPhoto(p.photo)]),
+      `INSERT INTO people (tmdbPersonId, name, photo, gender) VALUES ${slice.map(() => "(?, ?, ?, ?)").join(", ")}
+       ON CONFLICT(tmdbPersonId) DO UPDATE SET name = excluded.name, photo = COALESCE(excluded.photo, people.photo),
+         gender = ${GENDER_MERGE}`,
+      slice.flatMap((p) => [p.tmdbPersonId, p.name, packPhoto(p.photo), p.gender ?? null]),
     );
     const rows = (await q(
       `SELECT id, tmdbPersonId FROM people WHERE tmdbPersonId IN (${slice.map(() => "?").join(", ")})`,
@@ -175,11 +181,12 @@ export async function personDetails(id: number, fetchPerson: (tmdbId: number) =>
       row.biography = t.biography; row.knownFor = t.knownFor; row.birthday = t.birthday;
       row.deathday = t.deathday; row.placeOfBirth = t.placeOfBirth;
       if (t.photo) row.photo = packPhoto(t.photo);
+      if (t.gender !== null && t.gender !== undefined && (t.gender > 0 || row.gender === null)) row.gender = t.gender;
     }
     // Recorded only when TMDB answered: a network failure is tried again on the next open.
     if (t) await db().query(
-      "UPDATE people SET biography = ?, knownFor = ?, birthday = ?, deathday = ?, placeOfBirth = ?, photo = ?, detailsCheckedAt = ? WHERE id = ?",
-      { replacements: [row.biography ?? null, row.knownFor ?? null, row.birthday ?? null, row.deathday ?? null, row.placeOfBirth ?? null, row.photo ?? null, new Date().toISOString(), id] },
+      "UPDATE people SET biography = ?, knownFor = ?, birthday = ?, deathday = ?, placeOfBirth = ?, photo = ?, gender = ?, detailsCheckedAt = ? WHERE id = ?",
+      { replacements: [row.biography ?? null, row.knownFor ?? null, row.birthday ?? null, row.deathday ?? null, row.placeOfBirth ?? null, row.photo ?? null, row.gender ?? null, new Date().toISOString(), id] },
     );
   }
   return {
@@ -266,4 +273,80 @@ export async function tidyPeople(): Promise<string> {
   await db().query("DELETE FROM people WHERE id NOT IN (SELECT personId FROM title_people)");
   const [{ b }] = (await db().query("SELECT changes() AS b", { type: QueryTypes.SELECT })) as any[];
   return `${a} title lists and ${b} persons no longer used removed`;
+}
+
+// ---- Gender fill (content/peopleGender.ts) -------------------------------------------------
+
+/**
+ * Titles (TMDB keys "movie:<id>" / "series:<id>") with people whose gender was never asked,
+ * the ones with most such people first.
+ */
+export async function titlesNeedingGender(limit: number): Promise<{ titleKey: string; people: number }[]> {
+  const rows = (await db().query(
+    `SELECT tp.titleKey AS titleKey, COUNT(*) AS people FROM title_people tp JOIN people p ON p.id = tp.personId
+     WHERE p.gender IS NULL AND p.tmdbPersonId IS NOT NULL AND (tp.titleKey LIKE 'movie:%' OR tp.titleKey LIKE 'series:%')
+     GROUP BY tp.titleKey ORDER BY people DESC LIMIT ?`,
+    { replacements: [limit], type: QueryTypes.SELECT },
+  )) as any[];
+  return rows.map((r) => ({ titleKey: String(r.titleKey), people: Number(r.people) }));
+}
+
+/** People whose gender was never asked, and those that have one. */
+export async function genderCounts(): Promise<{ unknown: number; known: number }> {
+  const [r] = (await db().query(
+    "SELECT SUM(gender IS NULL AND tmdbPersonId IS NOT NULL) AS unknown, SUM(gender > 0) AS known FROM people",
+    { type: QueryTypes.SELECT },
+  )) as any[];
+  return { unknown: Number(r?.unknown) || 0, known: Number(r?.known) || 0 };
+}
+
+/**
+ * Stores what TMDB said about a title's people (by TMDB person id), then marks the title's
+ * people it did not mention as "TMDB has none" (0), so the title is not asked again. A known
+ * gender is never replaced by 0. Returns how many people got a known gender.
+ */
+export async function storeTitleGenders(titleKey: string, genders: Map<number, number>): Promise<number> {
+  let known = 0;
+  await db().transaction(async (transaction) => {
+    const entries = [...genders.entries()];
+    for (let i = 0; i < entries.length; i += 200) {
+      const slice = entries.slice(i, i + 200);
+      await db().query(
+        `UPDATE people SET gender = CASE tmdbPersonId ${slice.map(() => "WHEN ? THEN ?").join(" ")} END
+         WHERE tmdbPersonId IN (${slice.map(() => "?").join(", ")})
+           AND (gender IS NULL OR (gender = 0 AND CASE tmdbPersonId ${slice.map(() => "WHEN ? THEN ?").join(" ")} END > 0))`,
+        {
+          replacements: [
+            ...slice.flatMap(([id, g]) => [id, g]),
+            ...slice.map(([id]) => id),
+            ...slice.flatMap(([id, g]) => [id, g]),
+          ],
+          transaction,
+        },
+      );
+      known += slice.filter(([, g]) => g > 0).length;
+    }
+    await db().query(
+      "UPDATE people SET gender = 0 WHERE gender IS NULL AND id IN (SELECT personId FROM title_people WHERE titleKey = ?)",
+      { replacements: [titleKey], transaction },
+    );
+  });
+  return known;
+}
+
+/** Every known gender (1-3) by person row id, for the People tab (content/peopleSearch.ts). */
+export async function readGenders(): Promise<{ id: number; gender: number }[]> {
+  const rows = (await db().query("SELECT id, gender FROM people WHERE gender > 0", { type: QueryTypes.SELECT })) as any[];
+  return rows.map((r) => ({ id: Number(r.id), gender: Number(r.gender) }));
+}
+
+/** Titles each person directed, created and wrote, by person row id (crew rows only: small). */
+export async function readRoleCounts(): Promise<{ id: number; directed: number; created: number; wrote: number }[]> {
+  const rows = (await db().query(
+    `SELECT personId AS id, COUNT(DISTINCT CASE WHEN kind = 'director' THEN titleKey END) AS d,
+       COUNT(DISTINCT CASE WHEN kind = 'creator' THEN titleKey END) AS c, COUNT(DISTINCT CASE WHEN kind = 'writer' THEN titleKey END) AS w
+     FROM title_people WHERE kind != 'cast' GROUP BY personId`,
+    { type: QueryTypes.SELECT },
+  )) as any[];
+  return rows.map((r) => ({ id: Number(r.id), directed: Number(r.d), created: Number(r.c), wrote: Number(r.w) }));
 }

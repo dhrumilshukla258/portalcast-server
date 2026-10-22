@@ -40,13 +40,18 @@ import { Worker } from "worker_threads";
 import { databasePath } from "@/infra/paths";
 import { logger } from "@/infra/logger";
 import { editsOne, normalizeText } from "@/content/searchIndex";
-import { unpackPhoto } from "@/content/people";
+import { unpackPhoto, readGenders, readRoleCounts } from "@/content/people";
 import { setting } from "@/config/settings";
 import { catalogSnapshot, catalogReady } from "@/content/catalog/store";
 import type { CatalogSnapshot } from "@/content/catalog/snapshot";
 
 const KIND_CAST = 1, KIND_DIRECTOR = 2, KIND_CREATOR = 4, KIND_WRITER = 8;
 const MIN_FUZZY_LEN = 4;
+/** The People tab lists people with at least this many major credits (and a photo). */
+const MIN_BROWSE_TITLES = 3;
+
+export type PeopleRole = "all" | "actor" | "actress" | "director" | "creator" | "writer";
+export const PEOPLE_ROLES: PeopleRole[] = ["all", "actor", "actress", "director", "creator", "writer"];
 /** One- and two-letter prefixes only look at this many of the most popular people. */
 const SHORT_PREFIX_CAP = 20_000;
 
@@ -85,6 +90,9 @@ interface Packed {
   vocab: Uint8Array; vocabOff: Int32Array;
   postings: Int32Array; postOff: Int32Array;
   who(d: number): { id: number; name: string; photo: string | null };
+  /** Fast paths for browsing (the worker's layout has them; the snapshot's goes through who). */
+  idAt?(d: number): number;
+  hasPhoto?(d: number): boolean;
 }
 
 /** What the worker sends back: every field is a typed array over a transferable buffer. */
@@ -97,6 +105,8 @@ interface WorkerPacked extends Omit<Packed, "who"> {
 function fromWorker(p: WorkerPacked): Packed {
   return {
     ...p,
+    idAt: (d) => p.ids[d],
+    hasPhoto: (d) => p.photoOff[d + 1] > p.photoOff[d],
     who: (d) => ({
       id: p.ids[d],
       name: utf8.decode(p.names.subarray(p.nameOff[d], p.nameOff[d + 1])),
@@ -201,6 +211,59 @@ class PeopleIndex {
       titles: weight[d],
     };
   }
+
+  // Browse (People tab): per person id and photo flag, made once per index on first use, and
+  // the matching people per role (popularity order), kept until the index or genders change.
+  private ids: Int32Array | null = null;
+  private photo: Uint8Array | null = null;
+  private lists = new Map<string, Int32Array>();
+  private listsGenders = -1;
+
+  private browseColumns(): void {
+    if (this.ids) return;
+    const n = this.p.count;
+    const ids = new Int32Array(n), photo = new Uint8Array(n);
+    for (let d = 0; d < n; d++) {
+      if (this.p.idAt && this.p.hasPhoto) { ids[d] = this.p.idAt(d); photo[d] = this.p.hasPhoto(d) ? 1 : 0; }
+      else { const w = this.p.who(d); ids[d] = w.id; photo[d] = w.photo ? 1 : 0; }
+    }
+    this.ids = ids; this.photo = photo;
+  }
+
+  /**
+   * People with a photo and at least MIN_BROWSE_TITLES major credits for `role`. All, Actors
+   * and Actresses: most popular first; Directors, Creators and Writers: most titles in that
+   * role first (an actor who directed once is not a top director).
+   */
+  browseList(role: PeopleRole, x: PeopleExtras): Int32Array {
+    if (this.listsGenders !== x.version) { this.lists.clear(); this.listsGenders = x.version; }
+    const have = this.lists.get(role);
+    if (have) return have;
+    this.browseColumns();
+    const { kinds, weight, count } = this.p;
+    const ids = this.ids!, photo = this.photo!;
+    const roleCount = role === "director" ? x.directed : role === "creator" ? x.created : role === "writer" ? x.wrote : null;
+    const at = (a: Uint8Array | Uint16Array, id: number) => (id < a.length ? a[id] : 0);
+    const out = new Int32Array(count);
+    let n = 0;
+    for (let d = 0; d < count; d++) {
+      if (!photo[d] || weight[d] < MIN_BROWSE_TITLES) continue;
+      const id = ids[d];
+      const ok =
+        role === "all" ? true
+        : role === "actor" ? (kinds[d] & KIND_CAST) !== 0 && at(x.genders, id) === 2
+        : role === "actress" ? (kinds[d] & KIND_CAST) !== 0 && at(x.genders, id) === 1
+        : at(roleCount!, id) > 0;
+      if (ok) out[n++] = d;
+    }
+    const list = out.slice(0, n);
+    // d is popularity order already; a role list sorts by that role's titles (stable on d).
+    if (roleCount) list.sort((a, b) => at(roleCount, ids[b]) - at(roleCount, ids[a]) || a - b);
+    this.lists.set(role, list);
+    return list;
+  }
+
+  hitAt(d: number): PersonHit { return this.hit(d); }
 
   /**
    * Ranked people. A word that only matches one edit away is tried only when nothing starts
@@ -468,6 +531,9 @@ export async function buildPeopleIndex(): Promise<void> {
     const { packed, readMs, terms, heapMb } = await buildInWorker();
     index = new PeopleIndex(fromWorker(packed));
     lastBuild = Date.now();
+    // The People tab's genders and role counts, read now rather than on its first page.
+    extrasOf = index;
+    void loadGenders();
     const mb = Object.values(packed).reduce((s: number, v: any) => s + (v?.byteLength ?? 0), 0) / 1e6;
     logger.info(`[people] search index: ${packed.count} people, ${terms} words, ${mb.toFixed(1)} MB (read ${readMs} ms, ready in ${lastBuild - t0} ms, worker heap ${heapMb} MB, off the main thread)`);
   } catch (e: any) {
@@ -506,3 +572,63 @@ export function searchPeople(query: string, limit = 30): PeopleResult {
 }
 
 export function peopleIndexReady(): boolean { return activeIndex() !== null; }
+
+// ── People tab ────────────────────────────────────────────────────────────────
+// Per person id, one or two bytes each (~2.5 MB in all): gender (people.gender: 1 female,
+// 2 male) and how many titles they directed, created and wrote. Read from the tables on first
+// use, after each gender fill run (content/peopleGender.ts) and when the index changes.
+interface PeopleExtras {
+  genders: Uint8Array;
+  directed: Uint16Array;
+  created: Uint16Array;
+  wrote: Uint16Array;
+  version: number;
+}
+let extras: PeopleExtras = { genders: new Uint8Array(0), directed: new Uint16Array(0), created: new Uint16Array(0), wrote: new Uint16Array(0), version: 0 };
+let extrasOf: PeopleIndex | null = null;
+let extrasLoading: Promise<void> | null = null;
+
+/** Re-reads genders and role counts (exported as loadGenders for the gender fill). */
+export function loadGenders(): Promise<void> {
+  extrasLoading ??= (async () => {
+    try {
+      const [g, roles] = await Promise.all([readGenders(), readRoleCounts()]);
+      let max = 0;
+      for (const r of g) if (r.id > max) max = r.id;
+      for (const r of roles) if (r.id > max) max = r.id;
+      const genders = new Uint8Array(max + 1), directed = new Uint16Array(max + 1), created = new Uint16Array(max + 1), wrote = new Uint16Array(max + 1);
+      for (const r of g) genders[r.id] = r.gender;
+      const cap = (n: number) => Math.min(n, 65535);
+      for (const r of roles) { directed[r.id] = cap(r.directed); created[r.id] = cap(r.created); wrote[r.id] = cap(r.wrote); }
+      extras = { genders, directed, created, wrote, version: extras.version + 1 };
+    } catch (e: any) {
+      logger.warn(`[people] reading genders and roles failed: ${e?.message ?? e}`);
+    } finally {
+      extrasLoading = null;
+    }
+  })();
+  return extrasLoading;
+}
+
+export interface PeopleBrowse {
+  people: PersonHit[];
+  total: number;
+  /** People per role, for the filter chips. */
+  counts: Record<PeopleRole, number>;
+  /** False until some genders are known (Actors / Actresses are then empty). */
+  genderReady: boolean;
+}
+
+/** A page of the People tab for `role`, most popular first; null until the index is built. */
+export async function browsePeople(role: PeopleRole, offset: number, limit: number): Promise<PeopleBrowse | null> {
+  const idx = activeIndex();
+  if (!idx) return null;
+  // A new index can hold new people: their roles and genders are read again.
+  if (extras.version === 0 || extrasOf !== idx) { extrasOf = idx; await loadGenders(); }
+  const list = idx.browseList(role, extras);
+  const counts = {} as Record<PeopleRole, number>;
+  for (const r of PEOPLE_ROLES) counts[r] = idx.browseList(r, extras).length;
+  const people: PersonHit[] = [];
+  for (let i = offset; i < Math.min(list.length, offset + limit); i++) people.push(idx.hitAt(list[i]));
+  return { people, total: list.length, counts, genderReady: counts.actor + counts.actress > 0 };
+}

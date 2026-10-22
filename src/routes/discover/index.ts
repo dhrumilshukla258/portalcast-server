@@ -1,6 +1,6 @@
 import { fetchPerson } from "@/content/tmdb";
 import { personDetails } from "@/content/people";
-import { searchPeople, peopleIndexReady } from "@/content/peopleSearch";
+import { searchPeople, peopleIndexReady, browsePeople, PEOPLE_ROLES, type PeopleRole } from "@/content/peopleSearch";
 import { getCached, setCached } from "@/services/discoverCache";
 import { titleKeyOf } from "@/content/people";
 import { LOCAL_CATEGORY } from "@/content/metaEnrichment";
@@ -227,6 +227,33 @@ const FEATURED_TITLES = 24;
  * (content/peopleSearch.ts), plus, when the query clearly names one person, their titles
  * so the client shows "Movies & series with X" without a second request.
  */
+/**
+ * The People tab: people with a photo and at least 3 major credits, most popular first,
+ * filtered by role (Actors / Actresses need the gender fill, content/peopleGender.ts).
+ */
+export const peopleBrowseRoute = {
+  method: "GET" as const,
+  path: "/api/v2/people",
+  handler: async (request: any, h: any) => {
+    const role = String(request.query.role ?? "all") as PeopleRole;
+    if (!PEOPLE_ROLES.includes(role)) return h.response({ error: "Unknown role" }).code(400);
+    const page = Math.max(1, Math.min(10_000, Math.floor(Number(request.query.page) || 1)));
+    const pageSize = 60;
+    const result = await browsePeople(role, (page - 1) * pageSize, pageSize);
+    if (!result) return { data: [], total: 0, page, pageSize, counts: null, genderReady: false, ready: false };
+    const origin = getPublicOrigin(request);
+    return {
+      data: result.people.map((p) => ({ ...p, photo: p.photo ? proxiedImageUrl(p.photo, origin) : null })),
+      total: result.total,
+      page,
+      pageSize,
+      counts: result.counts,
+      genderReady: result.genderReady,
+      ready: true,
+    };
+  },
+};
+
 export const peopleSearchRoute = {
   method: "GET" as const,
   path: "/api/v2/search/people",

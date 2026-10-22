@@ -70,6 +70,8 @@ export interface TitlePerson {
   order: number;
   tmdbPersonId: number | null;
   photo: string | null;
+  /** TMDB's gender: 0 not set, 1 female, 2 male, 3 non-binary. */
+  gender: number | null;
 }
 
 export interface TitleDetails {
@@ -121,16 +123,23 @@ function logoOf(detail: any): string | null {
   return pick?.file_path ? `${IMG_BASE}/original${pick.file_path}` : null;
 }
 
+/** TMDB's gender (0 not set, 1 female, 2 male, 3 non-binary); null when missing or odd. */
+export function genderOf(v: unknown): number | null {
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 0 && n <= 3 ? n : null;
+}
+
 const WRITER_JOBS = new Set(["Screenplay", "Writer", "Story", "Novel", "Author", "Teleplay", "Characters"]);
 
 function peopleOf(detail: any, kind: "movie" | "tv"): TitlePerson[] {
   const photo = (p: any) => (p?.profile_path ? `${IMG_BASE}/w185${p.profile_path}` : null);
+  const gender = (p: any) => genderOf(p?.gender);
   const out: TitlePerson[] = [];
   const credits = kind === "tv" ? detail?.aggregate_credits ?? detail?.credits : detail?.credits;
   (credits?.cast || []).slice(0, 20).forEach((c: any, i: number) => {
     if (!c?.name) return;
     const role = c.character ?? c.roles?.[0]?.character ?? null;
-    out.push({ kind: "cast", name: c.name, role: role || null, order: c.order ?? i, tmdbPersonId: c.id ?? null, photo: photo(c) });
+    out.push({ kind: "cast", name: c.name, role: role || null, order: c.order ?? i, tmdbPersonId: c.id ?? null, photo: photo(c), gender: gender(c) });
   });
   const crew: any[] = detail?.credits?.crew || [];
   const seen = new Set<string>();
@@ -139,10 +148,10 @@ function peopleOf(detail: any, kind: "movie" | "tv"): TitlePerson[] {
     const kindOf = c.job === "Director" ? "director" : WRITER_JOBS.has(c.job) ? "writer" : null;
     if (!kindOf || seen.has(`${kindOf}:${c.name}`)) return;
     seen.add(`${kindOf}:${c.name}`);
-    out.push({ kind: kindOf, name: c.name, role: kindOf === "writer" ? c.job : null, order: i, tmdbPersonId: c.id ?? null, photo: photo(c) });
+    out.push({ kind: kindOf, name: c.name, role: kindOf === "writer" ? c.job : null, order: i, tmdbPersonId: c.id ?? null, photo: photo(c), gender: gender(c) });
   });
   (detail?.created_by || []).forEach((c: any, i: number) => {
-    if (c?.name) out.push({ kind: "creator", name: c.name, role: null, order: i, tmdbPersonId: c.id ?? null, photo: photo(c) });
+    if (c?.name) out.push({ kind: "creator", name: c.name, role: null, order: i, tmdbPersonId: c.id ?? null, photo: photo(c), gender: gender(c) });
   });
   return out;
 }
@@ -407,6 +416,7 @@ export interface TmdbPerson {
   placeOfBirth: string | null;
   /** w185 profile photo. */
   photo: string | null;
+  gender: number | null;
 }
 
 export async function fetchPerson(tmdbPersonId: number): Promise<TmdbPerson | null> {
@@ -420,7 +430,31 @@ export async function fetchPerson(tmdbPersonId: number): Promise<TmdbPerson | nu
     deathday: data.deathday || null,
     placeOfBirth: data.place_of_birth || null,
     photo: data.profile_path ? `${IMG_BASE}/w185${data.profile_path}` : null,
+    gender: genderOf(data.gender),
   };
+}
+
+/**
+ * Gender of everyone in a title's credits, by TMDB person id (content/peopleGender.ts):
+ * `/movie/{id}/credits`, or for a series `/tv/{id}/aggregate_credits` (every season's cast
+ * and crew) plus its creators. Null when TMDB did not answer.
+ */
+export async function fetchCreditGenders(kind: "movie" | "tv", tmdbId: number): Promise<Map<number, number> | null> {
+  const data = await tmdbGet(kind === "movie" ? `/movie/${tmdbId}/credits` : `/tv/${tmdbId}/aggregate_credits`);
+  if (!data || (!Array.isArray(data.cast) && !Array.isArray(data.crew))) return null;
+  const out = new Map<number, number>();
+  for (const p of [...(data.cast || []), ...(data.crew || [])]) {
+    const g = genderOf(p?.gender);
+    if (p?.id && g !== null && !(out.get(p.id)! > 0)) out.set(Number(p.id), g);
+  }
+  if (kind === "tv") {
+    const show = await tmdbGet(`/tv/${tmdbId}?language=en-US`);
+    for (const c of show?.created_by || []) {
+      const g = genderOf(c?.gender);
+      if (c?.id && g !== null && !(out.get(c.id)! > 0)) out.set(Number(c.id), g);
+    }
+  }
+  return out;
 }
 
 // ---- networks a show airs on (for channel logos) ---------------------------------------
