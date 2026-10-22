@@ -72,6 +72,8 @@ Building the image yourself instead (for example to run your own fork): point th
 
 Then open `http://<server>:3000`, sign in as admin, and add your provider under **Admin › Profiles** (Stalker portal or Xtream Codes). Profiles switch without a restart.
 
+The first fill of the catalog and TV guide is deliberately slow, so the provider is never flooded: one request at a time with a pause between, and a longer pause whenever the provider answers "too many requests". On a big provider it takes a few hours (progress is in the server log); playback works meanwhile. The pace is **Admin › Settings › Provider tuning › Pause between background portal requests**.
+
 ## Configuration
 
 Almost everything is set in **Admin › Settings**: API keys (TMDB, OMDb, OpenSubtitles, SubDL), email, sign-in, security limits, network and backups. A value saved there wins over the environment variable of the same name, which still works as the fallback. Secrets are stored encrypted and never shown in full.

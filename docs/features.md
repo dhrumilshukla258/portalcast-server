@@ -107,7 +107,12 @@ A separate, stricter limiter in the same `onRequest` hook throttles credential-g
 | `CB_FAILURE_WINDOW_MS` | `60000` | Window in which failures are counted (ms) |
 | `CB_COOLDOWN_MS` | `30000` | Time circuit stays open before attempting half-open probe (ms) |
 
-Both `XtreamClient` and `StalkerAPI` use a circuit breaker. Auth errors (401/403) do not count as failures — only network/timeout errors do.
+Both `XtreamClient` and `StalkerAPI` use a circuit breaker. Auth errors (401/403) and 429 (too many requests) do not count as failures — only network/timeout errors do.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORTAL_BACKGROUND_GAP_MS` | `1000` | Pause between background portal requests (guide download, catalog warm, catch-up), sent one at a time. A 429 pauses them (Retry-After, else 1 min doubling to 30 min) and widens the pause until the portal answers again. Play links never wait |
+| `EPG_FETCH_BATCH_DELAY_MS` | `500` | Extra pause after every 5 guide channels |
 
 ---
 
