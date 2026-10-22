@@ -11,6 +11,7 @@ import { subtitleKeysFor, forgetSubtitleKeys } from "@/content/subtitleKeys";
 import { logger } from "@/infra/logger";
 import { User } from "../../models/User";
 import { progressRows, saveProgress, deleteProgress } from "@/content/viewers";
+import { titleRows } from "@/content/catalog/cards";
 import { ConfigProfile } from "../../models/ConfigProfile";
 import { authCheck } from "../../auth/jwt";
 import { encryptSecret } from "../../auth/crypto";
@@ -165,7 +166,19 @@ export const userRoutes: ServerRoute[] = [
           return plain;
         });
         // Every version of a title resumes at the newest position (content/progressMirror.ts).
-        return await withProgressMirrors(plainRows);
+        const rows = await withProgressMirrors(plainRows);
+        // The title's wide art for Continue Watching cards (design Phase 6): backdrop_path, read
+        // from the catalog when answering, never stored with the progress.
+        const ids = [...new Set(rows.map((r: any) => (r.meta && typeof r.meta === "object" ? r.meta.catalogId : null)).filter((x: unknown): x is string => typeof x === "string" && /^(movie|series)_/.test(x)))];
+        if (ids.length) {
+          const { rows: titles } = await titleRows(ids);
+          for (const r of rows as any[]) {
+            const t: any = r.meta && typeof r.meta === "object" ? titles.get(r.meta.catalogId) : null;
+            const art = t ? t.backdropHd || t.backdrop : null;
+            if (art) r.backdrop_path = proxiedImageUrl(art, origin);
+          }
+        }
+        return rows;
       } catch (error) {
         logger.error({ err: error }, "Error fetching user progress");
         return h.response({ error: "Internal Server Error" }).code(500);
