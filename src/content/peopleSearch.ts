@@ -265,6 +265,19 @@ class PeopleIndex {
 
   hitAt(d: number): PersonHit { return this.hit(d); }
 
+  // The viewer's order per (boost map, role): made once, then every page is a slice. A
+  // WeakMap on the boost map, which the route keeps per viewer and replaces when their
+  // progress changes, so nothing is kept for viewers who are gone.
+  private boostedLists = new WeakMap<Map<number, number>, Map<string, Int32Array>>();
+  boostedCached(role: PeopleRole, list: Int32Array, boost: Map<number, number>, version: number): Int32Array {
+    let byRole = this.boostedLists.get(boost);
+    if (!byRole) this.boostedLists.set(boost, (byRole = new Map()));
+    const key = `${role}:${version}`;
+    let order = byRole.get(key);
+    if (!order) byRole.set(key, (order = this.boosted(list, boost)));
+    return order;
+  }
+
   /** `list` with the people in `boost` first (more shared titles first, then popularity). */
   boosted(list: Int32Array, boost: Map<number, number>): Int32Array {
     this.browseColumns();
@@ -644,7 +657,7 @@ export async function browsePeople(role: PeopleRole, offset: number, limit: numb
   const list = idx.browseList(role, extras);
   const counts = {} as Record<PeopleRole, number>;
   for (const r of PEOPLE_ROLES) counts[r] = idx.browseList(r, extras).length;
-  const order = boost && boost.size ? idx.boosted(list, boost) : list;
+  const order = boost && boost.size ? idx.boostedCached(role, list, boost, extras.version) : list;
   const people: PersonHit[] = [];
   for (let i = offset; i < Math.min(order.length, offset + limit); i++) people.push(idx.hitAt(order[i]));
   return { people, total: list.length, counts, genderReady: counts.actor + counts.actress > 0 };

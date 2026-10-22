@@ -16,7 +16,7 @@ person's page (their playable titles).
 - Per viewer (owner: "ranking based on what the profile watched"): the people of the viewer's
   last 200 watched titles (directors, creators, first 10 billed) come first, most shared
   titles first, then everyone else as above (`peopleOfTitles`, ~20 ms; kept 10 minutes per
-  viewer and profile, forgotten when their progress changes). On the owner's data: 51 titles,
+  viewer and profile, forgotten when their progress changes). The viewer's reordered list is made once per role and kept with that map, so later pages are slices: measured on the owner's data copy (laptop) 11.9 ms for the lookup, 9 ms for the first page, 0.2-0.26 ms for the next ten pages, 0.28 ms without a viewer order. On the owner's data: 51 titles,
   100 people first (Rasika Dugal, Ravi Kishan, Pankaj Tripathi... instead of Brahmanandam).
 - Answered from memory (`content/peopleSearch.ts`): the people-search index plus, per
   person id, gender (1 byte) and directed / created / wrote counts (2 bytes each), ~2.5 MB.
