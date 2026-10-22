@@ -1,0 +1,44 @@
+# PortalCast Server with Docker Compose.
+#
+#   cp docker-compose.example.yml docker-compose.yml   # then edit the lines marked EDIT
+#   docker compose up -d
+#
+# Update to the newest version:
+#   docker compose pull && docker compose up -d
+#
+# The image is built from this repository's main branch by GitHub Actions
+# (.github/workflows/docker.yml) for Linux x64 and ARM64. Pin a release instead of
+# :latest with e.g. ghcr.io/dhrumilshukla258/portalcast-server:1.1.0
+#
+# Never commit your real docker-compose.yml: it holds your keys (.gitignore keeps it out).
+
+services:
+  portalcast-server:
+    image: ghcr.io/dhrumilshukla258/portalcast-server:latest
+    container_name: portalcast-server
+    restart: unless-stopped
+    ports:
+      - "3000:3000"                       # EDIT the left side to change the port on your host
+    # About 1 GB is enough. With the in-memory catalog (Admin > Settings > Catalog) on a large
+    # catalog (100k+ titles), give it 1.5 GB: mem_limit 1536m and max-old-space-size 1024.
+    mem_limit: 1024m
+    environment:
+      - NODE_ENV=production
+      - NODE_OPTIONS=--max-old-space-size=768
+      - TZ=Europe/London                  # EDIT your time zone
+      - SQLITE_DB_PATH=/app/data
+      # The address people use to reach the server (behind a reverse proxy: its HTTPS URL).
+      # - PUBLIC_BASE_URL=https://portalcast.example.com
+      # Behind a reverse proxy on the same machine or LAN: real client addresses for bans.
+      - TRUSTED_PROXIES=private
+      # Optional: without them the first visit to the web page creates the admin account.
+      # - ADMIN_EMAIL=you@example.com
+      # - ADMIN_PASSWORD=change-me
+      # Optional: API keys can also be set in Admin > Settings (stored encrypted there).
+      # - TMDB_API_READ_TOKEN=your_tmdb_api_read_access_token
+      # - OMDB_API_KEY=your_omdb_api_key
+    volumes:
+      - ./portalcast-data:/app/data       # EDIT database, keys, uploads, backups: keep it safe
+      # Optional: your own movie and series files ("My library"), read-only.
+      # - /path/to/Movies:/media/Movies:ro
+      # - /path/to/Series:/media/Series:ro

@@ -33,6 +33,10 @@ token.json
 # Local deployment data (contains credentials and user data)
 portalcast-server.env
 portalcast-server.yml
+# Your own compose file holds your keys: never commit it (docker-compose.example.yml is the template)
+docker-compose.yml
+docker-compose.override.yml
+.env
 compose.override.yml
 database.sqlite
 database.db
