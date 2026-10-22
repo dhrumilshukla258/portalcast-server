@@ -16,7 +16,7 @@ How title data is stored after the storage migration (`src/db/storageMigrations.
 
 - `ep_info_*` (one row per episode) became `episode_index`.
 - `vod_cmd_*`, `ep_cmd_*`: written but never read since the Xtream emulation was removed.
-- `vod_info_*`: its two uses (stream label, broken-stream check) read the in-memory catalog (`catalogUnion.catalogItem`).
+- `vod_info_*`: its two uses (stream label, broken-stream check) read the in-memory catalog (`catalog/all.ts` `allItem`: the snapshot view, or `catalogUnion` with the snapshot off).
 - `tmdb_web_*`: catalog pages read artwork and trailers from `content_meta` instead of a separate TMDB search per item.
 - Full raw TMDB answers (`tmdb_movie_*`, `tmdb_tv_*`) of enriched titles; "not found" answers stay, so failed searches are not repeated.
 - Expired `content_cache` rows (pruned nightly now), and the unused tables `content_meta_backup`, `strm_movies`, `strm_series`.

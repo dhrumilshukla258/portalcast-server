@@ -2,9 +2,15 @@
 //
 // SQLite triggers on every catalog table append the changed key to `catalog_changes` in the
 // same transaction as the write, so no writer has to remember to report a change (raw SQL,
-// migrations and the content manager included). `INSERT OR REPLACE` on UNIQUE (tbl, key) keeps
-// one row per key with its latest sequence number, so the log is bounded by the number of
-// keys, not the number of writes. The highest sequence number is the catalog version.
+// migrations and the content manager included). One row per key (UNIQUE (tbl, key)) with its
+// latest sequence number, so the log is bounded by the number of keys, not the number of
+// writes. The highest sequence number is the catalog version.
+//
+// A trigger deletes the key's row and inserts a new one; it never relies on a conflict clause.
+// SQLite applies the outer statement's conflict handling inside its triggers: under an upsert
+// (`ON CONFLICT DO UPDATE`, what Sequelize upsert and xtreamCache.set send) an `INSERT OR
+// REPLACE` in the trigger aborted the write itself, and under `INSERT OR IGNORE` it would have
+// kept the old sequence number and lost the change (test/catalog-changes.test.ts).
 //
 // Installed only while the snapshot is on (setting `catalogSnapshot`); switched off, the
 // triggers and the log are dropped, so no write pays for them.
@@ -46,10 +52,11 @@ const EVENTS = [
 
 const triggerName = (s: Source, ev: string) => `trg_catalog_${s.table}_${ev.toLowerCase()}`;
 
-/** Creates (on) or drops (off) the log table and its triggers. Idempotent. */
+/** Creates (on) or drops (off) the log table and its triggers. Idempotent; on always
+ *  recreates the triggers, so an older trigger body never stays installed. */
 export async function setChangeCapture(db: Sequelize, on: boolean): Promise<void> {
+  for (const s of SOURCES) for (const { ev } of EVENTS) await db.query(`DROP TRIGGER IF EXISTS \`${triggerName(s, ev)}\``);
   if (!on) {
-    for (const s of SOURCES) for (const { ev } of EVENTS) await db.query(`DROP TRIGGER IF EXISTS \`${triggerName(s, ev)}\``);
     await db.query("DROP TABLE IF EXISTS `catalog_changes`");
     return;
   }
@@ -59,14 +66,14 @@ export async function setChangeCapture(db: Sequelize, on: boolean): Promise<void
   for (const s of SOURCES) {
     for (const { ev, rows } of EVENTS) {
       // UPDATE logs both keys only when the key itself changed (rare: an id rename).
-      const inserts = rows
-        .filter((r, i) => i === 0 || ev !== "UPDATE")
-        .map((r) => `INSERT OR REPLACE INTO catalog_changes (tbl, key, at) VALUES ('${s.tbl}', ${s.key(r)}, CAST(strftime('%s','now') AS INTEGER) * 1000);`);
-      if (ev === "UPDATE") {
-        inserts.push(
-          `INSERT OR REPLACE INTO catalog_changes (tbl, key, at) SELECT '${s.tbl}', ${s.key("OLD")}, CAST(strftime('%s','now') AS INTEGER) * 1000 WHERE ${s.key("OLD")} IS NOT ${s.key("NEW")};`,
-        );
-      }
+      const now = "CAST(strftime('%s','now') AS INTEGER) * 1000";
+      const log = (key: string, cond = "") => [
+        `DELETE FROM catalog_changes WHERE tbl = '${s.tbl}' AND key = ${key}${cond ? ` AND ${cond}` : ""};`,
+        // A NULL key is skipped: logging must never be the reason a write fails.
+        `INSERT INTO catalog_changes (tbl, key, at) SELECT '${s.tbl}', ${key}, ${now} WHERE ${key} IS NOT NULL${cond ? ` AND ${cond}` : ""};`,
+      ];
+      const inserts = rows.filter((r, i) => i === 0 || ev !== "UPDATE").flatMap((r) => log(s.key(r)));
+      if (ev === "UPDATE") inserts.push(...log(s.key("OLD"), `${s.key("OLD")} IS NOT ${s.key("NEW")}`));
       const row = rows[0];
       const when = s.when ? ` WHEN ${s.when(row)}` : "";
       await db.query(
@@ -87,6 +94,14 @@ export async function changesSince(db: Sequelize, since: number, limit = 5000): 
   return (await db.query("SELECT seq, tbl, key FROM catalog_changes WHERE seq > ? ORDER BY seq LIMIT ?", {
     replacements: [since, limit], type: QueryTypes.SELECT,
   })) as any[];
+}
+
+/** Category list cache keys changed after `since` (every one: there are about 200 such keys). */
+export async function listChangesSince(db: Sequelize, since: number): Promise<string[]> {
+  const rows = (await db.query("SELECT key FROM catalog_changes WHERE tbl = 'list' AND seq > ?", {
+    replacements: [since], type: QueryTypes.SELECT,
+  })) as { key: string }[];
+  return rows.map((r) => r.key);
 }
 
 /** Drops log entries older than `days` (devices older than that download the catalog again). */

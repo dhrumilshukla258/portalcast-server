@@ -8,7 +8,7 @@
     "start": "node dist/server.js",
     "migrate": "tsx src/infra/migration.ts",
     "reconcile-groups": "tsx src/content/reconcileDuplicateGroups.ts",
-    "test": "node --import tsx --test test/*.test.ts"
+    "test": "node --import tsx --import ./test/setup.ts --test test/*.test.ts"
   },
   "author": "",
   "license": "MIT",

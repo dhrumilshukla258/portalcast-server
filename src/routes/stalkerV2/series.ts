@@ -1,5 +1,4 @@
 ﻿import { withArtUrls } from "@/content/library/art";
-import { localSearch } from "@/content/library/catalog";
 import { withVersionLabels } from "@/content/versionLabel";
 import { isLocalTitleId, localSeasons, localEpisodes, localSeriesPage, localSeriesCategory } from "@/content/library/catalog";
 import { LOCAL_CATEGORY } from "@/content/metaEnrichment";
@@ -55,7 +54,7 @@ import {
   mapChannel,
   filterBySearch, detailCacheKey, rebaseOrigin, DETAIL_CACHE_MS
 } from "./shared";
-import { getCatalogUnion, applyOverridesToMatches } from "@/content/catalogUnion";
+import { allPage } from "@/content/catalog/all";
 export const seriesRoutes: ServerRoute[] = [
   {
     method: "GET",
@@ -227,13 +226,10 @@ export const seriesRoutes: ServerRoute[] = [
         if (Number(movieId) === 0 && String(category) === "*") {
           // In-memory union, rebuilt only when a category list or an override changed (see
           // content/catalogUnion.ts); a page is O(page) instead of re-reading every category.
-          const union = await getCatalogUnion("series", profileId);
-          if (union) {
-            const list = search
-              ? [...(await localSearch("series", String(search))), ...(await applyOverridesToMatches("series", filterBySearch(union.raw, search, `series:${category}`)))]
-              : union.browse;
+          const list = await allPage("series", profileId, search ? String(search) : undefined);
+          if (list) {
             const offset = (startApiPage - 1) * itemsPerApiPage;
-            const pageData = list.slice(offset, offset + itemsPerApiPage).map((s: any) => ({
+            const pageData = list.page(offset, itemsPerApiPage).map((s: any) => ({
               ...s,
               id: String(s.series_id),
               [seriesFlag()]: 1,

@@ -16,6 +16,9 @@
 // - IPTV list entries are stored by shape: an entry is its key list (one of four shapes on the
 //   live data) plus each value's JSON text, pooled. The reader rebuilds the exact JSON. Raw
 //   JSON per entry was 60 MB, a third of it the same key names repeated 132k times.
+// - Title search (the "All" list search) is packed here with the same normalizer and terms as
+//   content/searchIndex.ts: a sorted ASCII vocabulary, postings by list entry, and each entry's
+//   normalized title and year. Readers answer per type and per visible category from it.
 // - Columns that are mostly NULL are sparse (person details: filled for the people whose page
 //   was opened). Whole-number columns are stored in 32 or 16 bits when every value fits.
 // - One read transaction: the snapshot is one consistent moment of the database, and its
@@ -28,6 +31,7 @@
 // the connection, posts, and exits by itself.
 
 import { Worker } from "worker_threads";
+import { normalizeText } from "../searchIndex";
 
 export interface ColumnSpec { name: string; kind: "text" | "num" | "date" }
 
@@ -373,6 +377,12 @@ function workerMain(): void {
       const itemShape = growable(Uint16Array, 1 << 16), itemCopy = growable(Int32Array, 1 << 16);
       const valOff = growable(Int32Array, 1 << 16), vals = growable(Uint32Array, 1 << 20);
       valOff.push(0);
+      // Item id (stream_id / series_id as text) per entry, and the title search terms.
+      const itemIdPool = growable(Uint32Array, 1 << 16), itemIdStr: string[] = [], itemType: number[] = [];
+      const normIds = growable(Uint32Array, 1 << 16), years = growable(Int16Array, 1 << 16);
+      const normalize: (s: string) => string = (globalThis as any).__normalizeText;
+      const termIndex = new Map<string, number>(), termStrs: string[] = [];
+      const pairDoc = growable(Int32Array, 1 << 18), pairTerm = growable(Int32Array, 1 << 18);
       for (const [type, prefix, idField, code] of [["movie", "vod_streams_", "stream_id", 1], ["series", "series_list_", "series_id", 2]] as const) {
         for (const cat of input.genres[type] as string[]) {
           const row = await get("SELECT value FROM xtream_cache WHERE key = ?", [prefix + cat]);
@@ -399,6 +409,22 @@ function workerMain(): void {
             }
             valOff.push(vals.length);
             itemCopy.push(idLookup(`${type}_${item?.[idField]}`));
+            const doc = itemIdStr.length;
+            const idText = String(item?.[idField]);
+            itemIdStr.push(idText); itemType.push(code); itemIdPool.push(intern(idText));
+            // As SearchIndex: normalized name, its words plus each adjacent pair joined.
+            const norm = normalize(String(item?.name ?? ""));
+            normIds.push(intern(norm));
+            const y = String(item?.year ?? "").slice(0, 4);
+            years.push(/^\d{4}$/.test(y) ? Number(y) : 0);
+            const words = norm ? norm.split(" ") : [];
+            const terms = new Set(words);
+            for (let i = 0; i + 1 < words.length; i++) terms.add(words[i] + words[i + 1]);
+            for (const t of terms) {
+              let ti = termIndex.get(t);
+              if (ti === undefined) { ti = termStrs.length; termIndex.set(t, ti); termStrs.push(t); }
+              pairDoc.push(doc); pairTerm.push(ti);
+            }
           }
         }
       }
@@ -412,6 +438,51 @@ function workerMain(): void {
       sections["list.vals"] = vals.out();
       sections["list.itemCopy"] = itemCopy.out();
       counts.listItems = (sections["list.itemCopy"] as Int32Array).length;
+      sections["list.itemId"] = itemIdPool.out();
+      // Entries by (type, item id, position): an id's entries are one run, first-listed first.
+      sections["list.byItemId"] = Int32Array.from(itemIdStr.keys()).sort((a, b) =>
+        itemType[a] - itemType[b] || (itemIdStr[a] < itemIdStr[b] ? -1 : itemIdStr[a] > itemIdStr[b] ? 1 : 0) || a - b);
+      itemIdStr.length = 0; itemType.length = 0;
+
+      // Title search: vocabulary sorted (ASCII, so byte order = JS string order), postings CSR.
+      sections["search.norm"] = normIds.out();
+      sections["search.year"] = years.out();
+      const vOrder = Int32Array.from(termStrs.keys()).sort((a, b) => (termStrs[a] < termStrs[b] ? -1 : termStrs[a] > termStrs[b] ? 1 : 0));
+      const vRank = new Int32Array(termStrs.length);
+      for (let i = 0; i < vOrder.length; i++) vRank[vOrder[i]] = i;
+      let vocabBytes = 0;
+      for (const t of termStrs) vocabBytes += t.length;
+      const vocab = new Uint8Array(vocabBytes), vocabOff = new Int32Array(termStrs.length + 1);
+      for (let i = 0, at = 0; i < vOrder.length; i++) {
+        const t = termStrs[vOrder[i]];
+        vocabOff[i] = at;
+        for (let c = 0; c < t.length; c++) vocab[at++] = t.charCodeAt(c);
+        vocabOff[i + 1] = at;
+      }
+      const pd = pairDoc.out(), pt = pairTerm.out();
+      const postOff = new Int32Array(termStrs.length + 1);
+      for (let k = 0; k < pt.length; k++) postOff[vRank[pt[k]] + 1]++;
+      for (let i = 0; i < termStrs.length; i++) postOff[i + 1] += postOff[i];
+      const pcur2 = postOff.slice(0, termStrs.length), post = new Int32Array(pt.length);
+      for (let k = 0; k < pt.length; k++) post[pcur2[vRank[pt[k]]]++] = pd[k]; // docs ascend: added in order
+      // Exact-term lookup for the one-edit typo pass (SearchIndex keeps a Map for it): slots
+      // hold vocabulary index + 1, at least twice as many slots as terms.
+      let slotsN = 1; while (slotsN < termStrs.length * 2) slotsN <<= 1;
+      const termHash = new Int32Array(slotsN), hmask = slotsN - 1;
+      for (let i = 0; i < vOrder.length; i++) {
+        let h = 2166136261;
+        for (let c = vocabOff[i]; c < vocabOff[i + 1]; c++) h = Math.imul(h ^ vocab[c], 16777619);
+        let k = (h >>> 0) & hmask;
+        while (termHash[k]) k = (k + 1) & hmask;
+        termHash[k] = i + 1;
+      }
+      sections["search.termHash"] = termHash;
+      sections["search.vocab"] = vocab;
+      sections["search.vocabOff"] = vocabOff;
+      sections["search.postOff"] = postOff;
+      sections["search.post"] = post;
+      counts.searchTerms = termStrs.length;
+      termIndex.clear(); termStrs.length = 0;
       copyIdStr.length = 0;
       stage("lists");
 
@@ -446,7 +517,8 @@ export function buildSnapshot(input: BuildInput): Promise<BuildOutput> {
   return new Promise((resolve, reject) => {
     // `var __name`: esbuild (tsx, tsup) may wrap named functions in a __name() helper that
     // does not exist inside the eval'd worker.
-    const source = `var __name = (f) => f;\n(${workerMain.toString()})();`;
+    // The title normalizer is passed as source too: one implementation for the index and queries.
+    const source = `var __name = (f) => f;\nglobalThis.__normalizeText = ${normalizeText.toString()};\n(${workerMain.toString()})();`;
     const worker = new Worker(source, {
       eval: true,
       workerData: { input, sqlite3: require.resolve("sqlite3"), chunkBits: input.chunkBits ?? CHUNK_BITS, checksum: CHECKSUM },

@@ -46,3 +46,10 @@ tsconfig.tsbuildinfo
 # native packaging output (packaging/, .github/workflows/release.yml)
 /build/
 /dist-pkg/
+
+# Server data created by a local run or a test (never committed)
+secret.key
+database.db
+database.db-*
+database.sqlite
+/catalog/

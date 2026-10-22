@@ -33,8 +33,8 @@ export interface Searchable {
   id?: string | number;
 }
 
-const STOP_WORDS = new Set(["the", "a", "an", "of", "and"]);
-const MIN_FUZZY_LEN = 4;
+export const STOP_WORDS = new Set(["the", "a", "an", "of", "and"]);
+export const MIN_FUZZY_LEN = 4;
 
 export function normalizeText(s: string): string {
   return s

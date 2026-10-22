@@ -483,6 +483,7 @@ const init = async () => {
   // soon as a catalog exists), so the first search after a restart does not wait ~1.5 s.
   setTimeout(() => {
     (async () => {
+      if (setting<boolean>("catalogSnapshot")) return; // the snapshot serves "All" (content/catalog/all.ts)
       const { getCatalogUnion } = await import("./content/catalogUnion");
       const { getActiveProfileId } = await import("./routes/stalkerV2/shared");
       const profileId = await getActiveProfileId();
@@ -494,7 +495,8 @@ const init = async () => {
   setTimeout(() => void buildPeopleIndex(), 30_000).unref?.();
   // Catalog snapshot (content/catalog/store.ts, setting catalogSnapshot, off by default): after
   // the startup warm-ups so the two builds never peak together.
-  setTimeout(() => void startCatalogSnapshot().catch((e) => logger.warn(`[catalog] start failed: ${e?.message ?? e}`)), 60_000).unref?.();
+  // On: started now, since the "All" lists wait for it (a saved file loads in about 0.5 s).
+  setTimeout(() => void startCatalogSnapshot().catch((e) => logger.warn(`[catalog] start failed: ${e?.message ?? e}`)), setting<boolean>("catalogSnapshot") ? 0 : 60_000).unref?.();
   onDiscoverCacheClear(markPeopleChanged);
   // Channel logos for Discover (content/channels.ts): portal logos now, TMDB network logos
   // a minute later in the background (one-time, cached; retried weekly for misses).

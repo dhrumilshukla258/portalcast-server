@@ -1,7 +1,6 @@
 ﻿import { episodeLocation } from "@/content/episodeIndex";
-import { catalogItem } from "@/content/catalogUnion";
+import { allPage, allCategoryOf, allItem } from "@/content/catalog/all";
 import { withArtUrls } from "@/content/library/art";
-import { localSearch } from "@/content/library/catalog";
 import { withVersionLabels } from "@/content/versionLabel";
 import { localEpisodeFile } from "@/content/library/catalog";
 import { isLocalTitleId, isLocalFileId, localMovieCategory, localMoviesPage, localTitleFiles, localPlayLink } from "@/content/library/catalog";
@@ -57,7 +56,6 @@ import {
   mapChannel,
   filterBySearch, detailCacheKey, rebaseOrigin, DETAIL_CACHE_MS
 } from "./shared";
-import { getCatalogUnion, applyOverridesToMatches } from "@/content/catalogUnion";
 export const movieRoutes: ServerRoute[] = [
   {
     method: "GET",
@@ -184,8 +182,7 @@ export const movieRoutes: ServerRoute[] = [
         if (Number(movieId) !== 0 && String(category) === "*") {
           // O(1) via the in-memory "*" catalog's id -> category map; the per-genre scan below
           // stays as the fallback for titles only present in a hidden genre.
-          const union = await getCatalogUnion("movie", profileId);
-          const known = union?.catOf.get(String(movieId));
+          const known = await allCategoryOf("movie", String(movieId), profileId);
           const groups = known ? [] : await readGenres("movie", profileId);
           if (known) category = known;
           for (const g of groups) {
@@ -286,14 +283,11 @@ export const movieRoutes: ServerRoute[] = [
         if (Number(movieId) === 0 && String(category) === "*") {
           // In-memory union, rebuilt only when a category list or an override changed (see
           // content/catalogUnion.ts); a page is O(page) instead of re-reading ~85k items.
-          const union = await getCatalogUnion("movie", profileId);
-          if (union) {
-            // Search also finds local-library titles, listed first (content/library/catalog.ts).
-            const list = search
-              ? [...(await localSearch("movie", String(search))), ...(await applyOverridesToMatches("movie", filterBySearch(union.raw, search, `movie:${category}`)))]
-              : union.browse;
+          // Search also finds local-library titles, listed first (content/library/catalog.ts).
+          const list = await allPage("movie", profileId, search ? String(search) : undefined);
+          if (list) {
             const offset = (startApiPage - 1) * itemsPerApiPage;
-            const pageData = list.slice(offset, offset + itemsPerApiPage).map((m: any) => ({
+            const pageData = list.page(offset, itemsPerApiPage).map((m: any) => ({
               ...m,
               id: String(m.stream_id),
               screenshot_uri: m.screenshot_uri || m.stream_icon || "",
@@ -498,7 +492,7 @@ export const movieRoutes: ServerRoute[] = [
           if (!isSeries) {
             // Unambiguous: `id` is the same stream_id mapVodItem cached under
             // `vod_info_${id}` during the normal catalog warm.
-            const item = await catalogItem("movie", String(id), await getActiveProfileId());
+            const item = await allItem("movie", String(id), await getActiveProfileId());
             effectiveTitle = effectiveTitle || item?.name || undefined;
             effectiveCategory = effectiveCategory || item?.genres_str || undefined;
           } else {
@@ -593,7 +587,7 @@ export const movieRoutes: ServerRoute[] = [
           const itemId = qItemId ? String(qItemId) : String(id);
           let hideable = !!qItemId;
           if (!qItemId && itemType === "movie" && id) {
-            hideable = !!(await catalogItem("movie", String(id), await getActiveProfileId()).catch(() => null));
+            hideable = !!(await allItem("movie", String(id), await getActiveProfileId()).catch(() => null));
           }
           const tokenizedUrl = proxyUrlFor(rawUrl, userLabel, {
             kind: isSeries ? "series" : "movie",

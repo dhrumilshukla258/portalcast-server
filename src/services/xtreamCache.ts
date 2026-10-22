@@ -322,7 +322,7 @@ export function mapVodItem(m: any, num: number, categoryId: string | number): an
   const added = toUnixAdded(m.added);
   // No per-movie rows any more (vod_info_*, vod_cmd_*, ~30,000 of them): nothing read
   // vod_cmd_* since the Xtream emulation went, and vod_info_*'s two uses (stream label,
-  // broken-stream check) read the in-memory catalog (content/catalogUnion.ts catalogItem).
+  // broken-stream check) read the in-memory catalog (content/catalog/all.ts allItem).
   return {
     num,
     name:                m.name,

@@ -7,6 +7,12 @@ export type TagKind = "genre" | "country" | "theme";
 export const CREDIT_KINDS = ["", "cast", "director", "creator", "writer"] as const;
 const PERSON_DETAILS = ["knownFor", "birthday", "deathday", "placeOfBirth", "detailsCheckedAt", "biography"] as const;
 
+/** chunk[p..] starts with q. */
+function bytesAt(chunk: Uint8Array, p: number, q: Uint8Array): boolean {
+  for (let j = 0; j < q.length; j++) if (chunk[p + j] !== q[j]) return false;
+  return true;
+}
+
 export interface CreditRow { person: number; kind: string; role: string | null; order: number }
 
 /** A number column value: NaN (Float64Array) or INT_NULL (Int32Array) is NULL. */
@@ -22,6 +28,13 @@ export class CatalogSnapshot {
   private readonly chunk: number;
   private readonly poolChunks: Uint8Array[];
   private readonly poolStart: Uint32Array;
+  // Title search arrays, kept as fields: the search loop touches them per posting.
+  private readonly vocab: Uint8Array;
+  private readonly vocabOff: Int32Array;
+  readonly post: Int32Array;
+  readonly postOff: Int32Array;
+  private readonly normIds: Uint32Array;
+  private readonly termHash: Int32Array;
   /** Per list-entry shape: `"key":` prefixes, decoded on first use (four shapes on live data). */
   private readonly shapeKeys: (string[] | undefined)[] = [];
   readonly copyCount: number;
@@ -36,6 +49,12 @@ export class CatalogSnapshot {
     this.chunk = 2 ** (s["meta.chunkBits"] as Uint8Array)[0];
     this.poolChunks = Object.keys(s).filter((k) => k.startsWith("pool.chunk.")).sort().map((k) => s[k] as Uint8Array);
     this.poolStart = s["pool.start"] as Uint32Array;
+    this.vocab = s["search.vocab"] as Uint8Array;
+    this.vocabOff = s["search.vocabOff"] as Int32Array;
+    this.post = s["search.post"] as Int32Array;
+    this.postOff = s["search.postOff"] as Int32Array;
+    this.normIds = s["search.norm"] as Uint32Array;
+    this.termHash = s["search.termHash"] as Int32Array;
     this.copyCount = (s["copy.byId"] as Int32Array).length;
     this.personCount = (s["person.id"] as Int32Array).length;
   }
@@ -202,13 +221,23 @@ export class CatalogSnapshot {
 
   /** A portal list entry exactly as cached (rebuilt from its shape and pooled values). */
   listItem(k: number): any {
+    return JSON.parse(this.listItemJson(k));
+  }
+
+  /** The entry's JSON text: equal to JSON.stringify of the cached entry (same keys, same order). */
+  listItemJson(k: number): string {
     const sh = (this.s["list.itemShape"] as Uint16Array)[k];
     const off = this.s["list.valOff"] as Int32Array, vals = this.s["list.vals"] as Uint32Array;
-    if (sh === 0) return JSON.parse(this.str(vals[off[k]])!);
+    if (sh === 0) return this.str(vals[off[k]])!;
     const keys = this.keysOfShape(sh);
     let json = "{";
     for (let j = 0, v = off[k]; v < off[k + 1]; j++, v++) json += (j ? "," : "") + keys[j] + this.str(vals[v]);
-    return JSON.parse(`${json}}`);
+    return `${json}}`;
+  }
+
+  /** Number of list entries (both types). */
+  get listEntryCount(): number {
+    return (this.s["list.itemCopy"] as Int32Array).length;
   }
 
   /** One field of a portal list entry (undefined when the entry has no such key), without
@@ -224,5 +253,129 @@ export class CatalogSnapshot {
   /** The copy (content_meta row) of a list entry, or -1 when it has none yet. */
   listItemCopy(k: number): number {
     return (this.s["list.itemCopy"] as Int32Array)[k];
+  }
+
+  /** Number of category lists (both types, in the order they were built). */
+  get listCategoryCount(): number {
+    return (this.s["list.type"] as Uint8Array).length;
+  }
+
+  /** Category list c: its type, category id and entry range. */
+  listCategory(c: number): { type: "movie" | "series"; id: string; start: number; end: number } {
+    const start = this.s["list.start"] as Int32Array;
+    return {
+      type: (this.s["list.type"] as Uint8Array)[c] === 2 ? "series" : "movie",
+      id: this.str((this.s["list.catId"] as Uint32Array)[c])!,
+      start: start[c], end: start[c + 1],
+    };
+  }
+
+  /** The category list (index) holding entry k. */
+  listCategoryOf(k: number): number {
+    const start = this.s["list.start"] as Int32Array;
+    let lo = 0, hi = start.length - 2;
+    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (start[m] <= k) lo = m; else hi = m - 1; }
+    return lo;
+  }
+
+  /** An entry's item id (stream_id / series_id) as text, as String(item.stream_id) gives it. */
+  listItemId(k: number): string {
+    return this.str((this.s["list.itemId"] as Uint32Array)[k])!;
+  }
+
+  /** Entries of this type carrying this item id, in list order. */
+  listEntriesWithId(type: "movie" | "series", id: string): number[] {
+    const order = this.s["list.byItemId"] as Int32Array;
+    const t = this.s["list.type"] as Uint8Array;
+    const want = type === "series" ? 2 : 1;
+    const cmp = (k: number) => {
+      const tk = t[this.listCategoryOf(k)];
+      if (tk !== want) return tk - want;
+      const v = this.listItemId(k);
+      return v < id ? -1 : v > id ? 1 : 0;
+    };
+    let lo = 0, hi = order.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (cmp(order[m]) < 0) lo = m + 1; else hi = m; }
+    const out: number[] = [];
+    for (let i = lo; i < order.length && cmp(order[i]) === 0; i++) out.push(order[i]);
+    return out;
+  }
+
+  // ── title search (layout: builder.ts; algorithm: catalog/views.ts, as searchIndex.ts) ──
+
+  /** Byte comparison of vocabulary term i with q (ASCII: orders like JS strings). */
+  private cmpTerm(i: number, q: Uint8Array): number {
+    const vocab = this.vocab, a = this.vocabOff[i], len = this.vocabOff[i + 1] - a, n = Math.min(len, q.length);
+    for (let j = 0; j < n; j++) { const d = vocab[a + j] - q[j]; if (d !== 0) return d; }
+    return len - q.length;
+  }
+
+  private termHasPrefix(i: number, q: Uint8Array): boolean {
+    const vocab = this.vocab, a = this.vocabOff[i];
+    if (this.vocabOff[i + 1] - a < q.length) return false;
+    for (let j = 0; j < q.length; j++) if (vocab[a + j] !== q[j]) return false;
+    return true;
+  }
+
+  /** [lo, hi) of the vocabulary terms starting with q. */
+  termPrefixRange(q: Uint8Array): [number, number] {
+    const count = this.vocabOff.length - 1;
+    let lo = 0, hi = count;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (this.cmpTerm(m, q) < 0) lo = m + 1; else hi = m; }
+    let a = lo, b = count;
+    while (a < b) { const m = (a + b) >> 1; if (this.termHasPrefix(m, q)) a = m + 1; else b = m; }
+    return [lo, a];
+  }
+
+  /** Vocabulary index of exactly `term` (ASCII), or -1: one hash probe, no allocation. */
+  termIndex(term: string): number {
+    let h = 2166136261;
+    for (let j = 0; j < term.length; j++) h = Math.imul(h ^ term.charCodeAt(j), 16777619);
+    const slots = this.termHash, mask = slots.length - 1, vocab = this.vocab;
+    for (let k = (h >>> 0) & mask; ; k = (k + 1) & mask) {
+      const v = slots[k];
+      if (!v) return -1;
+      const a = this.vocabOff[v - 1];
+      if (this.vocabOff[v] - a !== term.length) continue;
+      let j = 0;
+      while (j < term.length && vocab[a + j] === term.charCodeAt(j)) j++;
+      if (j === term.length) return v - 1;
+    }
+  }
+
+  termLength(i: number): number {
+    return this.vocabOff[i + 1] - this.vocabOff[i];
+  }
+
+  /** List entries whose title has term i, ascending (a view). */
+  termEntries(i: number): Int32Array {
+    return this.post.subarray(this.postOff[i], this.postOff[i + 1]);
+  }
+
+  /** An entry's normalized title (normalizeText of its name). */
+  searchNorm(k: number): string {
+    return this.str(this.normIds[k]) ?? "";
+  }
+
+  /**
+   * How an entry's normalized title relates to the query, compared as bytes in the pool (ASCII,
+   * never decoded): relation | length << 2, where relation 3 = equal to `a` or `b`, 2 = starts
+   * with `b`, 1 = contains `b`, 0 = none (SearchIndex's ranking tests), and length is the title's.
+   */
+  searchNormRelation(k: number, a: Uint8Array, b: Uint8Array): number {
+    const id = this.normIds[k];
+    if (!id) return 0;
+    const st = this.poolStart[id], c = Math.floor(st / this.chunk), base = c * this.chunk, chunk = this.poolChunks[c];
+    const from = st - base, to = Math.min(this.poolStart[id + 1] - base, chunk.length), len = to - from;
+    if ((len === a.length && bytesAt(chunk, from, a)) || (len === b.length && bytesAt(chunk, from, b))) return 3 | (len << 2);
+    if (len < b.length) return len << 2;
+    if (bytesAt(chunk, from, b)) return 2 | (len << 2);
+    for (let p = from + 1; p + b.length <= to; p++) if (chunk[p] === b[0] && bytesAt(chunk, p, b)) return 1 | (len << 2);
+    return len << 2;
+  }
+
+  /** An entry's year when its first four characters are digits, else 0. */
+  searchYear(k: number): number {
+    return (this.s["search.year"] as Int16Array)[k];
   }
 }

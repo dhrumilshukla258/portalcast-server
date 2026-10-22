@@ -2,7 +2,7 @@
 
 The whole catalog packed in memory as typed arrays, so pages can be answered without the database (plan Phase 1). Code: `src/content/catalog/`. Setting `catalogSnapshot` (group Catalog, default off, applies on restart).
 
-**Status:** built and verified, not used by any route yet. Phase 1b moves the routes onto it and removes the views it replaces (`catalogUnion`, the title search view, `discoverIndex`, the people search index: about 246 MB of heap on the working copy). Until then it stays off: switched on early it would add its memory on top of those views.
+**Status:** Phase 1b in progress. "All Movies" / "All Series" (pages, search, Discover's open-by-id) read the snapshot when the setting is on (`all.ts`); still on today's views: Discover browse/rows/facets/details/variants, person pages, people search. The setting stays off live until those move too and `catalogUnion`, the title search view, `discoverIndex` and the people search index (about 246 MB of heap on the working copy) are removed.
 
 ## Files
 
@@ -12,7 +12,9 @@ The whole catalog packed in memory as typed arrays, so pages can be answered wit
 | `snapshot.ts` | `CatalogSnapshot`: the only reader. Routes call its methods, never index sections themselves |
 | `format.ts` | The snapshot file: write, read and verify |
 | `changes.ts` | Change capture: triggers that log changed keys to `catalog_changes` |
-| `store.ts` | Load at start, rebuild after changes, status for admin |
+| `store.ts` | Load at start, rebuild after changes, status for admin; which cache version of each list the snapshot holds |
+| `views.ts` | The "All" view: browse with overrides, search, id lookups, changed lists |
+| `all.ts` | What the routes call for "All": the view when the setting is on, `catalogUnion` when off (the one place that chooses) |
 
 ## What is in it
 
@@ -23,7 +25,8 @@ One row per `content_meta` row ("copy"), person, credit and IPTV list entry, as 
 - **Tags** (genre, country, theme): a value dictionary plus offsets both ways, so "tags of a copy" and "copies with a tag" are both a slice.
 - **Credits**: grouped by title key in billing order, plus a per-person list.
 - **Person details** (birthday, biography...) are sparse: rows only for people that have any.
-- **IPTV list entries**: each entry is its key list ("shape", four on live data) plus each value's JSON text from the pool. `listItem(k)` rebuilds the exact cached JSON; `listField(k, key)` reads one value without rebuilding the entry.
+- **IPTV list entries**: each entry is its key list ("shape", four on live data) plus each value's JSON text from the pool. `listItem(k)` rebuilds the exact cached JSON; `listField(k, key)` reads one value without rebuilding the entry. Each entry's item id, with an index by (type, id).
+- **Title search**: built with `normalizeText` from `content/searchIndex.ts` (passed to the worker as source, so there is one normalizer): sorted ASCII vocabulary of words and joined word pairs, postings per term, an exact-term hash table for the typo pass, and each entry's normalized title and year.
 
 Lookups are binary searches over sorted arrays (copy id, person id, title key, TMDB id); no Maps are kept.
 
@@ -39,11 +42,24 @@ Lookups are binary searches over sorted arrays (copy id, person id, title key, T
 
 `<data>/catalog/snapshot-<version>.bin`: header JSON, then each section as raw bytes, 8-byte aligned. Written to a `.tmp` file and renamed. Loading reads and checks the checksum in a worker and transfers the one buffer; the main thread only creates views. A file of another format version, or with a bad checksum, is ignored and the snapshot is rebuilt.
 
+## The "All" view (views.ts)
+
+Same answers as `catalogUnion.ts`, checked three ways: unit tests against `SearchIndex` (`test/catalog-views.test.ts`), a harness on a copy of the live data (every browse entry, every id, about 1,250 searches, with and without overrides, a hidden category and changed lists: all equal), and 267 route answers compared byte for byte with the setting off and on.
+
+- A view per (profile, type) is an index array over snapshot entries: the visible categories in genre order (hidden ones left out at read time, as before). Overrides (hidden, moved, renamed, sorted, moved in) are applied by the rules of `applyOverridesToUnion`, as positions and renames; a page rebuilds only its 14 entries.
+- Search is `SearchIndex`'s algorithm on the packed index, restricted to visible entries. The typo pass runs when no visible title has the word as a prefix (the old index only held visible titles, so a word found only in a hidden category must still fall back to one edit). Ties keep list order.
+- Changed lists: the snapshot records each list's cache write version before reading. Per request each visible list's version is compared (as the union's fingerprint did). A list written since is read once: equal to the snapshot's (the daily refresh mostly rewrites lists unchanged), it is marked current again; otherwise it is kept, parsed, until the next rebuild. After a restart, the change log names the lists written since the saved file.
+- With the setting on the union is never built: requests wait for the snapshot (`catalogReady`), loaded from its file at start. If the snapshot cannot be built at all, the union answers as before.
+
+Measured on the working copy (production build): search p95 35.6 -> 8.8 ms for movies, 1.35 -> 1.50 ms for series, slowest 62 -> 16 ms; route p95 53.6 -> 36.5 ms. Heap for "All": +201 MB (union and its search index) -> +3 MB (views; the snapshot itself is shared by every reader).
+
 ## Changes and rebuilds
 
+- A trigger deletes the key's row and inserts a new one. It never uses `INSERT OR REPLACE`: SQLite applies the outer statement's conflict handling inside triggers, so under an upsert (what `xtreamCache.set` and Sequelize `upsert` send) the trigger aborted the write itself, and under `INSERT OR IGNORE` it kept the old sequence number and lost the change. A NULL key is skipped. Switching on always recreates the triggers (`test/catalog-changes.test.ts`).
 - Triggers (installed only while the setting is on) log `title`, `tags`, `person`, `credits`, `override`, `genre_overrides`, `genres` and `list` (only `vod_streams_*` and `series_list_*` cache keys) changes, one row per key.
 - `store.ts` polls the version every 5 s; it rebuilds once changes have been quiet for 60 s, and at most every 10 minutes. The old snapshot keeps answering until the new one is ready (swap: under 1 ms).
-- Phase 1b adds the overlay: changes newer than the snapshot are read from the database and applied on top, so readers never see stale data between rebuilds.
+- A saved file older than the database is served at start (lists are checked per request) while a current one is built in the background.
+- Title, tag, credit and person changes between rebuilds: applied by the readers that use them, as each route moves (next: Discover).
 
 ## Measured (working copy, 132k copies, 412k people, 1.1M credits, 132k list entries)
 
