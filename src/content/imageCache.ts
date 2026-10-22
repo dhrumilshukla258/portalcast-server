@@ -5,7 +5,7 @@
 // is slow or unreachable for images already seen, and viewers' addresses never reach TMDB.
 //
 // Settings: imageCacheFolder (default <data folder>/image-cache, a NAS folder is a good
-// choice), imageCacheGb (size cap, default 20, raise it in Admin when the disk allows; 0 turns caching off and the apps load TMDB
+// choice), imageCacheGb (size cap, default 200 (the owner's choice; lower it in Admin on a small disk); 0 turns caching off and the apps load TMDB
 // directly as before). A nightly job removes the least recently used images above the cap.
 //
 // One stored copy per image (owner, 2026-10-22: "no repetition"): whatever size an app asks
