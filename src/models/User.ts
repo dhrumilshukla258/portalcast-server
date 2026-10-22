@@ -41,6 +41,8 @@ export class User extends Model {
         recentSearches?: string[];
         /** The Sports page's leagues (sporting-events.org slugs, content/sports.ts CATALOGUE). */
         sportsLeagues?: string[];
+        /** "Not interested": titles kept off this user's Home rows (content/notInterested.ts). */
+        hiddenTitles?: string[];
     };
 
     @Column(DataType.STRING)

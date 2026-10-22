@@ -19,6 +19,7 @@
 // progress or the catalog changes; a stale answer is served while new rows are built, so a
 // Home open never waits for more than the first build.
 
+import { hiddenFor, notInterestedGen } from "@/content/notInterested";
 import { QueryTypes } from "sequelize";
 import { sequelize } from "@/db";
 import { getDiscoverIndex, type DiscoverIndex } from "@/content/discoverIndex";
@@ -204,6 +205,8 @@ function charts(): Promise<Charts> {
 export async function buildHomeRows(userId: number, profileId: number, type: HomeType): Promise<HomeRows> {
   const idx = await getDiscoverIndex();
   const hidden = await getHiddenContentKeySet();
+  // The viewer's "Not interested" titles are out too.
+  const mine = await hiddenFor(userId);
   const progress = await recentProgress(userId, profileId, 200);
   const watched = (await watchedTitles(progress, idx)).filter((w) => type === "all" || w.type === type);
   const n = idx.ids.length;
@@ -211,7 +214,7 @@ export async function buildHomeRows(userId: number, profileId: number, type: Hom
   // Every version of anything watched is out, so is anything hidden.
   const excluded = new Set<number>();
   for (const w of watched) for (const id of w.groupIds) { const r = idx.rankOf.get(id); if (r !== undefined) excluded.add(r); }
-  const ok = (r: number) => (want === 0 || idx.type[r] === want) && !excluded.has(r) && !hidden.has(idx.ids[r]);
+  const ok = (r: number) => (want === 0 || idx.type[r] === want) && !excluded.has(r) && !hidden.has(idx.ids[r]) && !mine.has(idx.ids[r]);
   const used = new Map<number, number>(); // rank -> rows it is in (at most two)
   const take = (ranks: number[]) => ranks.filter((r) => (used.get(r) ?? 0) < 2).slice(0, ROW_SIZE);
   const commit = (ranks: number[]) => { for (const r of ranks) used.set(r, (used.get(r) ?? 0) + 1); return ranks.map((r) => idx.ids[r]); };
@@ -286,7 +289,7 @@ export async function buildHomeRows(userId: number, profileId: number, type: Hom
   // after the personal rows on Home. Hidden titles are left out; watched ones stay (a chart).
   const ch = await charts();
   const chartRows: HomeRow[] = [];
-  const chart = (ids: string[]) => ids.filter((id) => !hidden.has(id)).slice(0, ROW_SIZE);
+  const chart = (ids: string[]) => ids.filter((id) => !hidden.has(id) && !mine.has(id)).slice(0, ROW_SIZE);
   if (type === "all") {
     for (const t of ["movie", "series"] as const) {
       const ids = chart(ch.trending[t]);
@@ -321,7 +324,7 @@ export function markHomeStale(): void {
  */
 export async function homeRows(userId: number, profileId: number, type: HomeType): Promise<HomeRows> {
   const key = `${userId}:${profileId}:${type}`;
-  const gen = `${viewerGeneration()}.${catalogGen}`;
+  const gen = `${viewerGeneration()}.${catalogGen}.${notInterestedGen()}`;
   const have = cache.get(key);
   if (have && have.gen === gen) return have.value;
   let job = building.get(key);

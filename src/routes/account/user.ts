@@ -11,7 +11,9 @@ import axios from "axios";
 import { subtitleKeysFor, forgetSubtitleKeys } from "@/content/subtitleKeys";
 import { logger } from "@/infra/logger";
 import { User } from "../../models/User";
-import { progressRows, saveProgress, deleteProgress } from "@/content/viewers";
+import { progressRows, saveProgress, deleteProgress, contentIdsOf } from "@/content/viewers";
+import { setNotInterested, hiddenFor } from "@/content/notInterested";
+import { CONTENT_ID } from "@/content/myList";
 import { titleRows } from "@/content/catalog/cards";
 import { ConfigProfile } from "../../models/ConfigProfile";
 import { authCheck } from "../../auth/jwt";
@@ -33,7 +35,88 @@ const getActiveProfileId = async () => {
   return activeProfile?.id || 1;
 };
 
+const metaObject = (m: unknown): any => {
+  if (m && typeof m === "object") return m;
+  if (typeof m === "string") { try { return JSON.parse(m); } catch { return {}; } }
+  return {};
+};
+
+/** The marker row that says "watched" for a title opened nowhere (the title menu). */
+const watchedMarker = (contentId: string) => `watched:${contentId}`;
+
 export const userRoutes: ServerRoute[] = [
+  // The title menu (hold a card; owner, 2026-10-22): Mark as watched / not watched. Watched
+  // titles leave Continue Watching and Home's suggestions and feed "Because you watched"
+  // (content/home.ts); the title's open progress rows are marked completed too.
+  {
+    method: "PUT",
+    path: "/api/user/watched/{id}",
+    handler: async (request, h) => {
+      const user = authCheck(request);
+      if (!user || typeof user.userId !== "number") return h.response({ error: "Unauthorized" }).code(401);
+      const id = String(request.params.id);
+      if (!CONTENT_ID.test(id)) return h.response({ error: "Not a title id" }).code(400);
+      const profileId = await getActiveProfileId();
+      for (const r of await progressRows(user.userId, profileId)) {
+        if (!r.completed && contentIdsOf(r).includes(id)) {
+          await saveProgress(user.userId, profileId, String(r.mediaId), Number(r.progress) || 0, true, metaObject(r.meta));
+        }
+      }
+      const { rows } = await titleRows([id]);
+      const row: any = rows.get(id);
+      await saveProgress(user.userId, profileId, watchedMarker(id), 0, true, {
+        catalogId: id,
+        type: id.startsWith("series_") ? "series" : "movie",
+        title: row?.trimmedName || row?.name || undefined,
+        markedWatched: true,
+      });
+      return { success: true };
+    },
+  },
+  {
+    method: "DELETE",
+    path: "/api/user/watched/{id}",
+    handler: async (request, h) => {
+      const user = authCheck(request);
+      if (!user || typeof user.userId !== "number") return h.response({ error: "Unauthorized" }).code(401);
+      const id = String(request.params.id);
+      if (!CONTENT_ID.test(id)) return h.response({ error: "Not a title id" }).code(400);
+      await deleteProgress(user.userId, await getActiveProfileId(), watchedMarker(id));
+      return { success: true };
+    },
+  },
+  // Not interested: off this user's Home rows (content/notInterested.ts).
+  {
+    method: "GET",
+    path: "/api/user/hidden",
+    handler: async (request, h) => {
+      const user = authCheck(request);
+      if (!user || typeof user.userId !== "number") return h.response({ error: "Unauthorized" }).code(401);
+      return h.response({ ids: [...(await hiddenFor(user.userId))] }).header("Cache-Control", "private, no-store");
+    },
+  },
+  {
+    method: "PUT",
+    path: "/api/user/hidden/{id}",
+    handler: async (request, h) => {
+      const user = authCheck(request);
+      if (!user || typeof user.userId !== "number") return h.response({ error: "Unauthorized" }).code(401);
+      const id = String(request.params.id);
+      if (!CONTENT_ID.test(id)) return h.response({ error: "Not a title id" }).code(400);
+      return { success: true, ids: await setNotInterested(user.userId, id, true) };
+    },
+  },
+  {
+    method: "DELETE",
+    path: "/api/user/hidden/{id}",
+    handler: async (request, h) => {
+      const user = authCheck(request);
+      if (!user || typeof user.userId !== "number") return h.response({ error: "Unauthorized" }).code(401);
+      const id = String(request.params.id);
+      if (!CONTENT_ID.test(id)) return h.response({ error: "Not a title id" }).code(400);
+      return { success: true, ids: await setNotInterested(user.userId, id, false) };
+    },
+  },
   {
     method: "GET",
     path: "/api/user/profile",
