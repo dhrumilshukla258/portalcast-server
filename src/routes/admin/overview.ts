@@ -1,4 +1,5 @@
 import { linkTimingSummary } from "@/services/linkTimings";
+import { portalPaceState } from "@/services/portalPace";
 import { ServerRoute } from "@hapi/hapi";
 import { Op } from "sequelize";
 import { requireAdmin } from "@/auth/jwt";
@@ -121,6 +122,8 @@ export const overviewRoutes: ServerRoute[] = [
             outboundLastHour: outboundStats().lastHour?.total ?? null,
             // How long the portal takes to give a play link, last 24 h (services/linkTimings.ts).
             linkTimes: linkTimingSummary(),
+            // Background portal queue: current pause between requests, time left on a 429 pause.
+            portalPace: portalPaceState(),
           },
         };
       } catch (error) {

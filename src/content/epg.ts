@@ -11,6 +11,7 @@ import { initialConfig } from "@/config/server";
 import { ConfigProfile } from "@/models/ConfigProfile";
 import { logger } from "@/infra/logger";
 import { primeEpgSnapshot } from "@/content/epgServe";
+import { inBackground } from "@/services/portalPace";
 
 const CACHE_DURATION_MS = 12 * 60 * 60 * 1000;
 // Pause between 5-channel batches of the EPG fetch, to stay gentle on the portal. Overridable
@@ -52,8 +53,14 @@ export async function getEpgCache(): Promise<EpgCache | null> {
 
 /**
  * Fetches EPG for all filtered channels and writes to cache for the active profile.
+ * Its portal requests go through the background queue (services/portalPace.ts): one at a time,
+ * paced, waiting out "too many requests" — on a big portal the first guide takes hours.
  */
-export async function fetchAndCacheEpg(): Promise<EpgCache> {
+export function fetchAndCacheEpg(): Promise<EpgCache> {
+  return inBackground(fetchAndCacheEpgNow);
+}
+
+async function fetchAndCacheEpgNow(): Promise<EpgCache> {
   logger.info("Fetching fresh EPG data...");
 
   const activeProfile = await ConfigProfile.findOne({ where: { isActive: true } });
@@ -81,6 +88,16 @@ export async function fetchAndCacheEpg(): Promise<EpgCache> {
 
   logger.info(`Starting EPG fetch for ${filteredChannels.length} channels...`);
 
+  // A channel the portal still refuses keeps the guide it had (read once, on the first failure)
+  // instead of being stored empty.
+  let previous: Record<string, EPG_List[]> | null | undefined;
+  const previousFor = async (id: string): Promise<EPG_List[]> => {
+    if (previous === undefined) previous = (await readEpgCache(profileId).catch(() => null))?.data ?? null;
+    return previous?.[id] ?? [];
+  };
+  let failed = 0;
+  const startedAt = Date.now();
+
   for (let i = 0; i < filteredChannels.length; i += CONCURRENCY_LIMIT) {
     const chunk = filteredChannels.slice(i, i + CONCURRENCY_LIMIT);
 
@@ -90,8 +107,9 @@ export async function fetchAndCacheEpg(): Promise<EpgCache> {
           const epg = await serverManager.getProvider().getEPG(channel.id);
           return { id: channel.id, epg: epg.js || [] };
         } catch (error) {
+          failed++;
           logger.error(`EPG fetch error for channel ${channel.id}: ${error}`);
-          return { id: channel.id, epg: [] };
+          return { id: channel.id, epg: await previousFor(channel.id) };
         }
       })
     );
@@ -103,6 +121,11 @@ export async function fetchAndCacheEpg(): Promise<EpgCache> {
 
     // FIX 3: THE MAGIC STICK - Yield control back to Event Loop
     await new Promise(resolve => setImmediate(resolve));
+
+    const done = Math.min(i + CONCURRENCY_LIMIT, filteredChannels.length);
+    if (done % 500 < CONCURRENCY_LIMIT && done < filteredChannels.length) {
+      logger.info(`EPG fetch: ${done}/${filteredChannels.length} channels (${Math.round((Date.now() - startedAt) / 60000)} min)`);
+    }
     
     if (BATCH_DELAY_MS() > 0 && i + CONCURRENCY_LIMIT < filteredChannels.length) {
       await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS()));
@@ -112,7 +135,8 @@ export async function fetchAndCacheEpg(): Promise<EpgCache> {
   const cache: EpgCache = { timestamp: new Date(), data: epgData };
   await writeEpgCache(cache, profileId);
 
-  logger.info("EPG cache updated.");
+  previous = null;
+  logger.info(`EPG cache updated: ${filteredChannels.length} channels in ${Math.round((Date.now() - startedAt) / 60000)} min${failed ? `, ${failed} kept their previous guide (portal refused)` : ""}.`);
   // Rebuild the served snapshot (full-guide gzip + programme windows) now, not on the first
   // client request after the refresh.
   primeEpgSnapshot();

@@ -17,6 +17,7 @@ import NodeCache from "node-cache";
 import { logger } from "@/infra/logger";
 import { CircuitBreaker } from "@/streaming/circuitBreaker";
 import { requestMetrics, PortalRequestCategory } from "@/services/RequestMetrics";
+import { pacedRequest } from "@/services/portalPace";
 
 // Xtream's action names are explicit about what they're for, unlike the Stalker
 // portal's shared type:"vod" — so this classification is exact, not best-effort.
@@ -173,7 +174,7 @@ export class XtreamClient implements IProvider {
       return this.inFlight.get(cacheKey)!;
     }
 
-    const request = axios
+    const request = pacedRequest(() => axios
       .get(this.getApiUrl(), {
         params: {
           username: this.username,
@@ -186,7 +187,7 @@ export class XtreamClient implements IProvider {
           "Accept-Encoding": "gzip, deflate, br",
         },
         timeout: PROVIDER_TIMEOUT(),
-      })
+      }))
       .then((response) => {
         this.breaker.recordSuccess();
         if (useCache) this.cache.set(cacheKey, response.data);
@@ -194,7 +195,8 @@ export class XtreamClient implements IProvider {
         return response.data;
       })
       .catch((error) => {
-        this.breaker.recordFailure();
+        // 429: the portal is up but wants fewer requests (services/portalPace.ts slows down).
+        if (!(axios.isAxiosError(error) && error.response?.status === 429)) this.breaker.recordFailure();
         logger.error(`XtreamClient request failed: ${error?.message ?? error}`);
         requestMetrics.record(classifyXtreamRequest(params), "error", axios.isAxiosError(error) ? error.response?.status : undefined);
         throw error;

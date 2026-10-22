@@ -83,6 +83,7 @@ const DEFS: SettingDef[] = [
   { key: "cbFailureWindowMs", env: "CB_FAILURE_WINDOW_MS", type: "number", default: 60000, min: 1000, max: 3600000, group: "Provider tuning", label: "Circuit breaker: window (ms)", apply: "live" },
   { key: "cbCooldownMs", env: "CB_COOLDOWN_MS", type: "number", default: 30000, min: 1000, max: 3600000, group: "Provider tuning", label: "Circuit breaker: cooldown (ms)", apply: "live" },
   { key: "streamIdleTimeoutMs", env: "STREAM_IDLE_TIMEOUT_MS", type: "number", default: 60000, min: 5000, max: 3600000, group: "Provider tuning", label: "\"Now watching\" ends after idle (ms)", apply: "live" },
+  { key: "portalBackgroundGapMs", env: "PORTAL_BACKGROUND_GAP_MS", type: "number", default: 1000, min: 0, max: 60000, group: "Provider tuning", label: "Pause between background portal requests (ms)", help: "The guide download, catalog warm and catch-up send one request at a time with this pause between, so a first setup on a big portal takes hours instead of flooding it. When the portal answers \"too many requests\" (429) they pause and slow down further by themselves. Playing never waits for it.", apply: "live" },
   { key: "epgBatchDelayMs", env: "EPG_FETCH_BATCH_DELAY_MS", type: "number", default: 500, min: 0, max: 60000, group: "Provider tuning", label: "Pause between guide batches (ms)", apply: "live" },
 
   // Local libraries

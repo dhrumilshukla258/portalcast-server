@@ -1,3 +1,4 @@
+import { inBackground } from "@/services/portalPace";
 import { rememberEpisode } from "@/content/episodeIndex";
 import zlib from "zlib";
 import { promisify } from "util";
@@ -546,7 +547,12 @@ async function getOrRefreshSeriesListInner(categoryId: string): Promise<any[]> {
   return result;
 }
 
-export async function warmSeriesCache(): Promise<boolean> {
+// Portal requests go through the background queue (services/portalPace.ts).
+export function warmSeriesCache(): Promise<boolean> {
+  return inBackground(() => warmSeriesCacheNow());
+}
+
+async function warmSeriesCacheNow(): Promise<boolean> {
   if (seriesWarmRunning) { logger.info("[XtreamSeries] Warm already running, skipping"); return false; }
   seriesWarmRunning = true;
   let newContentFound = false;
@@ -622,7 +628,12 @@ export async function warmSeriesCache(): Promise<boolean> {
   return newContentFound;
 }
 
-export async function warmSeriesInfoCache(): Promise<void> {
+// Portal requests go through the background queue (services/portalPace.ts).
+export function warmSeriesInfoCache(): Promise<void> {
+  return inBackground(() => warmSeriesInfoCacheNow());
+}
+
+async function warmSeriesInfoCacheNow(): Promise<void> {
   const genres = await readGenres("series");
   const provider = serverManager.getProvider();
   const seen = new Set<number>();
@@ -776,7 +787,12 @@ export interface CatchupScanOptions {
 // the difference between "ran and found nothing to change" and "didn't run
 // at all," since silently treating a skip as a completed pass would advance
 // past categories that were never actually checked.
-export async function catchupScan(options: CatchupScanOptions = {}): Promise<boolean> {
+// Portal requests go through the background queue (services/portalPace.ts).
+export function catchupScan(options: CatchupScanOptions = {}): Promise<boolean> {
+  return inBackground(() => catchupScanNow(options));
+}
+
+async function catchupScanNow(options: CatchupScanOptions = {}): Promise<boolean> {
   const { genreIds, onRemoved, throttleMs = 0 } = options;
   const genreFilter = genreIds ? new Set(genreIds.map(String)) : null;
   if (catchupRunning) { logger.info("[Catchup] Already running, skipping"); return false; }
@@ -1082,7 +1098,12 @@ export async function cleanupGenres(): Promise<void> {
   }
 }
 
-export async function warmVodCache(): Promise<boolean> {
+// Portal requests go through the background queue (services/portalPace.ts).
+export function warmVodCache(): Promise<boolean> {
+  return inBackground(() => warmVodCacheNow());
+}
+
+async function warmVodCacheNow(): Promise<boolean> {
   if (vodWarmRunning) { logger.info("[XtreamVod] Warm already running, skipping"); return false; }
   vodWarmRunning = true;
   let newContentFound = false;

@@ -21,6 +21,7 @@ import { logger } from "@/infra/logger";
 import { CircuitBreaker } from "@/streaming/circuitBreaker";
 import { requestMetrics, PortalRequestCategory } from "@/services/RequestMetrics";
 import { recordLinkTime, type LinkKind } from "@/services/linkTimings";
+import { pacedRequest } from "@/services/portalPace";
 
 // p-limit is ESM-only (v4+); ts-node-dev runs this file as CommonJS, so a
 // static import throws ERR_REQUIRE_ESM at dev-server startup. Load it lazily
@@ -61,6 +62,8 @@ async function httpRequest<T = any>(
     method?: string;
     headers?: Record<string, string>;
     timeout?: number;
+    // Background work leaves 429 retries to services/portalPace.ts.
+    skipRetry?: boolean;
   } = { timeout: 120000 },
 ): Promise<T> {
   return httpClient
@@ -70,7 +73,8 @@ async function httpRequest<T = any>(
       method: options.method || "GET",
       headers: options.headers,
       timeout: PROVIDER_TIMEOUT(),
-    })
+      skipRetry: options.skipRetry,
+    } as any)
     .then((res) => {
       if (res.status !== 200) {
         throw new Error(`Request failed with status ${res.status} for URL: ${url}`);
@@ -620,7 +624,7 @@ export class StalkerAPI implements IProvider {
 
         try {
           const requestLimit = await getRequestLimit();
-          const response = await requestLimit(async () => {
+          const response = await pacedRequest((background) => requestLimit(async () => {
             return httpRequest(
               url,
               { ...params, uid: this.uid, JsHttpRequest: "1-xml" },
@@ -632,10 +636,11 @@ export class StalkerAPI implements IProvider {
                   method: config.method,
                   headers: config.headers as Record<string, string>,
                   timeout: config.timeout,
+                  skipRetry: background,
                 };
               })(),
             );
-          });
+          }));
           requestMetrics.record(classifyStalkerRequest(params), "success");
 
           if (
@@ -685,8 +690,9 @@ export class StalkerAPI implements IProvider {
               }
               continue;
             }
-          } else {
-            // Network/timeout errors count against the circuit breaker; auth errors do not
+          } else if (statusCode !== 429) {
+            // Network/timeout errors count against the circuit breaker; auth errors and 429
+            // ("too many requests": the portal is up, services/portalPace.ts slows down) do not
             this.breaker.recordFailure();
           }
           throw error;
