@@ -90,5 +90,7 @@ test("matches from the TV guide: first airing, no replays, highlights or archive
   assert.equal(odi.competition, "One-Day International Cricket");
   assert.equal(odi.start, (now + 3600) * 1000);
   assert.deepEqual(odi.channels.map((c: any) => c.channelId), ["1", "2"]);
-  assert.deepEqual(guideGamesFrom(progs, ["Football"], now), [], "only sports the guide covers");
+  // Every sport is read from the guide, each only for viewers who follow it.
+  assert.deepEqual(guideGamesFrom(progs, ["Football"], now).map((g: any) => g.title), ["Everton v Chelsea"]);
+  assert.deepEqual(guideGamesFrom(progs, ["Tennis"], now), []);
 });

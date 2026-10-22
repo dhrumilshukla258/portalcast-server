@@ -55,20 +55,40 @@ broadcasters from the schedule and "Find channel" (Search on Live TV for the fir
 
 Tests: `test/sports.test.ts`.
 
-## Matches from the TV guide (cricket, tennis)
+## Matches from the TV guide (every sport)
 
-The free schedule is thin for cricket (8 events on 2026-10-22) while the owner's guide shows
-plenty. For a viewer's sports the guide covers well (`GUIDE_SPORTS`: cricket, tennis), matches
-are also read from the guide itself (`guideGamesFrom`, pure and tested): the game is the
-programme, so its channel and time need no matching. A name counts when it has the sport's words
-and two sides (" v " / " vs "), is not highlights / countdown / mini / filler / bitesize and the
-like, is not an archive airing (starts with a year), and only its first airing is used; a title
-airing more than 3 different times in the guide is a replay unless it says "Live". On the
-owner's guide (2026-10-22 10:54, 543k programmes) this gave 12 cricket matches over a day and a
-half. One scan per guide, hour and set of sports, logged as `[sports] guide games`.
+The owner's IPTV guide is the best record of what is on (owner: "our IPTV has an EPG, use it").
+Survey of it (2026-10-22): 1,227 channels in 7 sports groups (SPORTS, CRICKET, SPORTS 4K UHD,
+SPORTS PPV EU, SPORTS PPV EVENTS, SPORTS | DAZN & ESPN PPV, SPORTS REPLAYS), 45k programmes;
+football and cricket ~160 match listings each, then combat sports, NFL/CFL, NBA, NHL, MLB,
+tennis, F1/MotoGP, rugby, and sports the free schedule has nothing of: kabaddi, field hockey,
+volleyball, badminton, wrestling. Those five can be chosen in Choose sports ("from the TV
+guide"; `GUIDE_ONLY`, no schedule file is fetched for them).
+
+`guideGamesFrom` (pure, tested) turns programmes into games; the game is the programme, so its
+channel and time need no matching. Per sport (`GUIDE_SPORTS`, first match wins):
+
+- `sides`: the name has the sport's words and two sides (" v ", " vs ", " at "), or, for US
+  leagues named by team only ("Toronto Raptors vs. New York Knicks"), two DIFFERENT team names
+  of that league (`teams`; "Chiefs v Arrows" was cricket, "Teen Titans Go! Vs. Teen Titans" a
+  cartoon); their competition is then the league ("NHL", "NBA", "NFL / CFL", "MLB").
+- `live`: events without sides (tennis, golf, badminton, wrestling) only when the name says Live.
+- `race`: motorsport sessions (race, qualifying, sprint, Grand Prix) or Live.
+
+Never: highlights / destaques / resumen, countdowns, minis, fillers, previews, reviews, shows,
+studio, analysis and the like; archive airings (a name starting with a year, or a season before
+last year: "LaLiga 13/14"); channels of a replays group ("SPORTS REPLAYS", 204 channels); a
+title airing more than 3 different times unless it says Live (one "4th T20: India vs West
+Indies" aired 408 times). Only the first airing is used; the same two sides within 3 hours
+(other channels, "vs" / "at") are one game with all their channels. Names are split into title
+and competition ("1st ODI: India v West Indies" | "One-Day International Cricket"; "ISL 2026-27
+MD 1" | "Bengaluru FC vs Chennaiyin FC").
+
+On the owner's guide of 2026-10-22 10:54 (543k programmes): 58 football, 41 motorsport sessions,
+13 NBA, 12 cricket, 11 NHL, 6 combat, 5 NFL/CFL, 1 tennis. The guide is scanned once per guide
+and hour for every sport (`guideGamesAll`), each viewer's sports filtered from that; logged as
+`[sports] guide games`.
 
 A guide match that is also a schedule game (same sport, both teams named, within 6 hours) is
 merged into the schedule's game, which takes the guide's channels when the strict match found
-none. Guide games carry `league: "tv-guide"`, `competition` from the name's tail
-("One-Day International Cricket") or "On TV".
-
+none. Guide games carry `league: "tv-guide"`.

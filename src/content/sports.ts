@@ -22,6 +22,13 @@ import crypto from "crypto";
 import { setting, onSettingChange } from "@/config/settings";
 import { logger } from "@/infra/logger";
 import { getEpgSnapshot, forEachProgramme, guideEnd, type Snapshot } from "@/content/epgServe";
+import { readChannels, readGenres } from "@/infra/storage";
+import { ConfigProfile } from "@/models/ConfigProfile";
+
+async function activeProfileIdForSports(): Promise<number | undefined> {
+  const p = await ConfigProfile.findOne({ where: { isActive: true }, attributes: ["id"] });
+  return p?.id;
+}
 
 const SOURCE = "https://sporting-events.org/";
 const DATA_BASE = "https://sporting-events.org/data/";
@@ -52,7 +59,7 @@ export const MAX_DAYS = 45;
  * this order; what a viewer can choose from ("Choose sports"). Names from the slug, with the
  * acronyms and accents put right.
  */
-export const CATALOGUE: string[] = ["premier-league", "la-liga", "serie-a", "bundesliga", "ligue-1", "champions-league", "europa-league", "conference-league", "fa-cup", "nations-league", "fifa-world-cup", "copa-america", "football", "cricket", "ipl", "the-ashes", "champions-trophy", "tennis", "wimbledon", "french-open", "australian-open", "us-open-tennis", "atp-finals", "davis-cup", "table-tennis", "formula-1", "motogp", "nascar", "indycar", "wrc", "le-mans", "motorsport", "nba", "basketball", "march-madness", "nfl", "american-football", "college-football", "super-bowl", "nhl-ice-hockey", "ice-hockey", "stanley-cup", "mlb", "baseball", "world-series", "rugby-union", "rugby-league", "six-nations", "premiership-rugby", "nrl", "golf", "the-masters", "us-open-golf", "pga-championship", "the-open-championship", "ryder-cup", "mma", "boxing", "darts", "premier-league-darts", "pdc-world-championship", "snooker", "world-snooker-championship", "athletics", "diamond-league", "world-athletics-championships", "cycling", "tour-de-france", "vuelta-a-espana", "giro-ditalia", "horse-racing", "royal-ascot", "cheltenham-festival", "grand-national", "kentucky-derby", "melbourne-cup", "swimming", "rowing", "surfing", "winter-sports", "esports"];
+export const CATALOGUE: string[] = ["premier-league", "la-liga", "serie-a", "bundesliga", "ligue-1", "champions-league", "europa-league", "conference-league", "fa-cup", "nations-league", "fifa-world-cup", "copa-america", "football", "cricket", "ipl", "the-ashes", "champions-trophy", "tennis", "wimbledon", "french-open", "australian-open", "us-open-tennis", "atp-finals", "davis-cup", "table-tennis", "formula-1", "motogp", "nascar", "indycar", "wrc", "le-mans", "motorsport", "nba", "basketball", "march-madness", "nfl", "american-football", "college-football", "super-bowl", "nhl-ice-hockey", "ice-hockey", "stanley-cup", "mlb", "baseball", "world-series", "rugby-union", "rugby-league", "six-nations", "premiership-rugby", "nrl", "golf", "the-masters", "us-open-golf", "pga-championship", "the-open-championship", "ryder-cup", "mma", "boxing", "darts", "premier-league-darts", "pdc-world-championship", "snooker", "world-snooker-championship", "athletics", "diamond-league", "world-athletics-championships", "cycling", "tour-de-france", "vuelta-a-espana", "giro-ditalia", "horse-racing", "royal-ascot", "cheltenham-festival", "grand-national", "kentucky-derby", "melbourne-cup", "swimming", "rowing", "surfing", "winter-sports", "esports", "kabaddi", "field-hockey", "volleyball", "badminton", "wrestling"];
 const NAME_FIXES: Record<string, string> = {
   ipl: "IPL", nba: "NBA", nfl: "NFL", mlb: "MLB", nrl: "NRL", mma: "MMA", wrc: "WRC", motogp: "MotoGP", nascar: "NASCAR",
   indycar: "IndyCar", "nhl-ice-hockey": "NHL", "fa-cup": "FA Cup", "formula-1": "Formula 1", "ligue-1": "Ligue 1",
@@ -63,6 +70,8 @@ const NAME_FIXES: Record<string, string> = {
   football: "Football (all)", basketball: "Basketball (all)", tennis: "Tennis (all)", golf: "Golf (all)", cricket: "Cricket (all)",
   motorsport: "Motorsport (all)", "american-football": "American football (all)", "ice-hockey": "Ice hockey (all)",
   baseball: "Baseball (all)", athletics: "Athletics (all)", cycling: "Cycling (all)", "horse-racing": "Horse racing (all)",
+  kabaddi: "Kabaddi (from the TV guide)", "field-hockey": "Field hockey (from the TV guide)",
+  volleyball: "Volleyball (from the TV guide)", badminton: "Badminton (from the TV guide)", wrestling: "Wrestling: WWE, AEW, TNA (from the TV guide)",
 };
 export function leagueName(slug: string): string {
   return NAME_FIXES[slug] ?? slug.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
@@ -114,6 +123,11 @@ const SPORT_OF: [RegExp, string][] = [
   [/cycling|tour-de-france|vuelta|giro/, "Cycling"],
   [/swimming/, "Swimming"], [/rowing/, "Rowing"], [/surfing/, "Surfing"], [/winter-sports/, "Winter sports"],
   [/esports/, "Esports"],
+  [/kabaddi/, "Kabaddi"],
+  [/field-hockey/, "Field hockey"],
+  [/volleyball/, "Volleyball"],
+  [/badminton/, "Badminton"],
+  [/wrestling/, "Wrestling"],
   [/darts|pdc|snooker/, "Darts and snooker"],
   [/rugby|six-nations|nrl/, "Rugby"],
   [/nba|basketball|march-madness/, "Basketball"],
@@ -277,14 +291,67 @@ async function matchGames(snap: Snapshot, games: Game[]): Promise<Map<string, Ga
 // only when the title airs at most 3 different times in the guide unless it says "Live" (one
 // "4th T20: India vs West Indies" aired 408 times: a replay).
 
-const GUIDE_SPORTS: Record<string, RegExp> = {
-  Cricket: / (?:cricket|t20i?|odi|ipl|big bash|bbl|psl|cpl|test match|ranji trophy|sheffield shield|super smash) /,
-  Tennis: / (?:tennis|atp|wta|wimbledon|roland garros|davis cup) /,
-};
-const GUIDE_SKIP = / (?:highlights?|hl|hls|hlts|countdown|mini|fillers?|bitesize|magic|wonder|preview|review|rewind|classics?|best of|replay|repeat|recap|reaction|extra|build up|documentary|story|stories|legends) /;
-const SIDES = / (?:v|vs) /;
+/**
+ * Every sport, as the guide names it (owner, 2026-10-22: "our IPTV has an EPG, use it").
+ * `sides`: a match names two sides ("India v West Indies", "Roma vs. Genoa"); `live`: an
+ * event without sides (a tennis tournament, a golf round) counts only when the name says Live;
+ * `race`: motorsport, a session (race, qualifying, sprint, Grand Prix) or Live. First matching
+ * sport wins, so ice hockey comes before field hockey and darts before football.
+ */
+// Sports surveyed in the owner's guide (2026-10-22: 1,227 channels in 7 sports groups, 45k
+// programmes): football and cricket ~160 match listings each, then combat sports, NFL/CFL,
+// NBA, MLB, tennis, F1, rugby; and sports the free schedule has nothing of: kabaddi, field
+// hockey, volleyball, badminton, wrestling. US teams are often named without the league
+// ("Toronto Raptors vs. New York Knicks", "Brewers at Dodgers"), hence the team names; a
+// match by team names alone needs BOTH sides to be that league's teams ("Chiefs v Arrows" and
+// "Dolphins v Badgers" were South African cricket).
+const GUIDE_SPORTS: { sport: string; words: RegExp; teams?: RegExp; mode: "sides" | "live" | "race"; league?: string }[] = [
+  { sport: "Cricket", words: / (?:cricket|t20i?|t10|odi|one day international|icc|cwc|acc|asia cup|champions trophy|ipl|big bash|bbl|psl|cpl|sa20|ilt20|the hundred|test match|ranji trophy|sheffield shield|super smash|legends league|world championship of legends) /, mode: "sides" },
+  { sport: "Kabaddi", words: / (?:kabaddi|pkl) /, mode: "sides" },
+  { sport: "Volleyball", words: / (?:volleyball|vnl) /, mode: "sides" },
+  { sport: "Badminton", words: / (?:badminton|bwf) /, mode: "live" },
+  { sport: "Wrestling", words: / (?:wwe|aew|tna|njpw|smackdown|raw|wrestling) /, mode: "live" },
+  { sport: "Ice hockey", words: / (?:nhl|ice hockey|khl) /, teams: / (?:maple leafs|canadiens|bruins|blackhawks|penguins|oilers|flames|canucks|avalanche|lightning|capitals|islanders|flyers|sabres|senators|red wings|predators|golden knights|hurricanes|kraken|rangers|sharks|devils|stars|blues|wild|ducks|kings|jets|panthers|utah hockey club|mammoth|senators) /g, mode: "sides", league: "NHL" },
+  { sport: "Field hockey", words: / (?:field hockey|hockey india league|fih|hockey) /, mode: "sides" },
+  { sport: "Basketball", words: / (?:nba|wnba|basketball|euroleague|nbl) /, teams: / (?:hawks|celtics|nets|hornets|bulls|cavaliers|mavericks|nuggets|pistons|warriors|rockets|pacers|clippers|lakers|grizzlies|bucks|timberwolves|pelicans|knicks|thunder|76ers|suns|trail blazers|spurs|raptors|wizards|magic|heat|jazz|kings|blazers) /g, mode: "sides", league: "NBA" },
+  { sport: "American football", words: / (?:nfl|american football|college football|ncaa football) /, teams: / (?:falcons|ravens|bills|bears|bengals|browns|cowboys|broncos|packers|texans|colts|jaguars|chiefs|raiders|chargers|rams|dolphins|vikings|patriots|saints|eagles|steelers|49ers|seahawks|buccaneers|titans|commanders|alouettes|roughriders|blue bombers|elks|argonauts|tiger cats|stampeders|redblacks|cfl|cardinals|giants|jets|panthers|lions|titans|bc lions) /g, mode: "sides", league: "NFL / CFL" },
+  { sport: "Baseball", words: / (?:mlb|baseball) /, teams: / (?:dodgers|yankees|mets|red sox|cubs|white sox|brewers|guardians|astros|braves|phillies|padres|mariners|orioles|blue jays|twins|royals|nationals|marlins|pirates|rockies|diamondbacks|giants|cardinals|rangers|tigers|reds|rays|athletics|angels) /g, mode: "sides", league: "MLB" },
+  { sport: "Rugby", words: / (?:rugby|six nations|nrl|super rugby|sevens|top 14) /, mode: "sides" },
+  { sport: "Darts and snooker", words: / (?:darts|snooker|pdc) /, mode: "sides" },
+  { sport: "Combat sports", words: / (?:ufc|boxing|mma|fight night|one championship|bellator|pfl|bkfc) /, mode: "sides" },
+  { sport: "Football", words: / (?:football|soccer|premier league|la ?liga|laliga|serie a|bundesliga|ligue 1|ligue1|champions league|europa league|conference league|youth league|isl|i league|fa cup|carabao cup|uefa|fifa|mls|saudi pro league|copa|super cup|durand cup|eredivisie|primeira liga) /, mode: "sides" },
+  { sport: "Tennis", words: / (?:tennis|atp|wta|wimbledon|roland garros|davis cup) /, mode: "live" },
+  { sport: "Golf", words: / (?:golf|pga|lpga|dp world tour|ryder cup|liv golf) /, mode: "live" },
+  { sport: "Motorsport", words: / (?:formula 1|f1|motogp|moto2|moto3|nascar|indycar|wrc|formula e|f2) /, mode: "race" },
+];
+const RACE = / (?:live|race|corrida|carrera|qualif\w*|sprint|grand prix|gp) /;
+const GUIDE_SKIP = / (?:highlights?|hl|hls|hlts|destaques|resumen|resumo|melhores|countdown|mini|fillers?|bitesize|magic|wonder|preview|review|rewind|classics?|best of|replay|repeat|recap|reaction|extra|build up|documentary|story|stories|legends|films?|inside|magazine|studio|analysis|post match|post race|pre race|prerace|pre qualifying|weekly|news|talk|show) /;
+// "Brewers at Dodgers" is the US way of naming two sides.
+const SIDES = / (?:v|vs|at) /;
 const ARCHIVE = /^ (?:19|20)\d\d /;
 const MAX_AIRINGS = 3;
+/** "13/14", "2013/14", "2013-14": a season before last year means an archive airing. */
+const SEASON = / (?:19|20)?(\d\d) (\d\d) /;
+function oldSeason(n: string, nowSec: number): boolean {
+  const m = SEASON.exec(n);
+  if (!m) return false;
+  const a = Number(m[1]), b = Number(m[2]);
+  if (b !== (a + 1) % 100) return false; // not a season, just two numbers
+  const yy = new Date(nowSec * 1000).getUTCFullYear() % 100;
+  return a < yy - 1;
+}
+
+/** The two sides of a match name, lowercased, in a fixed order ("" when it has none). */
+function sidesKey(title: string): string {
+  const n = norm(title).replace(/ (?:fc|afc|cf|sc|ac) /g, " ");
+  const parts = n.split(/ (?:v|vs|at) /);
+  if (parts.length !== 2) return "";
+  // Two words each: the end of the first side, the start of the second ("cleveland cavaliers |
+  // philadelphia 76ers"), so a competition before or after the sides does not count.
+  const first = parts[0].trim().split(" ").slice(-2).join(" ");
+  const second = parts[1].trim().split(" ").slice(0, 2).join(" ");
+  return [first, second].sort().join("|");
+}
 
 export interface GuideProgramme { channelId: string; name: string; start: number; stop: number }
 export interface GuideGame extends Game { end: number; channels: GameMatch[] }
@@ -292,29 +359,45 @@ export interface GuideGame extends Game { end: number; channels: GameMatch[] }
 /** "1st ODI: India v West Indies-One-Day International Cricket" -> title and competition. */
 function splitGuideName(name: string): { title: string; competition: string } {
   const clean = name.replace(/^\s*live\s*[:\-–]?\s*/i, "").trim();
-  // The first dash after the sides ("India v West Indies-One-Day International Cricket"; a dash
-  // inside the competition, "One-Day", stays in it).
   const sides = clean.search(/\s(?:v|vs)\.?\s/i);
+  // The competition after the sides, from the first dash after them ("1st ODI: India v West
+  // Indies-One-Day International Cricket"; a dash inside the competition, "One-Day", stays).
   const dash = sides >= 0 ? clean.indexOf("-", sides) : -1;
   if (dash > 0 && dash < clean.length - 3) {
     const tail = clean.slice(dash + 1).trim();
-    if (/[a-z]/i.test(tail)) return { title: clean.slice(0, dash).trim(), competition: tail };
+    // A competition is two words or more ("T20 Cricket"); one word is the team's own
+    // ("Hamilton Tiger-Cats").
+    if (/[a-z]/i.test(tail) && tail.split(/\s+/).length >= 2) return { title: clean.slice(0, dash).trim(), competition: tail };
   }
+  // Else the competition before the sides, ended by " - " or ": " ("ISL 2026-27 MD 1 -
+  // Bengaluru FC vs Chennaiyin FC", "NBA 26/27: Pistons v Celtics").
+  const before = sides > 0 ? clean.slice(0, sides) : "";
+  const sep = Math.max(before.lastIndexOf(" - "), before.lastIndexOf(": "));
+  if (sep > 2) return { title: clean.slice(sep + 2).trim(), competition: clean.slice(0, sep).trim() };
+  // No sides (a tournament, a race): the name is the title.
+  const colon = clean.indexOf(": ");
+  if (sides < 0 && colon > 2) return { title: clean.slice(colon + 2).trim(), competition: clean.slice(0, colon).trim() };
   return { title: clean, competition: "On TV" };
 }
 
 /** The matches in these programmes for `sports` (see the rules above). Pure; times in seconds. */
 export function guideGamesFrom(programmes: GuideProgramme[], sports: string[], nowSec: number): GuideGame[] {
-  const wanted = sports.filter((s) => GUIDE_SPORTS[s]);
-  if (!wanted.length) return [];
-  const byTitle = new Map<string, { sport: string; airings: GuideProgramme[]; live: boolean }>();
+  const rules = GUIDE_SPORTS.filter((r) => sports.includes(r.sport));
+  if (!rules.length) return [];
+  const byTitle = new Map<string, { sport: string; airings: GuideProgramme[]; live: boolean; league?: string }>();
   for (const p of programmes) {
     const n = norm(p.name);
-    if (!n || NOT_LIVE.test(n) || GUIDE_SKIP.test(n) || ARCHIVE.test(n) || !SIDES.test(n)) continue;
-    const sport = wanted.find((s) => GUIDE_SPORTS[s].test(n));
-    if (!sport) continue;
+    if (!n || NOT_LIVE.test(n) || GUIDE_SKIP.test(n) || ARCHIVE.test(n)) continue;
+    // The first sport whose words match, of all sports (a darts match is not football even
+    // when the viewer only follows football); kept only when the viewer follows it.
+    // By team names: two DIFFERENT teams ("Teen Titans Go! Vs. Teen Titans" is one name twice).
+    const rule = GUIDE_SPORTS.find((r) => r.words.test(n) || (!!r.teams && new Set(n.match(r.teams) ?? []).size >= 2));
+    if (!rule || !sports.includes(rule.sport) || oldSeason(n, nowSec)) continue;
+    const ok = rule.mode === "sides" ? SIDES.test(n) : rule.mode === "live" ? / live /.test(n) : RACE.test(n);
+    if (!ok) continue;
+    const sport = rule.sport;
     let t = byTitle.get(n);
-    if (!t) byTitle.set(n, (t = { sport, airings: [], live: / live /.test(n) }));
+    if (!t) byTitle.set(n, (t = { sport, airings: [], live: / live /.test(n), league: rule.league }));
     t.airings.push(p);
   }
   const out: GuideGame[] = [];
@@ -325,7 +408,10 @@ export function guideGamesFrom(programmes: GuideProgramme[], sports: string[], n
     const at = t.airings.filter((a) => Math.abs(a.start - first) <= 600);
     const end = Math.max(...at.map((a) => a.stop));
     if (end <= nowSec) continue;
-    const { title, competition } = splitGuideName(at[0].name);
+    const split = splitGuideName(at[0].name);
+    const title = split.title;
+    // Found by team names, the name has no competition: the league's ("NHL").
+    const competition = split.competition === "On TV" && t.league ? t.league : split.competition;
     const startMs = first * 1000;
     out.push({
       id: "g" + crypto.createHash("sha1").update(`${key}|${first}`).digest("base64url").slice(0, 11),
@@ -345,31 +431,70 @@ export function guideGamesFrom(programmes: GuideProgramme[], sports: string[], n
       channels: [...new Map(at.map((a) => [a.channelId, { channelId: a.channelId, programme: a.name.slice(0, 160) }])).values()].slice(0, MAX_CHANNELS),
     });
   }
-  return out;
+  return mergeSameMatch(out);
+}
+
+/** Games of the same sport with the same two sides starting within 3 hours: one game. */
+function mergeSameMatch(games: GuideGame[]): GuideGame[] {
+  games.sort((a, b) => a.start! - b.start!);
+  const kept: GuideGame[] = [];
+  for (const g of games) {
+    const key = sidesKey(g.title);
+    const twin = key ? kept.find((k) => k.sport === g.sport && sidesKey(k.title) === key && Math.abs(k.start! - g.start!) < 3 * HOUR_MS) : undefined;
+    if (!twin) { kept.push(g); continue; }
+    for (const c of g.channels) if (twin.channels.length < MAX_CHANNELS && !twin.channels.some((x) => x.channelId === c.channelId)) twin.channels.push(c);
+    twin.end = Math.max(twin.end, g.end);
+    if (twin.competition === "On TV" && g.competition !== "On TV") twin.competition = g.competition;
+  }
+  return kept;
 }
 
 let guideCache: { key: string; result: Promise<GuideGame[]> } | null = null;
 
-/** Guide matches for `sports` now (one scan of the guide per guide, hour and set of sports). */
+/** Channel ids in a group whose name says replays (the owner's "SPORTS REPLAYS"); 10 minutes. */
+let replayCache: { at: number; ids: Set<string> } | null = null;
+async function replayChannels(): Promise<Set<string>> {
+  if (replayCache && Date.now() - replayCache.at < 10 * 60_000) return replayCache.ids;
+  const ids = new Set<string>();
+  try {
+    const profileId = await activeProfileIdForSports();
+    const [genres, channels] = await Promise.all([readGenres("channel", profileId), readChannels(profileId)]);
+    const replayGroups = new Set(genres.filter((g: any) => /replay/i.test(String(g.title ?? ""))).map((g: any) => String(g.id)));
+    for (const c of channels) if (replayGroups.has(String(c.tv_genre_id))) ids.add(String(c.id));
+  } catch { /* none known: nothing excluded */ }
+  replayCache = { at: Date.now(), ids };
+  return ids;
+}
+
+/**
+ * Guide matches for `sports` now: the guide is scanned once per guide and hour for every
+ * sport, and each viewer's sports are filtered from that (not one scan per set of sports).
+ */
 async function guideGames(sports: string[]): Promise<GuideGame[]> {
-  const wanted = sports.filter((s) => GUIDE_SPORTS[s]).sort();
-  if (!wanted.length) return [];
+  const all = await guideGamesAll();
+  return all.filter((g) => sports.includes(g.sport));
+}
+const ALL_GUIDE_SPORTS = [...new Set(GUIDE_SPORTS.map((r) => r.sport))];
+async function guideGamesAll(): Promise<GuideGame[]> {
+  const wanted = ALL_GUIDE_SPORTS;
   const snap = await getEpgSnapshot().catch(() => null);
   if (!snap) return [];
-  const key = `${snap.rowKey}:${Math.floor(Date.now() / HOUR_MS)}:${wanted.join(",")}`;
+  const key = `${snap.rowKey}:${Math.floor(Date.now() / HOUR_MS)}`;
   if (guideCache?.key !== key) {
     const t0 = Date.now();
     const result = (async () => {
       const nowSec = Math.floor(Date.now() / 1000);
       const programmes: GuideProgramme[] = [];
-      const pre = new RegExp(Object.values(GUIDE_SPORTS).map((r) => r.source).join("|"));
+      const pre = new RegExp(GUIDE_SPORTS.map((r) => r.words.source).join("|"));
+      const replays = await replayChannels();
       await forEachProgramme(snap, nowSec - 4 * 3600, guideEnd(snap) + 1, (channelId, name, start, stop) => {
-        // Only names of a wanted sport are kept (a few hundred of ~180k).
-        if (pre.test(norm(name))) programmes.push({ channelId, name, start, stop });
+        // Only names of a wanted sport are kept (a few hundred of ~180k); never a channel of
+        // a replays group ("SPORTS REPLAYS").
+        if (!replays.has(channelId) && pre.test(norm(name))) programmes.push({ channelId, name, start, stop });
       });
       // Titles aired several times count every airing in the guide, so all of them are passed.
       const games = guideGamesFrom(programmes, wanted, nowSec);
-      logger.info(`[sports] guide games: ${games.length} for ${wanted.join(", ")} from ${programmes.length} programmes, ${Date.now() - t0} ms`);
+      logger.info(`[sports] guide games: ${games.length} from ${programmes.length} sports programmes, ${Date.now() - t0} ms`);
       return games;
     })();
     result.catch(() => { if (guideCache?.key === key) guideCache = null; });
@@ -402,7 +527,11 @@ export function configuredLeagues(): string[] {
   return [...seen];
 }
 
+/** Sports the free schedule has no file for: their matches come from the TV guide only. */
+const GUIDE_ONLY = new Set(["kabaddi", "field-hockey", "volleyball", "badminton", "wrestling"]);
+
 async function fetchLeague(slug: string): Promise<League> {
+  if (GUIDE_ONLY.has(slug)) return { slug, competition: leagueName(slug), sport: sportOf(slug, ""), page: SOURCE, games: [] };
   const { data } = await axios.get(`${DATA_BASE}${slug}.json`, {
     timeout: 15000,
     maxContentLength: MAX_BYTES,
