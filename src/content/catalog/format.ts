@@ -4,20 +4,20 @@
 //
 // Header: { format, version, builtAt, checksum, counts, sections: [{ name, type, offset, length }] }
 // with offsets from the start of the file. Sections are written in name order; `checksum` is
-// sha256 over the section bytes in that order (computed by the builder worker). Loading reads
+// CHECKSUM (builder.ts) over the section bytes in that order, computed by the builder worker. Loading reads
 // and verifies the file in a worker, then transfers the one buffer: the main thread only makes
 // typed-array views over it.
 
 import fs from "fs";
 import path from "path";
 import { Worker } from "worker_threads";
-import type { Section } from "./builder";
+import { CHECKSUM, type Section } from "./builder";
 
-export const FORMAT = 1;
+export const FORMAT = 2; // 2: shaped list entries, sparse person details, sha1, no pool.len
 const MAGIC = Buffer.from("PCCAT01\n", "ascii");
 
 const TYPES: Record<string, { new (buf: ArrayBuffer, off: number, len: number): Section; BYTES_PER_ELEMENT: number }> = {
-  Uint8Array, Uint16Array, Int32Array, Uint32Array, Float64Array,
+  Uint8Array, Uint16Array, Int16Array, Int32Array, Uint32Array, Float64Array,
 };
 
 export interface FileHeader {
@@ -85,7 +85,7 @@ export function readSnapshotFile(file: string): Promise<{ header: FileHeader; se
         const len = buf.readUInt32LE(magic.length);
         const header = JSON.parse(buf.subarray(magic.length + 4, magic.length + 4 + len).toString("utf8"));
         if (header.format !== workerData.format) throw new Error("snapshot format " + header.format + ", expected " + workerData.format);
-        const hash = crypto.createHash("sha256");
+        const hash = crypto.createHash(workerData.checksum);
         for (const s of header.sections) hash.update(buf.subarray(s.offset, s.offset + s.length * workerData.sizes[s.type]));
         if (hash.digest("hex") !== header.checksum) throw new Error("snapshot checksum mismatch");
         // A private ArrayBuffer (readFileSync's may be pooled) that can be transferred.
@@ -95,7 +95,7 @@ export function readSnapshotFile(file: string): Promise<{ header: FileHeader; se
         parentPort.postMessage({ error: String(e && e.message || e) });
       }`;
     const sizes = Object.fromEntries(Object.entries(TYPES).map(([k, v]) => [k, v.BYTES_PER_ELEMENT]));
-    const worker = new Worker(source, { eval: true, workerData: { file, magic: MAGIC.toString("ascii"), format: FORMAT, sizes } });
+    const worker = new Worker(source, { eval: true, workerData: { file, magic: MAGIC.toString("ascii"), format: FORMAT, sizes, checksum: CHECKSUM } });
     let done = false;
     worker.once("message", (m: any) => {
       done = true;

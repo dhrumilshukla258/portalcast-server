@@ -42,6 +42,7 @@ Each table has a natural key, and the database refuses a second row with it. Wri
 - A name-only credit (NFO cast, no TMDB id) is the TMDB person when the full name has two or more words and exactly one TMDB person carries it; otherwise a separate name-only person. One-word and shared names are never guessed.
 - `test/ownership.test.ts` fails if any other module writes these tables (`npm test`; it also checks its own patterns catch the write forms used here).
 - Storage steps `unique-tags`, `unique-credits`, `merge-name-only-people` converted the live data (on the working copy: 8 repeated tag rows removed, 0 repeated credits, 40 name-only persons merged; 9 s plus the backup).
+- All of this packed in memory for reading: [[skill-catalog-snapshot]].
 
 ## Nightly jobs
 

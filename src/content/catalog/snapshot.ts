@@ -1,22 +1,29 @@
 // Read side of the catalog snapshot: typed-array views and the lookups the routes will use
 // (plan, Phase 1b). Nothing here allocates per row except the values a caller asks for.
 
-import { CHUNK_BITS, type Section } from "./builder";
-
-const CHUNK = 2 ** CHUNK_BITS;
+import { INT_NULL, type Section } from "./builder";
 
 export type TagKind = "genre" | "country" | "theme";
 export const CREDIT_KINDS = ["", "cast", "director", "creator", "writer"] as const;
+const PERSON_DETAILS = ["knownFor", "birthday", "deathday", "placeOfBirth", "detailsCheckedAt", "biography"] as const;
 
 export interface CreditRow { person: number; kind: string; role: string | null; order: number }
+
+/** A number column value: NaN (Float64Array) or INT_NULL (Int32Array) is NULL. */
+const numAt = (col: Section, i: number): number | null => {
+  const v = col[i];
+  if (col instanceof Int32Array) return v === INT_NULL ? null : v;
+  return Number.isNaN(v) ? null : v;
+};
 
 export class CatalogSnapshot {
   // ignoreBOM: keep a leading U+FEFF (some plots start with one; the default decoder drops it).
   private readonly dec = new TextDecoder("utf-8", { ignoreBOM: true });
+  private readonly chunk: number;
   private readonly poolChunks: Uint8Array[];
   private readonly poolStart: Uint32Array;
-  private readonly poolLen: Uint16Array;
-  private readonly listChunks: Uint8Array[];
+  /** Per list-entry shape: `"key":` prefixes, decoded on first use (four shapes on live data). */
+  private readonly shapeKeys: (string[] | undefined)[] = [];
   readonly copyCount: number;
   readonly personCount: number;
 
@@ -26,11 +33,9 @@ export class CatalogSnapshot {
     readonly counts: Record<string, number>,
     private readonly s: Record<string, Section>,
   ) {
-    const chunks = (prefix: string) => Object.keys(s).filter((k) => k.startsWith(prefix)).sort().map((k) => s[k] as Uint8Array);
-    this.poolChunks = chunks("pool.chunk.");
+    this.chunk = 2 ** (s["meta.chunkBits"] as Uint8Array)[0];
+    this.poolChunks = Object.keys(s).filter((k) => k.startsWith("pool.chunk.")).sort().map((k) => s[k] as Uint8Array);
     this.poolStart = s["pool.start"] as Uint32Array;
-    this.poolLen = s["pool.len"] as Uint16Array;
-    this.listChunks = chunks("list.chunk.");
     this.copyCount = (s["copy.byId"] as Int32Array).length;
     this.personCount = (s["person.id"] as Int32Array).length;
   }
@@ -42,12 +47,13 @@ export class CatalogSnapshot {
     return n;
   }
 
-  /** A pooled text by id; null for id 0. Each text lies inside one chunk. */
+  /** A pooled text by id; null for id 0. Texts lie back to back and chunks are stored trimmed,
+   *  so a text ends where the next one starts; when the next one opened a new chunk, subarray
+   *  stops at this chunk's end. */
   str(id: number): string | null {
     if (!id) return null;
-    const st = this.poolStart[id];
-    const local = st % CHUNK;
-    return this.dec.decode(this.poolChunks[Math.floor(st / CHUNK)].subarray(local, local + this.poolLen[id]));
+    const st = this.poolStart[id], c = Math.floor(st / this.chunk), base = c * this.chunk;
+    return this.dec.decode(this.poolChunks[c].subarray(st - base, this.poolStart[id + 1] - base));
   }
 
   private col(name: string): Section {
@@ -63,8 +69,7 @@ export class CatalogSnapshot {
 
   /** A numeric column of a copy; null when NULL. */
   copyNum(column: string, i: number): number | null {
-    const v = (this.col(`copy.${column}`) as Float64Array)[i];
-    return Number.isNaN(v) ? null : v;
+    return numAt(this.col(`copy.${column}`), i);
   }
 
   /** Copy index of a content id ("movie_123", "series_L4"), or -1. Binary search, no map. */
@@ -85,7 +90,7 @@ export class CatalogSnapshot {
   copiesByTmdb(type: "movie" | "series", tmdbId: number): number[] {
     const order = this.s["copy.byTmdb"] as Int32Array;
     const code = this.s["copy.typeCode"] as Uint8Array;
-    const tmdb = this.s["copy.tmdbId"] as Float64Array;
+    const tmdb = this.s["copy.tmdbId"]; // only copies with a TMDB id are in byTmdb
     const want = type === "series" ? 2 : 1;
     const cmp = (i: number) => code[i] - want || tmdb[i] - tmdbId;
     let lo = 0, hi = order.length;
@@ -127,7 +132,7 @@ export class CatalogSnapshot {
     }
     if (at < 0) return [];
     const person = this.s["credit.person"] as Int32Array, kind = this.s["credit.kind"] as Uint8Array;
-    const role = this.s["credit.role"] as Uint32Array, order = this.s["credit.order"] as Int32Array;
+    const role = this.s["credit.role"] as Uint32Array, order = this.s["credit.order"];
     const out: CreditRow[] = [];
     for (let k = keyOff[at]; k < keyOff[at + 1]; k++) {
       out.push({ person: person[k], kind: CREDIT_KINDS[kind[k]] ?? "", role: this.str(role[k]), order: order[k] });
@@ -144,19 +149,21 @@ export class CatalogSnapshot {
   }
 
   person(i: number) {
-    const t = (c: string) => this.str((this.s[`person.${c}`] as Uint32Array)[i]);
-    const tmdb = (this.s["person.tmdbId"] as Float64Array)[i];
+    const at = this.s["person.detail.at"] as Int32Array;
+    let lo = 0, hi = at.length - 1, d = -1;
+    while (lo <= hi) { const m = (lo + hi) >> 1; if (at[m] === i) { d = m; break; } if (at[m] < i) lo = m + 1; else hi = m - 1; }
+    const detail = (c: (typeof PERSON_DETAILS)[number]) => (d < 0 ? null : this.str((this.s[`person.detail.${c}`] as Uint32Array)[d]));
     return {
       id: (this.s["person.id"] as Int32Array)[i],
-      tmdbPersonId: Number.isNaN(tmdb) ? null : tmdb,
-      name: t("name") ?? "",
-      photo: t("photo"),
-      knownFor: t("knownFor"),
-      birthday: t("birthday"),
-      deathday: t("deathday"),
-      placeOfBirth: t("placeOfBirth"),
-      detailsCheckedAt: t("detailsCheckedAt"),
-      biography: t("biography"),
+      tmdbPersonId: numAt(this.s["person.tmdbId"], i),
+      name: this.str((this.s["person.name"] as Uint32Array)[i]) ?? "",
+      photo: this.str((this.s["person.photo"] as Uint32Array)[i]),
+      knownFor: detail("knownFor"),
+      birthday: detail("birthday"),
+      deathday: detail("deathday"),
+      placeOfBirth: detail("placeOfBirth"),
+      detailsCheckedAt: detail("detailsCheckedAt"),
+      biography: detail("biography"),
     };
   }
 
@@ -166,7 +173,7 @@ export class CatalogSnapshot {
     const keys = this.s["credit.keys"] as Uint32Array, keyOff = this.s["credit.keyOff"] as Int32Array;
     // The key of credit c: the last key whose run starts at or before c (binary search).
     const keyOf = (c: number) => { let lo = 0, hi = keys.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (keyOff[m] <= c) lo = m; else hi = m - 1; } return lo; };
-    const kind = this.s["credit.kind"] as Uint8Array, role = this.s["credit.role"] as Uint32Array, order = this.s["credit.order"] as Int32Array;
+    const kind = this.s["credit.kind"] as Uint8Array, role = this.s["credit.role"] as Uint32Array, order = this.s["credit.order"];
     const out = [];
     for (let k = off[i]; k < off[i + 1]; k++) {
       const c = list[k];
@@ -184,11 +191,34 @@ export class CatalogSnapshot {
     return out;
   }
 
-  /** A portal list entry exactly as cached (parsed on demand: only a page's worth at a time). */
+  private keysOfShape(sh: number): string[] {
+    let keys = this.shapeKeys[sh];
+    if (!keys) {
+      keys = (JSON.parse(this.str((this.s["list.shapes"] as Uint32Array)[sh])!) as string[]).map((k) => `${JSON.stringify(k)}:`);
+      this.shapeKeys[sh] = keys;
+    }
+    return keys;
+  }
+
+  /** A portal list entry exactly as cached (rebuilt from its shape and pooled values). */
   listItem(k: number): any {
-    const st = (this.s["list.itemStart"] as Uint32Array)[k], n = (this.s["list.itemLen"] as Uint16Array)[k];
-    const local = st % CHUNK;
-    return JSON.parse(this.dec.decode(this.listChunks[Math.floor(st / CHUNK)].subarray(local, local + n)));
+    const sh = (this.s["list.itemShape"] as Uint16Array)[k];
+    const off = this.s["list.valOff"] as Int32Array, vals = this.s["list.vals"] as Uint32Array;
+    if (sh === 0) return JSON.parse(this.str(vals[off[k]])!);
+    const keys = this.keysOfShape(sh);
+    let json = "{";
+    for (let j = 0, v = off[k]; v < off[k + 1]; j++, v++) json += (j ? "," : "") + keys[j] + this.str(vals[v]);
+    return JSON.parse(`${json}}`);
+  }
+
+  /** One field of a portal list entry (undefined when the entry has no such key), without
+   *  rebuilding the whole entry. */
+  listField(k: number, key: string): any {
+    const sh = (this.s["list.itemShape"] as Uint16Array)[k];
+    if (sh === 0) return this.listItem(k)?.[key];
+    const j = this.keysOfShape(sh).indexOf(`${JSON.stringify(key)}:`);
+    if (j < 0) return undefined;
+    return JSON.parse(this.str((this.s["list.vals"] as Uint32Array)[(this.s["list.valOff"] as Int32Array)[k] + j])!);
   }
 
   /** The copy (content_meta row) of a list entry, or -1 when it has none yet. */
