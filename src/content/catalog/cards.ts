@@ -15,6 +15,7 @@ import { ContentCountry } from "@/models/ContentCountry";
 import { peopleOf, personCredits, unpackPhoto, type PersonRow, type PersonCredit } from "@/content/people";
 import type { CatalogSnapshot } from "./snapshot";
 import { catalogReady, catalogChanges, COPY_COLUMNS, type CatalogChanges } from "./store";
+import { shadowCheck } from "./shadow";
 
 export interface TitleRows {
   /** content id -> row (the snapshot's columns, as stored; a Sequelize row for database reads). */
@@ -40,6 +41,21 @@ function snapshotRow(snap: CatalogSnapshot, i: number): Record<string, any> {
     else row[c.name] = snap.copyNum(c.name, i);
   }
   return row;
+}
+
+/** A row as comparable values (the snapshot's columns as the database holds them), for the
+ *  shadow check: a Sequelize row, a raw row and a snapshot row of the same data are equal. */
+function canonRow(r: any): unknown[] | null {
+  if (!r) return null;
+  return COPY_COLUMNS.map((c) => {
+    const v = r[c.name];
+    if (v === null || v === undefined) return null;
+    if (c.kind === "text") return String(v);
+    if (c.kind === "date") {
+      return v instanceof Date ? v.getTime() : Date.parse(String(v).replace(/^(\S+) (\S+) ?([+-]\d\d:?\d\d|Z)?$/, (_m: string, d: string, t: string, z?: string) => `${d}T${t}${z ?? "Z"}`));
+    }
+    return Number(v);
+  });
 }
 
 /** Copy index of a title unchanged since the snapshot, or -1 (read it from the database). */
@@ -90,6 +106,8 @@ export async function titleRows(ids: string[]): Promise<TitleRows> {
     for (const [id, g] of db.genres) out.genres.set(id, g);
     for (const [id, k] of db.countries) out.countries.set(id, k);
   }
+  const canon = (t: TitleRows) => JSON.stringify([...new Set(ids)].sort().map((id) => [id, canonRow(t.rows.get(id)), t.genres.get(id) ?? [], t.countries.get(id) ?? []]));
+  shadowCheck("card rows and tags", canon(out), async () => canon(await titleRowsFromDb(ids)));
   return out;
 }
 
@@ -139,9 +157,16 @@ export async function titleWithGroup(id: string): Promise<{ row: any; members: a
     if (!groupKey || !(await dirtyGroups(src)).has(groupKey)) {
       const row = snapshotRow(src.snap, i);
       const group = groupKey ? src.snap.groupOf(i).map((c) => (c === i ? row : snapshotRow(src.snap, c))) : [row];
-      return { row, members: [row, ...group.filter((g) => g.id !== row.id)] };
+      const found = { row, members: [row, ...group.filter((g) => g.id !== row.id)] };
+      const canon = (f: { members: any[] } | null) => JSON.stringify(f ? f.members.map(canonRow) : null);
+      shadowCheck("title versions", canon(found), async () => canon(await titleWithGroupFromDb(id)));
+      return found;
     }
   }
+  return titleWithGroupFromDb(id);
+}
+
+async function titleWithGroupFromDb(id: string): Promise<{ row: any; members: any[] } | null> {
   const row = await ContentMeta.findByPk(id);
   if (!row) return null;
   const group = row.groupKey ? await ContentMeta.findAll({ where: { groupKey: row.groupKey } }) : [row];
@@ -170,9 +195,16 @@ export async function variantRows(id: string, hidden: string[]): Promise<any[]> 
       const rows = src.snap.groupOf(i).map((c) => snapshotRow(src.snap, c)).filter((r) => !hide.has(r.id));
       // NULL sorts lowest, so last in DESC; ties keep stored order (the sort is stable).
       const rep = (r: any) => (r.isRepresentative === null ? -Infinity : r.isRepresentative);
-      return rows.sort((a, b) => rep(b) - rep(a) || binaryCmp(a.name, b.name));
+      rows.sort((a, b) => rep(b) - rep(a) || binaryCmp(a.name, b.name));
+      const canon = (list: any[]) => JSON.stringify(list.map(canonRow));
+      shadowCheck("versions picker", canon(rows), async () => canon(await variantRowsFromDb(id, hidden)));
+      return rows;
     }
   }
+  return variantRowsFromDb(id, hidden);
+}
+
+async function variantRowsFromDb(id: string, hidden: string[]): Promise<any[]> {
   const anchor = (await ContentMeta.findByPk(id, { raw: true })) as any;
   if (!anchor || !anchor.groupKey) return [];
   return ContentMeta.findAll({
@@ -187,6 +219,12 @@ export async function variantRows(id: string, hidden: string[]): Promise<any[]> 
 export async function titlePeople(keys: string[]): Promise<PersonRow[]> {
   const src = await source();
   if (!src) return peopleOf(keys);
+  const rows = await titlePeopleFrom(src, keys);
+  shadowCheck("cast and crew", JSON.stringify(rows), async () => JSON.stringify(await peopleOf(keys)));
+  return rows;
+}
+
+async function titlePeopleFrom(src: { snap: CatalogSnapshot; changes: CatalogChanges }, keys: string[]): Promise<PersonRow[]> {
   for (const key of [...new Set(keys)]) {
     let rows: PersonRow[] | null = null;
     if (!src.changes.has("credits", key)) {
@@ -253,5 +291,8 @@ export async function personTitles(id: number): Promise<PersonCredit[]> {
     const c = snap.copyIndex(k);
     add(k, c < 0 ? -1 : pickRep([c]));
   }
-  return [...out.values()].sort((a, b) => (Number(b.row.year) || 0) - (Number(a.row.year) || 0) || String(a.row.name).localeCompare(String(b.row.name)));
+  const titles = [...out.values()].sort((a, b) => (Number(b.row.year) || 0) - (Number(a.row.year) || 0) || String(a.row.name).localeCompare(String(b.row.name)));
+  const canon = (list: PersonCredit[]) => JSON.stringify(list.map((c) => [canonRow(c.row), c.roles, c.lead]));
+  shadowCheck("a person's titles", canon(titles), async () => canon(await personCredits(id)));
+  return titles;
 }

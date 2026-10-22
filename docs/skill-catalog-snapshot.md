@@ -15,6 +15,7 @@ The whole catalog packed in memory as typed arrays, so pages can be answered wit
 | `store.ts` | Load at start, rebuild after changes, status for admin; which cache version of each list the snapshot holds |
 | `views.ts` | The "All" view: browse with overrides, search, id lookups, changed lists |
 | `cards.ts` | Discover's title data: card rows and tags, a title's group, the versions list, cast and crew; anything changed since the build is read from the database |
+| `shadow.ts` | The shadow check of Discover answers against the database |
 | `all.ts` | What the routes call for "All": the view when the setting is on, `catalogUnion` when off (the one place that chooses) |
 
 ## What is in it
@@ -67,6 +68,10 @@ Measured on the working copy (production build): search p95 35.6 -> 8.8 ms for m
 - A group is read from the database when any title changed since the build belonged to it then or belongs to it now (the changed titles' current groupKeys are read once per change). A cast list is, when its credits changed or any person on it did.
 - `personTitles(id)` is `people.ts` `personCredits` over the snapshot (a person's credits are kept in stored order, as the database lists them by person). It reads the database whenever any title, tag or credit changed since the build, or the person did: which titles are theirs could be anything then. Checked: 2,999 people's title lists and pages identical; uncached page median 6.4 -> 2.8 ms, p95 43.9 -> 16.0 ms.
 - Checked: all 76,471 cast lists equal to `peopleOf` in order; 2,586 details and variants answers identical off vs on, and 2,600 after moving a version to another group, reordering a cast and renaming a person following the build. Median 6.9 -> 1.95 ms, p95 11.1 -> 3.3 ms.
+
+## Shadow check (shadow.ts)
+
+While the snapshot answers Discover's title data, 1 request in 20 is also answered from the database in the background and compared (rows as values, tags, versions, cast lists, a person's titles). At most one check runs at a time and at most one a second; a check during which the database changed is skipped. Differences are counted, the latest is kept with its place in the answer, and a warning is logged at most once a minute. Admin Overview shows the count under "Needs you" (`needs.catalogDifferences`) and the snapshot's version, size and checks (`health.catalog`). The "All" lists have no shadow: their old answer needs the union this replaces; they were compared off vs on before the switch. On the working copy: 25 checks in 25 s of mixed reads, 0 differences.
 
 ## Changes and rebuilds
 

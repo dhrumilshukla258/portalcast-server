@@ -13,6 +13,9 @@ import { requestMetrics } from "@/services/RequestMetrics";
 import { socketService } from "@/services/SocketService";
 import { logger } from "@/infra/logger";
 import { lastIntegrity } from "@/services/integrity";
+import { setting } from "@/config/settings";
+import { catalogSnapshot } from "@/content/catalog/store";
+import { shadowStatus } from "@/content/catalog/shadow";
 
 // Admin > Overview: everything the front page shows, in one small answer. The counts that
 // need the database are cached for 15 s (several open admin tabs polling cost one set of
@@ -80,12 +83,17 @@ export const overviewRoutes: ServerRoute[] = [
         const metrics = requestMetrics.snapshot();
         const health = iptvHealth();
         const mem = process.memoryUsage();
+        const snap = setting<boolean>("catalogSnapshot") ? catalogSnapshot() : null;
+        const shadow = shadowStatus();
         return {
           health: {
             iptv: health.iptv,
             iptvSince: health.since,
             uptimeSeconds: Math.round(process.uptime()),
             memoryMb: Math.round(mem.rss / 1048576),
+            // The in-memory catalog (content/catalog/), when on: its version and the shadow
+            // check of its answers against the database (plan, Phase 1b rollout).
+            catalog: snap ? { version: snap.version, sizeMb: Math.round(snap.bytes / 1048576), checked: shadow.checked, differed: shadow.differed } : undefined,
           },
           // Only what needs the admin; the page shows nothing here when all is well.
           needs: {
@@ -98,6 +106,8 @@ export const overviewRoutes: ServerRoute[] = [
             iptvOffline: health.iptv !== "online",
             // Repeats or orphans the nightly integrity job could not repair (normally 0).
             dataIssues: lastIntegrity()?.issues ?? 0,
+            // Answers from the in-memory catalog that differed from the database (normally 0).
+            catalogDifferences: snap ? shadow.differed : 0,
           },
           watching: watching(),
           runningJobs,

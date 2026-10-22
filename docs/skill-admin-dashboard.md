@@ -18,7 +18,7 @@ The React admin panel (`portalcast-webui`'s `Admin.tsx`) now has a **Content** t
 
 ### `GET /api/admin/overview` (`src/routes/admin/overview.ts`)
 
-The Admin front page in one answer: `health` (IPTV online, uptime, memory), `needs` (pending users, active broken streams, severe security events in 24 h, unmatched / missing local titles, failed jobs, IPTV offline), `watching` (stream sessions collapsed to one row per person and title), `runningJobs`, `today` (people signed in, connected devices, IPTV portal requests and failures, last hour's outbound count). The six database counts are cached 15 s and computed once for concurrent callers; the rest is in memory. 42 ms cold, 1–2 ms cached.
+The Admin front page in one answer: `health` (IPTV online, uptime, memory; `catalog`: the in-memory catalog's version, size and shadow checks when it is on), `needs` (pending users, active broken streams, severe security events in 24 h, unmatched / missing local titles, failed jobs, IPTV offline, `dataIssues`, `catalogDifferences`: answers of the in-memory catalog that differed from the database, see [[skill-catalog-snapshot]]), `watching` (stream sessions collapsed to one row per person and title), `runningJobs`, `today` (people signed in, connected devices, IPTV portal requests and failures, last hour's outbound count). The six database counts are cached 15 s and computed once for concurrent callers; the rest is in memory. 42 ms cold, 1–2 ms cached.
 
 ### `GET /api/admin/stats` (`src/routes/account/userManagement.ts`)
 
