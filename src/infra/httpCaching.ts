@@ -10,8 +10,8 @@
 //   each user's answers apart. `must-revalidate` also lets OkHttp (TV) store answers to
 //   requests that carry a Bearer token. Play links, progress, admin and anything that sets
 //   its own Cache-Control are left alone.
-// - With the in-memory catalog on, every /api answer carries `X-Catalog-Version` (and Home
-//   `X-Home-Version`), infra/answerVersion.ts. A catalog GET whose `v` equals the current
+// - With the in-memory catalog on, every /api answer carries `X-Catalog-Version` and
+//   `X-Home-Version` (infra/answerVersion.ts). A catalog GET whose `v` equals the current
 //   version is `private, max-age=1 year, immutable`: the apps keep it until the version moves.
 
 import crypto from "crypto";
@@ -47,10 +47,13 @@ export function registerHttpCaching(server: Server): void {
     if (!request.path.startsWith("/api/")) return h.continue;
     const iptv = iptvHealth().iptv;
     const version = await catalogAnswerVersion().catch(() => null);
-    const homeVersion = version && request.path === HOME_PATH ? homeAnswerVersion(version) : null;
+    // Both on every answer: an app whose screens all come from its cache still learns new
+    // versions from whatever else it asks (progress saves, status polls).
+    const homeVersion = version ? homeAnswerVersion(version) : null;
     if (r?.isBoom) {
       r.output.headers["X-IPTV"] = iptv;
       if (version) r.output.headers["X-Catalog-Version"] = version;
+      if (homeVersion) r.output.headers["X-Home-Version"] = homeVersion;
       return h.continue;
     }
     r?.header?.("X-IPTV", iptv);
