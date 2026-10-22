@@ -1,5 +1,5 @@
 import { fetchPerson } from "@/content/tmdb";
-import { personDetails, personCredits } from "@/content/people";
+import { personDetails } from "@/content/people";
 import { searchPeople, peopleIndexReady } from "@/content/peopleSearch";
 import { getCached, setCached } from "@/services/discoverCache";
 import { titleKeyOf } from "@/content/people";
@@ -17,7 +17,6 @@ import { Op } from "sequelize";
 import { authCheck } from "@/auth/jwt";
 import { ContentMeta, ContentType } from "@/models/ContentMeta";
 import { ContentGenre } from "@/models/ContentGenre";
-import { ContentCountry } from "@/models/ContentCountry";
 import { ContentTheme } from "@/models/ContentTheme";
 import { UserProgress } from "@/models/UserProgress";
 import { getActiveProfileId } from "@/routes/stalkerV2/shared";
@@ -27,7 +26,7 @@ import { UNCATEGORIZED_GENRE } from "@/content/metaEnrichment";
 import { logger } from "@/infra/logger";
 import { proxiedImageUrl } from "@/providers/portalAssets";
 import { getPublicOrigin } from "@/infra/publicUrl";
-import { titleRows, titleWithGroup, titlePeople, variantRows } from "@/content/catalog/cards";
+import { titleRows, titleWithGroup, titlePeople, variantRows, personTitles } from "@/content/catalog/cards";
 
 const PAGE_SIZE = 40;
 
@@ -110,17 +109,6 @@ function toMediaItem(row: any, genresById: Map<string, string[]>, countriesById:
   };
 }
 
-async function tagsByContentId(Model: typeof ContentGenre | typeof ContentCountry, contentIds: string[]): Promise<Map<string, string[]>> {
-  const map = new Map<string, string[]>();
-  if (contentIds.length === 0) return map;
-  const rows = await Model.findAll({ where: { contentId: { [Op.in]: contentIds } }, raw: true }) as any[];
-  for (const r of rows) {
-    const list = map.get(r.contentId) ?? [];
-    list.push(r.value);
-    map.set(r.contentId, list);
-  }
-  return map;
-}
 
 
 /**
@@ -199,9 +187,10 @@ async function personPage(id: number, origin: string): Promise<PersonPagePayload
     const person = await personDetails(id, fetchPerson);
     if (!person) return null;
     const hidden = await getHiddenContentKeySet();
-    const credits = (await personCredits(id)).filter((c) => !hidden.has(c.row.id));
+    // Their titles and those titles' tags: the catalog snapshot when it is on (content/catalog/cards.ts).
+    const credits = (await personTitles(id)).filter((c) => !hidden.has(c.row.id));
     const ids = credits.map((c) => c.row.id);
-    const [genresById, countriesById] = await Promise.all([tagsByContentId(ContentGenre, ids), tagsByContentId(ContentCountry, ids)]);
+    const { genres: genresById, countries: countriesById } = await titleRows(ids);
     const items = credits.map((c) => ({ ...toMediaItem(c.row, genresById, countriesById, origin), roles: c.roles }));
     const votes = (r: any) => Math.max(Number(r.imdbVotes) || 0, Number(r.ratingCount) || 0);
     const order = credits.map((c, i) => ({ i, lead: c.lead ? 1 : 0, v: votes(c.row) })).sort((a, b) => b.lead - a.lead || b.v - a.v);

@@ -497,8 +497,11 @@ function workerMain(): void {
       const pOff = new Int32Array(personIds.length + 1);
       for (let k = 0; k < nc; k++) pOff[credPerson[k] + 1]++;
       for (let i = 0; i < personIds.length; i++) pOff[i + 1] += pOff[i];
+      // A person's credits in stored (rowid) order, as the database lists them by personId.
+      const posOf = new Int32Array(nc);
+      for (let pos = 0; pos < nc; pos++) posOf[byKey[pos]] = pos;
       const pcur = pOff.slice(0, personIds.length), pCred = new Int32Array(nc);
-      for (let k = 0; k < nc; k++) pCred[pcur[credPerson[k]]++] = k;
+      for (let k = 0; k < nc; k++) pCred[pcur[persons[k]]++] = posOf[k];
       sections["person.creditOff"] = pOff;
       sections["person.credits"] = pCred;
       counts.credits = nc;

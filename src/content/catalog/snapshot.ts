@@ -203,7 +203,7 @@ export class CatalogSnapshot {
     };
   }
 
-  /** Title keys a person is credited on (with kind and role), in key order. */
+  /** Title keys a person is credited on (with kind and role), in stored order. */
   personCredits(i: number): { titleKey: string; kind: string; role: string | null; order: number }[] {
     const off = this.s["person.creditOff"] as Int32Array, list = this.s["person.credits"] as Int32Array;
     const keys = this.s["credit.keys"] as Uint32Array, keyOff = this.s["credit.keyOff"] as Int32Array;

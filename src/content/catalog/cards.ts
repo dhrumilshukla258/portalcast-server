@@ -12,7 +12,7 @@ import { setting } from "@/config/settings";
 import { ContentMeta } from "@/models/ContentMeta";
 import { ContentGenre } from "@/models/ContentGenre";
 import { ContentCountry } from "@/models/ContentCountry";
-import { peopleOf, unpackPhoto, type PersonRow } from "@/content/people";
+import { peopleOf, personCredits, unpackPhoto, type PersonRow, type PersonCredit } from "@/content/people";
 import type { CatalogSnapshot } from "./snapshot";
 import { catalogReady, catalogChanges, COPY_COLUMNS, type CatalogChanges } from "./store";
 
@@ -204,4 +204,54 @@ export async function titlePeople(keys: string[]): Promise<PersonRow[]> {
     if (rows.length) return rows;
   }
   return [];
+}
+
+// ── a person's titles ──────────────────────────────────────────────────────────
+
+/**
+ * The titles a person is credited on, one card per title (people.ts personCredits over the
+ * snapshot, same rules and order). Read from the database instead when anything about titles,
+ * tags or credits changed since the build, or this person did: their titles could be any.
+ */
+export async function personTitles(id: number): Promise<PersonCredit[]> {
+  const src = await source();
+  const changed = !src || ["title", "tags", "credits"].some((t) => (src.changes.keys.get(t)?.size ?? 0) > 0) || src.changes.has("person", String(id));
+  const pi = src && !changed ? src.snap.personIndex(id) : -1;
+  if (!src || pi < 0) return personCredits(id);
+  const snap = src.snap;
+  const links = snap.personCredits(pi);
+  if (!links.length) return [];
+  const rolesByKey = new Map<string, { kind: string; role: string | null }[]>();
+  for (const l of links) {
+    const list = rolesByKey.get(l.titleKey) ?? [];
+    if (!list.some((x) => x.kind === l.kind && x.role === l.role)) list.push({ kind: l.kind, role: l.role });
+    rolesByKey.set(l.titleKey, list);
+  }
+  const leadKeys = new Set(links.filter((l) => l.kind !== "writer" && (l.kind !== "cast" || l.order < 3)).map((l) => l.titleKey));
+  const isRep = (c: number) => !!snap.copyNum("isRepresentative", c);
+  // The group's representative, preferring a representative row (personCredits' pickRep).
+  const pickRep = (copies: number[]): number => {
+    if (!copies.length) return -1;
+    const rep = copies.find(isRep) ?? copies[0];
+    if (isRep(rep) || !snap.copyText("groupKey", rep)) return rep;
+    return snap.groupOf(rep).find(isRep) ?? rep;
+  };
+  const out = new Map<string, PersonCredit>();
+  const keys = [...rolesByKey.keys()];
+  const add = (k: string, c: number) => {
+    if (c < 0) return;
+    const cid = snap.copyText("id", c)!;
+    const have = out.get(cid);
+    if (!have) out.set(cid, { row: snapshotRow(snap, c), roles: rolesByKey.get(k)!, lead: leadKeys.has(k) });
+    else if (/^(movie|series):\d+$/.test(k)) have.roles.push(...rolesByKey.get(k)!);
+  };
+  for (const k of keys.filter((x) => /^(movie|series):\d+$/.test(x))) {
+    const [t, n] = k.split(":");
+    add(k, pickRep(snap.copiesByTmdb(t as "movie" | "series", Number(n))));
+  }
+  for (const k of keys.filter((x) => !/^(movie|series):\d+$/.test(x))) {
+    const c = snap.copyIndex(k);
+    add(k, c < 0 ? -1 : pickRep([c]));
+  }
+  return [...out.values()].sort((a, b) => (Number(b.row.year) || 0) - (Number(a.row.year) || 0) || String(a.row.name).localeCompare(String(b.row.name)));
 }

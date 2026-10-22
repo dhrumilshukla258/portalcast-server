@@ -2,7 +2,7 @@
 
 The whole catalog packed in memory as typed arrays, so pages can be answered without the database (plan Phase 1). Code: `src/content/catalog/`. Setting `catalogSnapshot` (group Catalog, default off, applies on restart).
 
-**Status:** Phase 1b in progress. With the setting on: "All Movies" / "All Series" (pages, search, Discover's open-by-id) read the snapshot (`all.ts`), and so do Discover's cards on browse, rows and recommendations, title details (versions, cast and crew) and the versions picker (`cards.ts`). People search uses the snapshot's people index (`peopleSearch.ts`, no worker of its own). Still on today's code: Discover's ranking and facets (`discoverIndex`), person pages. The setting stays off live until those move too and `catalogUnion`, the title search view, `discoverIndex` and the people search index (about 246 MB of heap on the working copy) are removed.
+**Status:** Phase 1b in progress. With the setting on: "All Movies" / "All Series" (pages, search, Discover's open-by-id) read the snapshot (`all.ts`), and so do Discover's cards on browse, rows and recommendations, title details (versions, cast and crew) and the versions picker (`cards.ts`). People search uses the snapshot's people index (`peopleSearch.ts`, no worker of its own). Person pages take their titles from the snapshot (`cards.ts` `personTitles`). Still on today's code: Discover's ranking and facets (`discoverIndex`, 8 MB, rebuilt from the database after enrichment). The setting stays off live until those move too and `catalogUnion`, the title search view, `discoverIndex` and the people search index (about 246 MB of heap on the working copy) are removed.
 
 ## Files
 
@@ -65,6 +65,7 @@ Measured on the working copy (production build): search p95 35.6 -> 8.8 ms for m
 
 - `titleWithGroup(id)`, `variantRows(id, hidden)` and `titlePeople(keys)` answer what `titleDetails` and `/discover/variants` read with `findByPk`, `findAll({ groupKey })` and `peopleOf`. Versions are ordered representative first, then by name in byte order (SQLite's BINARY collation), ties in stored order.
 - A group is read from the database when any title changed since the build belonged to it then or belongs to it now (the changed titles' current groupKeys are read once per change). A cast list is, when its credits changed or any person on it did.
+- `personTitles(id)` is `people.ts` `personCredits` over the snapshot (a person's credits are kept in stored order, as the database lists them by person). It reads the database whenever any title, tag or credit changed since the build, or the person did: which titles are theirs could be anything then. Checked: 2,999 people's title lists and pages identical; uncached page median 6.4 -> 2.8 ms, p95 43.9 -> 16.0 ms.
 - Checked: all 76,471 cast lists equal to `peopleOf` in order; 2,586 details and variants answers identical off vs on, and 2,600 after moving a version to another group, reordering a cast and renaming a person following the build. Median 6.9 -> 1.95 ms, p95 11.1 -> 3.3 ms.
 
 ## Changes and rebuilds
