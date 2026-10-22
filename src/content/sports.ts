@@ -32,9 +32,11 @@ const MAX_BYTES = 5 * 2 ** 20;
 const MAX_EVENTS = 3000;
 const HOUR_MS = 3600_000;
 const DAY_MS = 24 * HOUR_MS;
-/** Games kept: from a day ago to 30 days ahead. */
+/** Games kept: from a day ago to 4 months ahead (a league with nothing this month shows its next). */
 const KEEP_PAST_MS = DAY_MS;
-const KEEP_AHEAD_MS = 30 * DAY_MS;
+const KEEP_AHEAD_MS = 120 * DAY_MS;
+/** A chosen league with no game in the window still shows its next ones. */
+const NEXT_PER_EMPTY_LEAGUE = 3;
 /** The job fetches only while Sports is in use. */
 const IN_USE_MS = 3 * DAY_MS;
 /** How long the first request waits for the first fetch before answering with what there is. */
@@ -264,6 +266,118 @@ async function matchGames(snap: Snapshot, games: Game[]): Promise<Map<string, Ga
   return out;
 }
 
+// ---- Matches from the TV guide ----------------------------------------------------------
+// The free schedule has little cricket (8 events on 2026-10-22) while the owner's guide shows
+// plenty ("1st ODI: India v West Indies-One-Day International Cricket"). For the viewer's
+// sports that the guide covers well, matches are also read from the guide itself: the game
+// IS the programme, so its channel and time need no matching. Rules, from the owner's guide
+// (39,616 programme names): a name with the sport's words and two sides (" v " / " vs "); not
+// highlights, countdowns, minis, fillers, bitesize, magic moments and the like; not an archive
+// airing ("2026: Final: ..." starts with a year); and only the first airing of a title, and
+// only when the title airs at most 3 different times in the guide unless it says "Live" (one
+// "4th T20: India vs West Indies" aired 408 times: a replay).
+
+const GUIDE_SPORTS: Record<string, RegExp> = {
+  Cricket: / (?:cricket|t20i?|odi|ipl|big bash|bbl|psl|cpl|test match|ranji trophy|sheffield shield|super smash) /,
+  Tennis: / (?:tennis|atp|wta|wimbledon|roland garros|davis cup) /,
+};
+const GUIDE_SKIP = / (?:highlights?|hl|hls|hlts|countdown|mini|fillers?|bitesize|magic|wonder|preview|review|rewind|classics?|best of|replay|repeat|recap|reaction|extra|build up|documentary|story|stories|legends) /;
+const SIDES = / (?:v|vs) /;
+const ARCHIVE = /^ (?:19|20)\d\d /;
+const MAX_AIRINGS = 3;
+
+export interface GuideProgramme { channelId: string; name: string; start: number; stop: number }
+export interface GuideGame extends Game { end: number; channels: GameMatch[] }
+
+/** "1st ODI: India v West Indies-One-Day International Cricket" -> title and competition. */
+function splitGuideName(name: string): { title: string; competition: string } {
+  const clean = name.replace(/^\s*live\s*[:\-–]?\s*/i, "").trim();
+  // The first dash after the sides ("India v West Indies-One-Day International Cricket"; a dash
+  // inside the competition, "One-Day", stays in it).
+  const sides = clean.search(/\s(?:v|vs)\.?\s/i);
+  const dash = sides >= 0 ? clean.indexOf("-", sides) : -1;
+  if (dash > 0 && dash < clean.length - 3) {
+    const tail = clean.slice(dash + 1).trim();
+    if (/[a-z]/i.test(tail)) return { title: clean.slice(0, dash).trim(), competition: tail };
+  }
+  return { title: clean, competition: "On TV" };
+}
+
+/** The matches in these programmes for `sports` (see the rules above). Pure; times in seconds. */
+export function guideGamesFrom(programmes: GuideProgramme[], sports: string[], nowSec: number): GuideGame[] {
+  const wanted = sports.filter((s) => GUIDE_SPORTS[s]);
+  if (!wanted.length) return [];
+  const byTitle = new Map<string, { sport: string; airings: GuideProgramme[]; live: boolean }>();
+  for (const p of programmes) {
+    const n = norm(p.name);
+    if (!n || NOT_LIVE.test(n) || GUIDE_SKIP.test(n) || ARCHIVE.test(n) || !SIDES.test(n)) continue;
+    const sport = wanted.find((s) => GUIDE_SPORTS[s].test(n));
+    if (!sport) continue;
+    let t = byTitle.get(n);
+    if (!t) byTitle.set(n, (t = { sport, airings: [], live: / live /.test(n) }));
+    t.airings.push(p);
+  }
+  const out: GuideGame[] = [];
+  for (const [key, t] of byTitle) {
+    const starts = [...new Set(t.airings.map((a) => a.start))].sort((a, b) => a - b);
+    if (!t.live && starts.length > MAX_AIRINGS) continue;
+    const first = starts[0];
+    const at = t.airings.filter((a) => Math.abs(a.start - first) <= 600);
+    const end = Math.max(...at.map((a) => a.stop));
+    if (end <= nowSec) continue;
+    const { title, competition } = splitGuideName(at[0].name);
+    const startMs = first * 1000;
+    out.push({
+      id: "g" + crypto.createHash("sha1").update(`${key}|${first}`).digest("base64url").slice(0, 11),
+      league: "tv-guide",
+      competition,
+      sport: t.sport,
+      date: new Date(startMs).toISOString().slice(0, 10),
+      start: startMs,
+      title,
+      home: "",
+      away: "",
+      venue: "",
+      status: "",
+      broadcast: [],
+      url: "",
+      end: end * 1000,
+      channels: [...new Map(at.map((a) => [a.channelId, { channelId: a.channelId, programme: a.name.slice(0, 160) }])).values()].slice(0, MAX_CHANNELS),
+    });
+  }
+  return out;
+}
+
+let guideCache: { key: string; result: Promise<GuideGame[]> } | null = null;
+
+/** Guide matches for `sports` now (one scan of the guide per guide, hour and set of sports). */
+async function guideGames(sports: string[]): Promise<GuideGame[]> {
+  const wanted = sports.filter((s) => GUIDE_SPORTS[s]).sort();
+  if (!wanted.length) return [];
+  const snap = await getEpgSnapshot().catch(() => null);
+  if (!snap) return [];
+  const key = `${snap.rowKey}:${Math.floor(Date.now() / HOUR_MS)}:${wanted.join(",")}`;
+  if (guideCache?.key !== key) {
+    const t0 = Date.now();
+    const result = (async () => {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const programmes: GuideProgramme[] = [];
+      const pre = new RegExp(Object.values(GUIDE_SPORTS).map((r) => r.source).join("|"));
+      await forEachProgramme(snap, nowSec - 4 * 3600, guideEnd(snap) + 1, (channelId, name, start, stop) => {
+        // Only names of a wanted sport are kept (a few hundred of ~180k).
+        if (pre.test(norm(name))) programmes.push({ channelId, name, start, stop });
+      });
+      // Titles aired several times count every airing in the guide, so all of them are passed.
+      const games = guideGamesFrom(programmes, wanted, nowSec);
+      logger.info(`[sports] guide games: ${games.length} for ${wanted.join(", ")} from ${programmes.length} programmes, ${Date.now() - t0} ms`);
+      return games;
+    })();
+    result.catch(() => { if (guideCache?.key === key) guideCache = null; });
+    guideCache = { key, result };
+  }
+  return guideCache.result;
+}
+
 // ---- Store and refresh -------------------------------------------------------------------
 
 const leagues = new Map<string, League>();
@@ -384,12 +498,34 @@ export async function sportsAnswer(days: number, chosen: string[] | null = null)
   const from = now - 6 * HOUR_MS;
   const to = now + days * DAY_MS;
   const all = slugs.flatMap((s) => leagues.get(s)?.games ?? []);
-  const games = all.filter((g) => {
-    if (g.status === "completed" || g.status === "finished") return false;
+  const upcoming = (g: Game) =>
+    g.status !== "completed" && g.status !== "finished" &&
     // A date-only game stays listed for its whole UTC day.
-    return g.start !== null ? g.start >= from && g.start < to : dayStartMs(g.date) + DAY_MS > now && dayStartMs(g.date) < to;
-  });
+    (g.start !== null ? g.start >= from : dayStartMs(g.date) + DAY_MS > now);
+  const games = all.filter((g) => upcoming(g) && sortKey(g) < to);
+  // Cricket and the like: nothing this month, so their next few games (owner: "I chose cricket
+  // and don't see it").
+  const shown = new Set(games.map((g) => g.league));
+  for (const slug of slugs) {
+    if (shown.has(slug)) continue;
+    games.push(...(leagues.get(slug)?.games ?? []).filter(upcoming).slice(0, NEXT_PER_EMPTY_LEAGUE));
+  }
   const { matches, guide } = await matchesFor(all);
+  // The viewer's sports the guide covers well (cricket, tennis): its matches too.
+  const sportsChosen = [...new Set(slugs.map((s) => sportOf(s, "")))];
+  const guideAll = guide ? (await guideGames(sportsChosen).catch(() => [] as GuideGame[])).filter((g) => g.start! < to) : [];
+  // The same match in both (schedule and guide): one game, the schedule's, with the guide's
+  // channels when the strict match found none (both teams named, within 6 hours).
+  const extraChannels = new Map<string, GameMatch[]>();
+  const fromGuide = guideAll.filter((gg) => {
+    const twin = games.find((g) => {
+      const needles = needlesOf(g);
+      return !!needles && g.sport === gg.sport && (g.start === null || Math.abs(g.start - gg.start!) < 6 * HOUR_MS) && programmeMatches(gg.title, needles);
+    });
+    if (!twin) return true;
+    if (!(matches.get(twin.id)?.length)) extraChannels.set(twin.id, gg.channels);
+    return false;
+  });
   return {
     source: { name: "sporting-events.org", url: SOURCE },
     updatedAt: updatedAt || null,
@@ -399,13 +535,14 @@ export async function sportsAnswer(days: number, chosen: string[] | null = null)
       const l = leagues.get(s)!;
       return { id: l.slug, name: l.competition, sport: l.sport, url: l.page };
     }),
-    games: games
-      .sort((a, b) => sortKey(a) - sortKey(b))
-      .map((g) => ({
+    games: [
+      ...games.map((g) => ({
         ...g,
         live: g.start !== null && now >= g.start && now < g.start + (LENGTH_MS[g.sport] ?? 3 * HOUR_MS),
-        channels: matches.get(g.id) ?? [],
+        channels: matches.get(g.id)?.length ? matches.get(g.id)! : extraChannels.get(g.id) ?? [],
       })),
+      ...fromGuide.map(({ end, ...g }) => ({ ...g, live: now >= g.start! && now < end })),
+    ].sort((a, b) => sortKey(a) - sortKey(b)),
   };
 }
 

@@ -54,3 +54,21 @@ hidden and renamed channels follow the admin's overrides. No match: the apps sho
 broadcasters from the schedule and "Find channel" (Search on Live TV for the first one).
 
 Tests: `test/sports.test.ts`.
+
+## Matches from the TV guide (cricket, tennis)
+
+The free schedule is thin for cricket (8 events on 2026-10-22) while the owner's guide shows
+plenty. For a viewer's sports the guide covers well (`GUIDE_SPORTS`: cricket, tennis), matches
+are also read from the guide itself (`guideGamesFrom`, pure and tested): the game is the
+programme, so its channel and time need no matching. A name counts when it has the sport's words
+and two sides (" v " / " vs "), is not highlights / countdown / mini / filler / bitesize and the
+like, is not an archive airing (starts with a year), and only its first airing is used; a title
+airing more than 3 different times in the guide is a replay unless it says "Live". On the
+owner's guide (2026-10-22 10:54, 543k programmes) this gave 12 cricket matches over a day and a
+half. One scan per guide, hour and set of sports, logged as `[sports] guide games`.
+
+A guide match that is also a schedule game (same sport, both teams named, within 6 hours) is
+merged into the schedule's game, which takes the guide's channels when the strict match found
+none. Guide games carry `league: "tv-guide"`, `competition` from the name's tail
+("One-Day International Cricket") or "On TV".
+

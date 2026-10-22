@@ -68,3 +68,27 @@ test("events without teams need their whole name; unsafe games get no needles", 
   assert.equal(needlesOf({ home: "AB", away: "Chelsea", title: "x" }), null);
   assert.equal(norm("Atlético  Madrid!"), " atletico madrid ");
 });
+
+test("matches from the TV guide: first airing, no replays, highlights or archive", () => {
+  const { guideGamesFrom } = require("../src/content/sports");
+  const now = 1_000_000;
+  const p = (channelId: string, name: string, start: number, hours = 4) => ({ channelId, name, start, stop: start + hours * 3600 });
+  const progs = [
+    p("1", "1st ODI: India v West Indies-One-Day International Cricket", now + 3600),
+    p("2", "1st ODI: India v West Indies-One-Day International Cricket", now + 3600),
+    p("1", "1st ODI: India v West Indies-One-Day International Cricket", now + 40000),
+    p("3", "Cricket Highlights", now + 100),
+    p("4", "2026: Final: India vs New Zealand-ICC Men's T20 Cricket World Cup", now + 200),
+    ...[0, 1, 2, 3].map((i) => p("5", "4th T20: India vs West Indies-T20 Cricket", now + i * 20000)),
+    p("6", "Live: Australia v England - The Ashes 1st Test Cricket", now - 3600, 8),
+    p("7", "Premier League: Everton v Chelsea", now + 100),
+  ];
+  const games = guideGamesFrom(progs, ["Cricket"], now);
+  const titles = games.map((g: any) => g.title).sort();
+  assert.deepEqual(titles, ["1st ODI: India v West Indies", "Australia v England"]);
+  const odi = games.find((g: any) => g.title.startsWith("1st ODI"));
+  assert.equal(odi.competition, "One-Day International Cricket");
+  assert.equal(odi.start, (now + 3600) * 1000);
+  assert.deepEqual(odi.channels.map((c: any) => c.channelId), ["1", "2"]);
+  assert.deepEqual(guideGamesFrom(progs, ["Football"], now), [], "only sports the guide covers");
+});
