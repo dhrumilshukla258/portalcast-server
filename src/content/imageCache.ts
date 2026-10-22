@@ -5,8 +5,16 @@
 // is slow or unreachable for images already seen, and viewers' addresses never reach TMDB.
 //
 // Settings: imageCacheFolder (default <data folder>/image-cache, a NAS folder is a good
-// choice), imageCacheGb (size cap, default 20; 0 turns caching off and the apps load TMDB
+// choice), imageCacheGb (size cap, default 200; 0 turns caching off and the apps load TMDB
 // directly as before). A nightly job removes the least recently used images above the cap.
+//
+// One stored copy per image (owner, 2026-10-22: "no repetition"): whatever size an app asks
+// for, the server keeps and sends one of two: w500 for posters, photos and other small art
+// (w45...w500, h632), w1280 for backdrops (w780, w1280, original). Before, the same poster
+// could sit in the folder at w185, w342 and w500, a backdrop at w780, w1280 and original
+// (62 of ~760 images on 2026-10-22). Apps scale the image to the view, so w500 for a w185
+// face or w1280 for a w780 card looks the same; it costs a little more on the LAN only. The
+// nightly job removes copies left in the other size folders.
 
 import crypto from "crypto";
 import fs from "fs";
@@ -40,6 +48,13 @@ export function cachedTmdbUrl(url: string, origin?: string): string {
 export function validCacheRequest(size: string, file: string): boolean {
   return SIZES.has(size) && FILE_RE.test(file);
 }
+
+/** The size actually kept for a requested size (one copy per image, see the header). */
+const LARGE_SIZES = new Set(["w780", "w1280", "original"]);
+export function storedSize(size: string): "w500" | "w1280" {
+  return LARGE_SIZES.has(size) ? "w1280" : "w500";
+}
+const STORED_DIRS = new Set(["w500", "w1280"]);
 
 // Speed plan step 7. Every file call here is non-blocking: the folder can be on the NAS, and
 // one blocking write to a disk waking from sleep froze the whole server (measured: 30
@@ -98,7 +113,8 @@ const inflight = new Map<string, Promise<Buffer | null>>();
  * The image's bytes: from memory, else the cache folder, else TMDB (one download per image,
  * saved in the background). Null when TMDB has no such image or cannot be reached.
  */
-export async function cachedImage(size: string, file: string): Promise<Buffer | null> {
+export async function cachedImage(requested: string, file: string): Promise<Buffer | null> {
+  const size = storedSize(requested);
   const key = `${size}/${file}`;
   const hit = memGet(key);
   if (hit) return hit;
@@ -135,8 +151,9 @@ export async function cachedImage(size: string, file: string): Promise<Buffer | 
  * background pre-fill must not push out what viewers are looking at). "cached" when it was
  * there already, "fetched" when downloaded, "missing" when TMDB has no such image or failed.
  */
-export async function prefetchToDisk(size: string, file: string): Promise<"cached" | "fetched" | "missing"> {
-  if (!validCacheRequest(size, file)) return "missing";
+export async function prefetchToDisk(requested: string, file: string): Promise<"cached" | "fetched" | "missing"> {
+  if (!validCacheRequest(requested, file)) return "missing";
+  const size = storedSize(requested);
   const target = path.join(imageCacheFolder(), size, file);
   try {
     await fs.promises.access(target);
@@ -159,7 +176,10 @@ export function tmdbImageParts(url: string): { size: string; file: string } | nu
   return m ? { size: m[1], file: m[2] } : null;
 }
 
-/** Nightly: removes least recently used images until the cache is under 90% of its cap. */
+/**
+ * Nightly: first removes copies in size folders that are no longer kept (one copy per image),
+ * then the least recently used images until the cache is under 90% of its cap.
+ */
 export async function evictImageCache(): Promise<string> {
   const capBytes = Number(setting<number>("imageCacheGb")) * 1024 ** 3;
   if (!(capBytes > 0)) return "image cache is off";
@@ -171,7 +191,19 @@ export async function evictImageCache(): Promise<string> {
   try { sizes = await fs.promises.readdir(root); } catch { /* no cache yet */ }
   // <size>/<file> for TMDB images; relay/<xx>/<hash> for portal images (one level deeper).
   const dirs: string[] = [];
+  let repeats = 0;
   for (const size of sizes) {
+    // A TMDB size folder no longer kept (w185, w342, w780, original...): its images are
+    // repeats of (or will be fetched again as) the w500 / w1280 copy.
+    if (size !== "relay" && SIZES.has(size) && !STORED_DIRS.has(size)) {
+      let names: string[] = [];
+      try { names = await fs.promises.readdir(path.join(root, size)); } catch { /* none */ }
+      for (const n of names) {
+        try { await fs.promises.rm(path.join(root, size, n), { force: true }); repeats++; } catch { /* gone */ }
+      }
+      await fs.promises.rmdir(path.join(root, size)).catch(() => {});
+      continue;
+    }
     if (size !== "relay") { dirs.push(path.join(root, size)); continue; }
     let subs: string[] = [];
     try { subs = await fs.promises.readdir(path.join(root, size)); } catch { /* none */ }
@@ -189,14 +221,15 @@ export async function evictImageCache(): Promise<string> {
       } catch { /* gone */ }
     }
   }
-  if (total <= capBytes) return `${(total / 1024 ** 3).toFixed(2)} GB of ${setting<number>("imageCacheGb")} GB used`;
+  const repeatNote = repeats ? `${repeats} repeated copies removed; ` : "";
+  if (total <= capBytes) return `${repeatNote}${(total / 1024 ** 3).toFixed(2)} GB of ${setting<number>("imageCacheGb")} GB used`;
   files.sort((a, b) => a.mtime - b.mtime);
   let removed = 0;
   for (const f of files) {
     if (total <= capBytes * 0.9) break;
     try { await fs.promises.rm(f.p); total -= f.size; removed++; } catch { /* gone */ }
   }
-  return `${removed} images removed, ${(total / 1024 ** 3).toFixed(2)} GB left`;
+  return `${repeatNote}${removed} images removed, ${(total / 1024 ** 3).toFixed(2)} GB left`;
 }
 
 // ── Portal images (channel logos, posters of titles not on TMDB) ─────────────
