@@ -13,6 +13,7 @@ const OWNERS: Record<string, string[]> = {
   tags: ["content/tags.ts"],
   people: ["content/people.ts"],
   progress: ["content/viewers.ts"],
+  list: ["content/myList.ts"],
 };
 // One-time storage steps and schema setup may touch any table.
 const ALWAYS_ALLOWED = ["db/storageMigrations.ts", "db/index.ts"];
@@ -32,6 +33,7 @@ const RULES = [
   { owner: "tags", pattern: /\b(?:ContentGenre|ContentCountry|ContentTheme)\.(?:create|bulkCreate|destroy|update|upsert)\b/ },
   { owner: "people", pattern: sqlWrite(PEOPLE_TABLES) },
   { owner: "progress", pattern: sqlWrite("user_progress") },
+  { owner: "list", pattern: sqlWrite("user_list") },
   { owner: "progress", pattern: /\bUserProgress\.(?:create|bulkCreate|destroy|update|upsert)\b/ },
 ];
 

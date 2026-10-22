@@ -27,7 +27,8 @@ import { logger } from "@/infra/logger";
 import { proxiedImageUrl } from "@/providers/portalAssets";
 import { getPublicOrigin } from "@/infra/publicUrl";
 import { titleRows, titleWithGroup, titlePeople, variantRows, personTitles } from "@/content/catalog/cards";
-import { homeRows, type HomeType } from "@/content/home";
+import { homeRows, similarTitles, type HomeType } from "@/content/home";
+import { listOf, addToList, removeFromList, MAX_LIST, CONTENT_ID } from "@/content/myList";
 import { createHash } from "crypto";
 
 const PAGE_SIZE = 40;
@@ -360,6 +361,89 @@ export const discoverRoutes: ServerRoute[] = [
       return {
         rows: picked.map((p) => ({ genre: p.genre, data: p.ids.map((id) => byId.get(id)).filter(Boolean), page: 1, total_items: p.total })),
       };
+    },
+  },
+
+  {
+    // More Like This for a detail page (plan Phase 6.4): up to 20 titles of the same type,
+    // most similar first (content/home.ts similarTitles: genres, cast and director, language),
+    // as cards. Cached with Discover's other answers (cleared when the catalog changes).
+    method: "GET",
+    path: "/api/v2/discover/similar",
+    handler: async (request, h) => {
+      const id = String((request.query as any).id ?? "");
+      if (!CONTENT_ID.test(id)) return h.response({ error: "Give id (movie_123)" }).code(400);
+      const origin = getPublicOrigin(request);
+      const key = `similar:${id}:${origin}`;
+      const cached = getCached<{ data: any[] }>(key);
+      if (cached) return cached;
+      const ids = await similarTitles(id, 20);
+      const { rows, genres, countries } = await titleRows(ids);
+      const data = await withVideoInfo(
+        ids.map((x) => rows.get(x)).filter(Boolean).map((r: any) => toMediaItem(r, genres, countries, origin)),
+        await getActiveProfileId(), "movie", (x: any) => (x.type === "movie" ? x.id : undefined),
+      );
+      const answer = { data };
+      setCached(key, answer);
+      return answer;
+    },
+  },
+
+  {
+    // My List (plan Phase 6.5, content/myList.ts): the viewer's saved titles as cards, newest
+    // first; titles no longer in the catalog are left out. /api/user/: the viewer's own data.
+    method: "GET",
+    path: "/api/user/list",
+    handler: async (request, h) => {
+      const user = authCheck(request);
+      if (!user || !user.userId) return unauthorized(h);
+      const profileId = await getActiveProfileId();
+      if (profileId === undefined) return { data: [] };
+      const ids = (await listOf(user.userId, profileId)).map((e) => e.contentId);
+      const origin = getPublicOrigin(request);
+      const { rows, genres, countries } = await titleRows(ids);
+      const data = await withVideoInfo(
+        ids.map((x) => rows.get(x)).filter(Boolean).map((r: any) => toMediaItem(r, genres, countries, origin)),
+        profileId, "movie", (x: any) => (x.type === "movie" ? x.id : undefined),
+      );
+      return h.response({ data }).header("Cache-Control", "private, no-store");
+    },
+  },
+  {
+    // The ids in My List, for the detail page's Add / In My List button.
+    method: "GET",
+    path: "/api/user/list/ids",
+    handler: async (request, h) => {
+      const user = authCheck(request);
+      if (!user || !user.userId) return unauthorized(h);
+      const profileId = await getActiveProfileId();
+      const ids = profileId === undefined ? [] : (await listOf(user.userId, profileId)).map((e) => e.contentId);
+      return h.response({ ids }).header("Cache-Control", "private, no-store");
+    },
+  },
+  {
+    method: "PUT",
+    path: "/api/user/list/{id}",
+    handler: async (request, h) => {
+      const user = authCheck(request);
+      if (!user || !user.userId) return unauthorized(h);
+      const profileId = await getActiveProfileId();
+      if (profileId === undefined) return h.response({ error: "No active IPTV profile" }).code(409);
+      const result = await addToList(user.userId, profileId, String(request.params.id));
+      if (result === "invalid") return h.response({ error: "Not a title id" }).code(400);
+      if (result === "full") return h.response({ error: `My List holds at most ${MAX_LIST} titles` }).code(409);
+      return { success: true, added: result === "added" };
+    },
+  },
+  {
+    method: "DELETE",
+    path: "/api/user/list/{id}",
+    handler: async (request, h) => {
+      const user = authCheck(request);
+      if (!user || !user.userId) return unauthorized(h);
+      const profileId = await getActiveProfileId();
+      if (profileId === undefined) return h.response({ error: "No active IPTV profile" }).code(409);
+      return { success: true, removed: await removeFromList(user.userId, profileId, String(request.params.id)) };
     },
   },
 

@@ -53,6 +53,8 @@ All under `/api/v2/discover/`, gated by the global Bearer-JWT `onPreHandler` in 
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET` | `/facets` | Genre/country/theme/language values + counts; `networks` (channels/platforms, with logos) for `type=series` |
+| `GET` | `/api/v2/discover/similar?id=` | More Like This (Phase 6.4): up to 20 titles of the same type by shared genres, cast/director and language (`content/home.ts` `similarTitles`, the scoring of "Because you watched X"), cached with Discover's answers |
+| `GET` / `PUT` / `DELETE` | `/api/user/list`, `/api/user/list/ids`, `/api/user/list/{id}` | My List (Phase 6.5, `content/myList.ts`, table `user_list`, the only writer): saved titles per viewer (user + active profile), newest first, at most 1000, catalog ids only |
 | `GET` | `/api/v2/home` | The personal rows, prepared per viewer: [[skill-home-rows]] |
 | `GET` | `/browse` | Paginated listing (40), filterable by any combination of `genre`/`country`/`language`/`theme`/`network`/`type` |
 | `GET` | `/recommendations` | Per-user "Because You Watched" — genre-overlap ranking from the user's own `UserProgress`, no cross-user data |

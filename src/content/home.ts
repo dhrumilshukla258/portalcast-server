@@ -95,6 +95,50 @@ async function ranksOfPerson(personId: number, idx: DiscoverIndex): Promise<numb
   return out;
 }
 
+/**
+ * Titles like the one at rank r0: shared genres (3 each), shared people (a director or creator
+ * 5, one of the first five billed cast 4), same language (2). Used by "Because you watched X"
+ * and the detail page's More Like This.
+ */
+async function similarScores(idx: DiscoverIndex, r0: number, people: { id: number; lead: number }[], genresOfRank: (rank: number) => string[]): Promise<Scores> {
+  const sc = new Scores(idx.ids.length);
+  for (const g of genresOfRank(r0)) { const list = idx.postings.genre.get(g)!; for (let i = 0; i < list.length; i++) sc.add(list[i], 3); }
+  for (const p of people) for (const r of await ranksOfPerson(p.id, idx)) sc.add(r, p.lead);
+  const lang0 = idx.lang[r0];
+  if (lang0 >= 0) for (const r of sc.touched) if (idx.lang[r] === lang0) sc.s[r] += 2;
+  return sc;
+}
+
+/** The genres of a rank (each genre's postings, binary search). */
+function genresAt(idx: DiscoverIndex, rank: number): string[] {
+  const out: string[] = [];
+  for (const [value, list] of idx.postings.genre) {
+    let lo = 0, hi = list.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (list[m] < rank) lo = m + 1; else hi = m; }
+    if (lo < list.length && list[lo] === rank) out.push(value);
+  }
+  return out;
+}
+
+/**
+ * More Like This for a title (any version's id): up to `limit` representative titles of the
+ * same type, most similar first, never a version of the title itself, nothing hidden. Empty
+ * when the title is not in Discover's index (not enriched yet).
+ */
+export async function similarTitles(id: string, limit = 20): Promise<string[]> {
+  const idx = await getDiscoverIndex();
+  const found = await titleWithGroup(id);
+  if (!found) return [];
+  const members = found.members as any[];
+  const rep = members.find((m) => idx.rankOf.has(m.id))?.id;
+  if (!rep) return [];
+  const r0 = idx.rankOf.get(rep)!;
+  const hidden = await getHiddenContentKeySet();
+  const own = new Set(members.map((m) => idx.rankOf.get(m.id)).filter((r) => r !== undefined));
+  const sc = await similarScores(idx, r0, await keyPeople(found.row), (rank) => genresAt(idx, rank));
+  return sc.top(limit, (r) => !own.has(r) && idx.type[r] === idx.type[r0] && !hidden.has(idx.ids[r]) && sc.s[r] >= 6).map((r) => idx.ids[r]);
+}
+
 export async function buildHomeRows(userId: number, profileId: number, type: HomeType): Promise<HomeRows> {
   const idx = await getDiscoverIndex();
   const hidden = await getHiddenContentKeySet();
@@ -114,18 +158,9 @@ export async function buildHomeRows(userId: number, profileId: number, type: Hom
   // Taste weights.
   const genreW = new Map<string, number>(), langW = new Map<number, number>(), personW = new Map<number, { w: number; name: string; count: number }>();
   const genresOf = new Map<number, string[]>();
-  const genreLists = [...idx.postings.genre];
   const genresOfRank = (rank: number) => {
     let g = genresOf.get(rank);
-    if (!g) {
-      g = [];
-      for (const [value, list] of genreLists) {
-        let lo = 0, hi = list.length;
-        while (lo < hi) { const m = (lo + hi) >> 1; if (list[m] < rank) lo = m + 1; else hi = m; }
-        if (lo < list.length && list[lo] === rank) g.push(value);
-      }
-      genresOf.set(rank, g);
-    }
+    if (!g) genresOf.set(rank, (g = genresAt(idx, rank)));
     return g;
   };
   const peopleOfWatched = new Map<string, { id: number; name: string; lead: number }[]>();
@@ -142,11 +177,7 @@ export async function buildHomeRows(userId: number, profileId: number, type: Hom
   // Because you watched X: the 3 most recent watched titles, each its most similar titles.
   for (const w of watched.slice(0, 3)) {
     const r0 = idx.rankOf.get(w.rep)!;
-    const sc = new Scores(n);
-    for (const g of genresOfRank(r0)) { const list = idx.postings.genre.get(g)!; for (let i = 0; i < list.length; i++) sc.add(list[i], 3); }
-    for (const p of peopleOfWatched.get(w.rep) ?? []) for (const r of await ranksOfPerson(p.id, idx)) sc.add(r, p.lead);
-    const lang0 = idx.lang[r0];
-    if (lang0 >= 0) for (const r of sc.touched) if (idx.lang[r] === lang0) sc.s[r] += 2;
+    const sc = await similarScores(idx, r0, peopleOfWatched.get(w.rep) ?? [], genresOfRank);
     const sameType = (r: number) => idx.type[r] === idx.type[r0];
     const ranks = take(sc.top(SIMILAR * 2, (r) => ok(r) && sameType(r) && sc.s[r] >= 6));
     if (ranks.length >= MIN_ROW) rows.push({ key: `because:${w.rep}`, kind: "because", title: `Because you watched ${w.title}`, ids: commit(ranks.slice(0, SIMILAR)) });

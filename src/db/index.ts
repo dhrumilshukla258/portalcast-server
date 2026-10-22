@@ -162,6 +162,15 @@ export async function initDB() {
       logger.error(`Migration: failed to ensure user_progress schema: ${e.message}`);
     }
 
+    // My List (content/myList.ts, the only writer): titles a viewer saved, one row per title.
+    try {
+      await sequelize.query(
+        "CREATE TABLE IF NOT EXISTS `user_list` (`userId` INTEGER NOT NULL, `profileId` INTEGER NOT NULL, `contentId` VARCHAR(255) NOT NULL, `addedAt` INTEGER NOT NULL, PRIMARY KEY (`userId`, `profileId`, `contentId`));",
+      );
+    } catch (e: any) {
+      logger.error(`Migration: failed to ensure user_list: ${e.message}`);
+    }
+
     // Sync each model individually instead of one `sequelize.sync({alter:true})` call for
     // all of them. That single call aborts entirely on the FIRST model that throws, which
     // silently prevented every model queued after it from ever being created, with no
