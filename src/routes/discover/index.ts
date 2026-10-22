@@ -18,7 +18,7 @@ import { authCheck } from "@/auth/jwt";
 import { ContentMeta, ContentType } from "@/models/ContentMeta";
 import { ContentGenre } from "@/models/ContentGenre";
 import { ContentTheme } from "@/models/ContentTheme";
-import { recentProgress, isWatched, progressType, contentIdsOf } from "@/content/viewers";
+import { recentProgress, isWatched, progressType, contentIdsOf, onViewerChange } from "@/content/viewers";
 import { getActiveProfileId } from "@/routes/stalkerV2/shared";
 import { getHiddenContentKeys, getHiddenContentKeySet } from "@/content/overrides";
 import { getDiscoverIndex, facetsFor, browse as browseIndex, recommend, type BrowseQuery } from "@/content/discoverIndex";
@@ -29,6 +29,7 @@ import { getPublicOrigin } from "@/infra/publicUrl";
 import { titleRows, titleWithGroup, titlePeople, variantRows, personTitles } from "@/content/catalog/cards";
 import { homeRows, similarTitles, type HomeType } from "@/content/home";
 import { listOf, addToList, removeFromList, MAX_LIST, CONTENT_ID } from "@/content/myList";
+import { peopleOfTitles } from "@/content/people";
 import { createHash } from "crypto";
 
 const PAGE_SIZE = 40;
@@ -228,6 +229,26 @@ const FEATURED_TITLES = 24;
  * so the client shows "Movies & series with X" without a second request.
  */
 /**
+ * The people of what this viewer watched (their last 200 titles), for the Cast tab's order.
+ * Kept 10 minutes per viewer; a progress change forgets it.
+ */
+const castBoosts = new Map<string, { at: number; boost: Map<number, number> }>();
+onViewerChange((userId, profileId) => castBoosts.delete(`${userId}:${profileId}`));
+async function viewerCastBoost(request: any): Promise<Map<number, number> | undefined> {
+  const user = authCheck(request);
+  if (!user || typeof user.userId !== "number") return undefined;
+  const profileId = await getActiveProfileId();
+  const key = `${user.userId}:${profileId}`;
+  const have = castBoosts.get(key);
+  if (have && Date.now() - have.at < 10 * 60_000) return have.boost;
+  const rows = await recentProgress(user.userId, profileId, 200);
+  const boost = await peopleOfTitles(rows.flatMap((r) => contentIdsOf(r)));
+  if (castBoosts.size > 500) castBoosts.clear();
+  castBoosts.set(key, { at: Date.now(), boost });
+  return boost;
+}
+
+/**
  * The People tab: people with a photo and at least 3 major credits, most popular first,
  * filtered by role (Actors / Actresses need the gender fill, content/peopleGender.ts).
  */
@@ -239,7 +260,7 @@ export const peopleBrowseRoute = {
     if (!PEOPLE_ROLES.includes(role)) return h.response({ error: "Unknown role" }).code(400);
     const page = Math.max(1, Math.min(10_000, Math.floor(Number(request.query.page) || 1)));
     const pageSize = 60;
-    const result = await browsePeople(role, (page - 1) * pageSize, pageSize);
+    const result = await browsePeople(role, (page - 1) * pageSize, pageSize, await viewerCastBoost(request));
     if (!result) return { data: [], total: 0, page, pageSize, counts: null, genderReady: false, ready: false };
     const origin = getPublicOrigin(request);
     return {

@@ -1,4 +1,4 @@
-# People tab and people's gender (2026-10-22)
+# Cast tab (was People) and people's gender (2026-10-22)
 
 The People tab in both apps: browse cast and crew with photos, filter by role, open a
 person's page (their playable titles).
@@ -13,6 +13,11 @@ person's page (their playable titles).
 - Order: All / Actors / Actresses by major credits (popularity); Directors / Creators /
   Writers by how many titles they directed / created / wrote (an actor who directed once is
   not near the top).
+- Per viewer (owner: "ranking based on what the profile watched"): the people of the viewer's
+  last 200 watched titles (directors, creators, first 10 billed) come first, most shared
+  titles first, then everyone else as above (`peopleOfTitles`, ~20 ms; kept 10 minutes per
+  viewer and profile, forgotten when their progress changes). On the owner's data: 51 titles,
+  100 people first (Rasika Dugal, Ravi Kishan, Pankaj Tripathi... instead of Brahmanandam).
 - Answered from memory (`content/peopleSearch.ts`): the people-search index plus, per
   person id, gender (1 byte) and directed / created / wrote counts (2 bytes each), ~2.5 MB.
   Role lists are made once per index and cached; a page is a slice (under 4 ms measured,

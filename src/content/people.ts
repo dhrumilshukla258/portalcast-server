@@ -350,3 +350,24 @@ export async function readRoleCounts(): Promise<{ id: number; directed: number; 
   )) as any[];
   return rows.map((r) => ({ id: Number(r.id), directed: Number(r.d), created: Number(r.c), wrote: Number(r.w) }));
 }
+
+/**
+ * The people of these titles (content ids, "movie_123"), with how many of them each is in:
+ * directors, creators and the first 10 billed cast. For the Cast tab's per-viewer order.
+ */
+export async function peopleOfTitles(contentIds: string[]): Promise<Map<number, number>> {
+  const ids = [...new Set(contentIds)].slice(0, 400);
+  const out = new Map<number, number>();
+  if (!ids.length) return out;
+  const rows = (await db().query(
+    `SELECT tp.personId AS id, COUNT(DISTINCT tp.titleKey) AS n FROM title_people tp
+     WHERE tp.titleKey IN (
+       SELECT CASE WHEN tmdbId IS NOT NULL THEN (CASE WHEN type = 'series' THEN 'series:' ELSE 'movie:' END) || tmdbId ELSE id END
+       FROM content_meta WHERE id IN (${ids.map(() => "?").join(", ")}))
+       AND (tp.kind IN ('director', 'creator') OR (tp.kind = 'cast' AND tp.sortOrder < 10))
+     GROUP BY tp.personId`,
+    { replacements: ids, type: QueryTypes.SELECT },
+  )) as any[];
+  for (const r of rows) out.set(Number(r.id), Number(r.n));
+  return out;
+}

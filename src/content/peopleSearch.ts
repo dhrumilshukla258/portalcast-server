@@ -265,6 +265,17 @@ class PeopleIndex {
 
   hitAt(d: number): PersonHit { return this.hit(d); }
 
+  /** `list` with the people in `boost` first (more shared titles first, then popularity). */
+  boosted(list: Int32Array, boost: Map<number, number>): Int32Array {
+    this.browseColumns();
+    const ids = this.ids!;
+    const front: number[] = [];
+    const rest: number[] = [];
+    for (const d of list) (boost.has(ids[d]) ? front : rest).push(d);
+    front.sort((a, b) => boost.get(ids[b])! - boost.get(ids[a])! || a - b);
+    return Int32Array.from([...front, ...rest]);
+  }
+
   /**
    * Ranked people. A word that only matches one edit away is tried only when nothing starts
    * with it; if that finds nobody, a second pass also allows one typo in every word that has
@@ -619,8 +630,13 @@ export interface PeopleBrowse {
   genderReady: boolean;
 }
 
-/** A page of the People tab for `role`, most popular first; null until the index is built. */
-export async function browsePeople(role: PeopleRole, offset: number, limit: number): Promise<PeopleBrowse | null> {
+/**
+ * A page of the Cast tab for `role`; null until the index is built. With `boost` (person id ->
+ * how many of the viewer's watched titles they are in), those people come first, most shared
+ * titles first, then everyone else in the usual order (owner: ranking from what the profile
+ * watched).
+ */
+export async function browsePeople(role: PeopleRole, offset: number, limit: number, boost?: Map<number, number>): Promise<PeopleBrowse | null> {
   const idx = activeIndex();
   if (!idx) return null;
   // A new index can hold new people: their roles and genders are read again.
@@ -628,7 +644,8 @@ export async function browsePeople(role: PeopleRole, offset: number, limit: numb
   const list = idx.browseList(role, extras);
   const counts = {} as Record<PeopleRole, number>;
   for (const r of PEOPLE_ROLES) counts[r] = idx.browseList(r, extras).length;
+  const order = boost && boost.size ? idx.boosted(list, boost) : list;
   const people: PersonHit[] = [];
-  for (let i = offset; i < Math.min(list.length, offset + limit); i++) people.push(idx.hitAt(list[i]));
+  for (let i = offset; i < Math.min(order.length, offset + limit); i++) people.push(idx.hitAt(order[i]));
   return { people, total: list.length, counts, genderReady: counts.actor + counts.actress > 0 };
 }
