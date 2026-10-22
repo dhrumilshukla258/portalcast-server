@@ -19,6 +19,10 @@
 // is in popularity order: a one- or two-letter prefix ("de", "to") stops after the most
 // popular SHORT_PREFIX_CAP people instead of touching a third of the index.
 //
+// With the catalog snapshot on (setting catalogSnapshot), the snapshot builder packs the same
+// layout from the credits it reads (ps.* sections; names and photos stay in its text pool) and
+// this index is made from it: no worker of its own, rebuilt with the snapshot. Otherwise:
+//
 // Building happens in a worker thread with its own read-only SQLite connection: one table
 // scan in storage order (title_people NOT INDEXED; walking it through an index took
 // 16-22 s, the scan ~4-6 s), then normalizing and sorting. The buffers are transferred
@@ -37,6 +41,9 @@ import { databasePath } from "@/infra/paths";
 import { logger } from "@/infra/logger";
 import { editsOne, normalizeText } from "@/content/searchIndex";
 import { unpackPhoto } from "@/content/people";
+import { setting } from "@/config/settings";
+import { catalogSnapshot, catalogReady } from "@/content/catalog/store";
+import type { CatalogSnapshot } from "@/content/catalog/snapshot";
 
 const KIND_CAST = 1, KIND_DIRECTOR = 2, KIND_CREATOR = 4, KIND_WRITER = 8;
 const MIN_FUZZY_LEN = 4;
@@ -68,17 +75,48 @@ function kindsLabel(k: number): string {
   return out.join(" · ") || "Crew";
 }
 
-/** What the worker sends back: every field is a typed array over a transferable buffer. */
+/** The index's arrays (people in popularity order), plus how to read a person's id, name and
+ *  photo (as stored: a TMDB path or a URL, null when none). */
 interface Packed {
   count: number;
-  ids: Int32Array;
   weight: Int32Array;
   kinds: Uint8Array;
   norms: Uint8Array; normOff: Int32Array;
-  names: Uint8Array; nameOff: Int32Array;
-  photos: Uint8Array; photoOff: Int32Array;
   vocab: Uint8Array; vocabOff: Int32Array;
   postings: Int32Array; postOff: Int32Array;
+  who(d: number): { id: number; name: string; photo: string | null };
+}
+
+/** What the worker sends back: every field is a typed array over a transferable buffer. */
+interface WorkerPacked extends Omit<Packed, "who"> {
+  ids: Int32Array;
+  names: Uint8Array; nameOff: Int32Array;
+  photos: Uint8Array; photoOff: Int32Array;
+}
+
+function fromWorker(p: WorkerPacked): Packed {
+  return {
+    ...p,
+    who: (d) => ({
+      id: p.ids[d],
+      name: utf8.decode(p.names.subarray(p.nameOff[d], p.nameOff[d + 1])),
+      photo: p.photoOff[d + 1] > p.photoOff[d] ? utf8.decode(p.photos.subarray(p.photoOff[d], p.photoOff[d + 1])) : null,
+    }),
+  };
+}
+
+/** The same index over the catalog snapshot's ps.* sections (content/catalog/builder.ts). */
+function fromSnapshot(snap: CatalogSnapshot): Packed {
+  const person = snap.section("ps.person") as Int32Array;
+  return {
+    count: person.length,
+    weight: snap.section("ps.weight") as Int32Array,
+    kinds: snap.section("ps.kinds") as Uint8Array,
+    norms: snap.section("ps.norms") as Uint8Array, normOff: snap.section("ps.normOff") as Int32Array,
+    vocab: snap.section("ps.vocab") as Uint8Array, vocabOff: snap.section("ps.vocabOff") as Int32Array,
+    postings: snap.section("ps.post") as Int32Array, postOff: snap.section("ps.postOff") as Int32Array,
+    who: (d) => { const p = snap.person(person[d]); return { id: p.id, name: p.name, photo: p.photo || null }; },
+  };
 }
 
 const utf8 = new TextDecoder();
@@ -153,12 +191,12 @@ class PeopleIndex {
   }
 
   private hit(d: number): PersonHit {
-    const { ids, names, nameOff, photos, photoOff, kinds, weight } = this.p;
-    const photo = photoOff[d + 1] > photoOff[d] ? utf8.decode(photos.subarray(photoOff[d], photoOff[d + 1])) : null;
+    const { kinds, weight } = this.p;
+    const who = this.p.who(d);
     return {
-      id: ids[d],
-      name: utf8.decode(names.subarray(nameOff[d], nameOff[d + 1])),
-      photo: unpackPhoto(photo),
+      id: who.id,
+      name: who.name,
+      photo: unpackPhoto(who.photo),
       knownFor: kindsLabel(kinds[d]),
       titles: weight[d],
     };
@@ -358,7 +396,7 @@ const BUILD_SQL = `SELECT p.id, p.name, p.photo, a.n, a.k FROM (
   ) a JOIN people p ON p.id = a.personId WHERE a.n > 0
   ORDER BY a.n DESC, p.id`;
 
-function buildInWorker(): Promise<{ packed: Packed; readMs: number; terms: number; heapMb: number }> {
+function buildInWorker(): Promise<{ packed: WorkerPacked; readMs: number; terms: number; heapMb: number }> {
   return new Promise((resolve, reject) => {
     // `var __name`: esbuild (tsx, tsup) may wrap named functions in a __name() helper that
     // does not exist inside the eval'd worker.
@@ -400,20 +438,35 @@ let lastBuild = 0;
 let timer: NodeJS.Timeout | null = null;
 const MIN_REBUILD_MS = 15 * 60 * 1000;
 
-/** Answers per normalized query + limit, for the current index (cleared on swap). LRU. */
+/** Answers per normalized query + limit, for the index in use (cleared when it changes). LRU. */
 const answers = new Map<string, PeopleResult>();
+let answersOf: PeopleIndex | null = null;
 const MAX_ANSWERS = 5000;
 
-/** Builds a new index in a worker and swaps it in. */
+/** The snapshot's index (made once per snapshot), or null when the snapshot is off or not ready. */
+let fromSnap: { snap: CatalogSnapshot; index: PeopleIndex } | null = null;
+function snapshotIndex(): PeopleIndex | null {
+  if (!setting<boolean>("catalogSnapshot")) return null;
+  const snap = catalogSnapshot();
+  if (!snap) return null;
+  if (!fromSnap || fromSnap.snap !== snap) fromSnap = { snap, index: new PeopleIndex(fromSnapshot(snap)) };
+  return fromSnap.index;
+}
+function activeIndex(): PeopleIndex | null {
+  return snapshotIndex() ?? index;
+}
+
+/** Builds a new index in a worker and swaps it in. Not with the snapshot on (it holds the
+ *  index), unless the snapshot could not be built at all. */
 export async function buildPeopleIndex(): Promise<void> {
+  if (setting<boolean>("catalogSnapshot") && (await catalogReady())) return;
   if (building) { dirty = true; return; }
   building = true;
   dirty = false;
   const t0 = Date.now();
   try {
     const { packed, readMs, terms, heapMb } = await buildInWorker();
-    index = new PeopleIndex(packed);
-    answers.clear();
+    index = new PeopleIndex(fromWorker(packed));
     lastBuild = Date.now();
     const mb = Object.values(packed).reduce((s: number, v: any) => s + (v?.byteLength ?? 0), 0) / 1e6;
     logger.info(`[people] search index: ${packed.count} people, ${terms} words, ${mb.toFixed(1)} MB (read ${readMs} ms, ready in ${lastBuild - t0} ms, worker heap ${heapMb} MB, off the main thread)`);
@@ -424,8 +477,9 @@ export async function buildPeopleIndex(): Promise<void> {
   }
 }
 
-/** People data changed: rebuild soon, at most every 15 minutes. */
+/** People data changed: rebuild soon, at most every 15 minutes (the snapshot rebuilds itself). */
 export function markPeopleChanged(): void {
+  if (setting<boolean>("catalogSnapshot") && catalogSnapshot()) return;
   dirty = true;
   if (timer) return;
   const wait = Math.max(60_000, lastBuild + MIN_REBUILD_MS - Date.now());
@@ -439,14 +493,16 @@ export function markPeopleChanged(): void {
 /** Ranked people for `query` (cached); empty until the first build finishes. */
 export function searchPeople(query: string, limit = 30): PeopleResult {
   const norm = normalizeText(query);
-  if (!index || norm.length < 2) return { people: [], featured: null };
+  const idx = activeIndex();
+  if (!idx || norm.length < 2) return { people: [], featured: null };
+  if (answersOf !== idx) { answers.clear(); answersOf = idx; }
   const key = `${limit}|${norm}`;
   const cached = answers.get(key);
   if (cached) { answers.delete(key); answers.set(key, cached); return cached; }
-  const result = index.search(norm, limit);
+  const result = idx.search(norm, limit);
   answers.set(key, result);
   if (answers.size > MAX_ANSWERS) answers.delete(answers.keys().next().value as string);
   return result;
 }
 
-export function peopleIndexReady(): boolean { return index !== null; }
+export function peopleIndexReady(): boolean { return activeIndex() !== null; }

@@ -2,7 +2,7 @@
 
 The whole catalog packed in memory as typed arrays, so pages can be answered without the database (plan Phase 1). Code: `src/content/catalog/`. Setting `catalogSnapshot` (group Catalog, default off, applies on restart).
 
-**Status:** Phase 1b in progress. With the setting on: "All Movies" / "All Series" (pages, search, Discover's open-by-id) read the snapshot (`all.ts`), and so do Discover's cards on browse, rows and recommendations, title details (versions, cast and crew) and the versions picker (`cards.ts`). Still on today's code: Discover's ranking and facets (`discoverIndex`), person pages, people search. The setting stays off live until those move too and `catalogUnion`, the title search view, `discoverIndex` and the people search index (about 246 MB of heap on the working copy) are removed.
+**Status:** Phase 1b in progress. With the setting on: "All Movies" / "All Series" (pages, search, Discover's open-by-id) read the snapshot (`all.ts`), and so do Discover's cards on browse, rows and recommendations, title details (versions, cast and crew) and the versions picker (`cards.ts`). People search uses the snapshot's people index (`peopleSearch.ts`, no worker of its own). Still on today's code: Discover's ranking and facets (`discoverIndex`), person pages. The setting stays off live until those move too and `catalogUnion`, the title search view, `discoverIndex` and the people search index (about 246 MB of heap on the working copy) are removed.
 
 ## Files
 
@@ -26,6 +26,7 @@ One row per `content_meta` row ("copy"), person, credit and IPTV list entry, as 
 - **Tags** (genre, country, theme): a value dictionary plus offsets both ways, so "tags of a copy" and "copies with a tag" are both a slice.
 - **Credits**: grouped by title key in billing order, plus a per-person list. Ties on `sortOrder` (142k on live data: directors and writers restart at 0) are ordered as the database returns them: kind name, person id, role (bytes), the unique index's order, which SQLite's sort keeps. Kinds are a dictionary.
 - **Groups**: copies sorted by groupKey (as pool id), so every version of a title is one run.
+- **People search** (`ps.*`): `content/peopleSearch.ts`'s layout, computed from the credits already read (major credits: director, creator, first 10 billed cast; numbered most first, then by id). Names and photos stay in the pool. `peopleSearch.ts` makes its index from these sections when the setting is on, and does not run its own worker build. Checked: 7,561 searches identical to its own index (64k hits).
 - **Person details** (birthday, biography...) are sparse: rows only for people that have any.
 - **IPTV list entries**: each entry is its key list ("shape", four on live data) plus each value's JSON text from the pool. `listItem(k)` rebuilds the exact cached JSON; `listField(k, key)` reads one value without rebuilding the entry. Each entry's item id, with an index by (type, id).
 - **Title search**: built with `normalizeText` from `content/searchIndex.ts` (passed to the worker as source, so there is one normalizer): sorted ASCII vocabulary of words and joined word pairs, postings per term, an exact-term hash table for the typo pass, and each entry's normalized title and year.
@@ -36,7 +37,8 @@ Lookups are binary searches over sorted arrays (copy id, person id, title key, T
 
 - A worker thread with its own read-only connection, inside one read transaction: the snapshot is one moment of the database, and its version is `MAX(seq)` of `catalog_changes` read in that transaction.
 - Reads a page of 4,000 rows at a time, which SQLite packs into one JSON text (`json_group_array`). SQLite's JSON writes a REAL with 15 significant digits (0.1 + 0.2 came back as 0.3), so REALs are sent as `{"r": "<17 digits>"}` and turned back into the exact double. The driver then makes one string per page instead of one value per cell: the raw read went from 18 s to 5.3 s. Paging also bounds the driver's native row queue (streaming with `each` queued rows natively, +863 MB).
-- Text interning is an open-addressing table over typed arrays (a `Map` of 2 million strings took most of a 164 MB heap).
+- Text interning is an open-addressing table over typed arrays (a `Map` of 2 million strings took most of a 164 MB heap). Search words (titles and people) use the same kind of table over bytes, with a "last item" array instead of a `Set` per item: as `Map`s of 600k strings they were most of an 85 MB worker heap (now 19-32 MB).
+- Stages drop what they no longer need: the credits in read order once sorted copies exist, the intern table before the last stage.
 - The checksum (sha1) is computed in the worker; the buffers are transferred to the main thread, not copied.
 - Never `terminate()` the worker (it holds sqlite3; that aborts the process) and never give it an old-generation memory cap (same).
 
@@ -77,11 +79,11 @@ Measured on the working copy (production build): search p95 35.6 -> 8.8 ms for m
 
 | | |
 | --- | --- |
-| Build | 14.2 s (copies 4.7, tags 0.7, people 1.2, credits 4.4, lists 2.8, finish 0.3) |
-| Size | 168 MB (text pool 73 MB) |
-| Peak memory while building | +361 MB: the new snapshot plus about 190 MB of build tables (intern table, credit sort, page buffers), freed at the end |
-| Main-thread stall during a build | 24 ms |
-| Load from file at start | 0.56 s |
+| Build | about 22 s, all in the worker (copies 5.5, tags 1.0, people 1.6, credits 5.4, lists 5.2, people search 2.9, finish 0.4). It now also builds the title and people search indexes, which took 6.3 s (people worker) and about 1.5 s (title index, main thread) separately |
+| Size | 198 MB (text pool 103 MB, title search 9.5 MB, people search 16 MB) |
+| Peak memory while building | +334 to +382 MB over three runs: the new snapshot plus build tables, freed at the end |
+| Main-thread pauses during a build | at most 31 ms |
+| Load from file at start | 0.6-0.9 s |
 
 Memory budget once Phase 1b removes the old views: about 320 MB steady, about 680 MB at the peak of a rebuild (old and new snapshot side by side), inside the 1 GB container limit.
 

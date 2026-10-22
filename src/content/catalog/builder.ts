@@ -81,6 +81,8 @@ function workerMain(): void {
   let stageAt = started;
   const stage = (name: string) => { const now = Date.now(); stages[name] = now - stageAt; stageAt = now; };
   const enc = new TextEncoder();
+  // The title normalizer of content/searchIndex.ts, passed in as source (see buildSnapshot).
+  const normalize: (s: string) => string = (globalThis as any).__normalizeText;
 
   // Fixed-size column (exact length known from COUNT(*)), or growable when it is not.
   const fixed = (Ctor: any, n: number) => {
@@ -201,6 +203,93 @@ function workerMain(): void {
     slots[k] = id;
     if (count * 2 > slots.length) rehash();
     return id;
+  };
+
+  // ── word index for search (titles, people) ───────────────────────────────────
+  // Words of normalized names (ASCII) and adjacent word pairs joined, as SearchIndex and
+  // peopleSearch index them. Words are kept as bytes in an open-addressing table, not as JS
+  // strings in a Map (600k retained strings were most of the worker heap), and a word is
+  // counted once per item by remembering the last item that had it (no Set per item).
+  // pack(): sorted vocabulary (byte order = JS string order for ASCII) and postings CSR in
+  // item order (items are added in ascending order).
+  const wordIndex = () => {
+    let bytes = new Uint8Array(1 << 20), blen = 0;
+    let start = new Int32Array(1 << 16), whash = new Uint32Array(1 << 16), lastItem = new Int32Array(1 << 16), n = 0;
+    let wslots = new Int32Array(1 << 17), wmask = wslots.length - 1;
+    const pairItem = growable(Int32Array, 1 << 18), pairWord = growable(Int32Array, 1 << 18);
+    const lenOfWord = (i: number) => (i + 1 < n ? start[i + 1] : blen) - start[i];
+    const add = (item: number, w: string) => {
+      let h = 2166136261;
+      for (let c = 0; c < w.length; c++) h = Math.imul(h ^ w.charCodeAt(c), 16777619);
+      h >>>= 0;
+      let k = h & wmask, id = -1;
+      for (;;) {
+        const v = wslots[k];
+        if (!v) break;
+        if (whash[v - 1] === h && lenOfWord(v - 1) === w.length) {
+          const a = start[v - 1];
+          let c = 0;
+          while (c < w.length && bytes[a + c] === w.charCodeAt(c)) c++;
+          if (c === w.length) { id = v - 1; break; }
+        }
+        k = (k + 1) & wmask;
+      }
+      if (id < 0) {
+        if (n === start.length) {
+          const g = (A: any) => { const x = new A.constructor(A.length * 2); x.set(A); return x; };
+          start = g(start); whash = g(whash); lastItem = g(lastItem);
+        }
+        if (blen + w.length > bytes.length) { const x = new Uint8Array(Math.max(bytes.length * 2, blen + w.length)); x.set(bytes.subarray(0, blen)); bytes = x; }
+        id = n++;
+        start[id] = blen; whash[id] = h; lastItem[id] = -1;
+        for (let c = 0; c < w.length; c++) bytes[blen++] = w.charCodeAt(c);
+        wslots[k] = id + 1;
+        if (n * 2 > wslots.length) {
+          const bigger = new Int32Array(wslots.length * 2), bm = bigger.length - 1;
+          for (let j = 0; j < wslots.length; j++) { const v = wslots[j]; if (!v) continue; let q = whash[v - 1] & bm; while (bigger[q]) q = (q + 1) & bm; bigger[q] = v; }
+          wslots = bigger; wmask = bm;
+        }
+      }
+      if (lastItem[id] === item) return;
+      lastItem[id] = item;
+      pairItem.push(item); pairWord.push(id);
+    };
+    return {
+      /** Indexes a normalized name: each word, then each adjacent pair joined. */
+      addName(item: number, norm: string) {
+        if (!norm) return;
+        const words = norm.split(" ");
+        for (const w of words) add(item, w);
+        for (let i = 0; i + 1 < words.length; i++) add(item, words[i] + words[i + 1]);
+      },
+      get size() { return n; },
+      pack() {
+        const cmp = (x: number, y: number) => {
+          const ax = start[x], ay = start[y], lx = lenOfWord(x), ly = lenOfWord(y), m = Math.min(lx, ly);
+          for (let c = 0; c < m; c++) { const d = bytes[ax + c] - bytes[ay + c]; if (d !== 0) return d; }
+          return lx - ly;
+        };
+        const order = Int32Array.from({ length: n }, (_, i) => i).sort(cmp);
+        const rank = new Int32Array(n);
+        for (let i = 0; i < n; i++) rank[order[i]] = i;
+        const vocab = new Uint8Array(blen), vocabOff = new Int32Array(n + 1);
+        for (let i = 0, at = 0; i < n; i++) {
+          const w = order[i];
+          vocabOff[i] = at;
+          vocab.set(bytes.subarray(start[w], start[w] + lenOfWord(w)), at);
+          at += lenOfWord(w);
+          vocabOff[i + 1] = at;
+        }
+        const items = pairItem.out(), words = pairWord.out();
+        const postOff = new Int32Array(n + 1);
+        for (let k = 0; k < words.length; k++) postOff[rank[words[k]] + 1]++;
+        for (let i = 0; i < n; i++) postOff[i + 1] += postOff[i];
+        const cur = postOff.slice(0, n), post = new Int32Array(words.length);
+        for (let k = 0; k < words.length; k++) post[cur[rank[words[k]]]++] = items[k];
+        bytes = new Uint8Array(0); start = new Int32Array(0); whash = new Uint32Array(0); lastItem = new Int32Array(0); wslots = new Int32Array(0);
+        return { vocab, vocabOff, post, postOff, count: n };
+      },
+    };
   };
 
   const conn = new sqlite3.Database(input.dbPath, sqlite3.OPEN_READONLY, (openErr: any) => {
@@ -372,7 +461,8 @@ function workerMain(): void {
       });
       keyIndex.clear();
       const nc = cKey.length;
-      const keys = cKey.out(), persons = cPerson.out(), kinds = cKind.out(), roles = cRole.out(), orders = cOrder.out();
+      // In read order; dropped once the key-ordered copies below exist (about 19 MB).
+      let keys = cKey.out(), persons = cPerson.out(), kinds = cKind.out(), roles = cRole.out(), orders = cOrder.out();
       const keyOrder = Int32Array.from(keyStrs.keys()).sort((a, b) => (keyStrs[a] < keyStrs[b] ? -1 : keyStrs[a] > keyStrs[b] ? 1 : 0));
       const keyRank = new Int32Array(keyStrs.length);
       for (let i = 0; i < keyOrder.length; i++) keyRank[keyOrder[i]] = i;
@@ -412,7 +502,19 @@ function workerMain(): void {
       sections["person.creditOff"] = pOff;
       sections["person.credits"] = pCred;
       counts.credits = nc;
+      // Per person, for people search (packed after the lists, see below): major credits
+      // (director, creator, or one of the first 10 billed cast) and the kinds they have.
+      const KIND_BIT: Record<string, number> = { cast: 1, director: 2, creator: 4, writer: 8 };
+      const major = new Int32Array(personIds.length), kindBits = new Uint8Array(personIds.length);
+      for (let k = 0; k < nc; k++) {
+        const kind = kindStrs[kinds[k]], p = persons[k];
+        if (kind === "director" || kind === "creator" || (kind === "cast" && orders[k] < 10)) major[p]++;
+        kindBits[p] |= KIND_BIT[kind] ?? 0;
+      }
+      keys = persons = orders = new Int32Array(0); kinds = new Uint8Array(0); roles = new Uint32Array(0);
       stage("credits");
+
+
 
       // ── IPTV category lists: every portal entry as its cached JSON, in display order ──
       const catType = growable(Uint8Array, 256), catId = growable(Uint32Array, 256), catStart = growable(Int32Array, 256);
@@ -424,9 +526,7 @@ function workerMain(): void {
       // Item id (stream_id / series_id as text) per entry, and the title search terms.
       const itemIdPool = growable(Uint32Array, 1 << 16), itemIdStr: string[] = [], itemType: number[] = [];
       const normIds = growable(Uint32Array, 1 << 16), years = growable(Int16Array, 1 << 16);
-      const normalize: (s: string) => string = (globalThis as any).__normalizeText;
-      const termIndex = new Map<string, number>(), termStrs: string[] = [];
-      const pairDoc = growable(Int32Array, 1 << 18), pairTerm = growable(Int32Array, 1 << 18);
+      const titleWords = wordIndex();
       for (const [type, prefix, idField, code] of [["movie", "vod_streams_", "stream_id", 1], ["series", "series_list_", "series_id", 2]] as const) {
         for (const cat of input.genres[type] as string[]) {
           const row = await get("SELECT value FROM xtream_cache WHERE key = ?", [prefix + cat]);
@@ -461,14 +561,7 @@ function workerMain(): void {
             normIds.push(intern(norm));
             const y = String(item?.year ?? "").slice(0, 4);
             years.push(/^\d{4}$/.test(y) ? Number(y) : 0);
-            const words = norm ? norm.split(" ") : [];
-            const terms = new Set(words);
-            for (let i = 0; i + 1 < words.length; i++) terms.add(words[i] + words[i + 1]);
-            for (const t of terms) {
-              let ti = termIndex.get(t);
-              if (ti === undefined) { ti = termStrs.length; termIndex.set(t, ti); termStrs.push(t); }
-              pairDoc.push(doc); pairTerm.push(ti);
-            }
+            titleWords.addName(doc, norm);
           }
         }
       }
@@ -491,29 +584,12 @@ function workerMain(): void {
       // Title search: vocabulary sorted (ASCII, so byte order = JS string order), postings CSR.
       sections["search.norm"] = normIds.out();
       sections["search.year"] = years.out();
-      const vOrder = Int32Array.from(termStrs.keys()).sort((a, b) => (termStrs[a] < termStrs[b] ? -1 : termStrs[a] > termStrs[b] ? 1 : 0));
-      const vRank = new Int32Array(termStrs.length);
-      for (let i = 0; i < vOrder.length; i++) vRank[vOrder[i]] = i;
-      let vocabBytes = 0;
-      for (const t of termStrs) vocabBytes += t.length;
-      const vocab = new Uint8Array(vocabBytes), vocabOff = new Int32Array(termStrs.length + 1);
-      for (let i = 0, at = 0; i < vOrder.length; i++) {
-        const t = termStrs[vOrder[i]];
-        vocabOff[i] = at;
-        for (let c = 0; c < t.length; c++) vocab[at++] = t.charCodeAt(c);
-        vocabOff[i + 1] = at;
-      }
-      const pd = pairDoc.out(), pt = pairTerm.out();
-      const postOff = new Int32Array(termStrs.length + 1);
-      for (let k = 0; k < pt.length; k++) postOff[vRank[pt[k]] + 1]++;
-      for (let i = 0; i < termStrs.length; i++) postOff[i + 1] += postOff[i];
-      const pcur2 = postOff.slice(0, termStrs.length), post = new Int32Array(pt.length);
-      for (let k = 0; k < pt.length; k++) post[pcur2[vRank[pt[k]]]++] = pd[k]; // docs ascend: added in order
+      const { vocab, vocabOff, post, postOff, count: termCount } = titleWords.pack();
       // Exact-term lookup for the one-edit typo pass (SearchIndex keeps a Map for it): slots
       // hold vocabulary index + 1, at least twice as many slots as terms.
-      let slotsN = 1; while (slotsN < termStrs.length * 2) slotsN <<= 1;
+      let slotsN = 1; while (slotsN < termCount * 2) slotsN <<= 1;
       const termHash = new Int32Array(slotsN), hmask = slotsN - 1;
-      for (let i = 0; i < vOrder.length; i++) {
+      for (let i = 0; i < termCount; i++) {
         let h = 2166136261;
         for (let c = vocabOff[i]; c < vocabOff[i + 1]; c++) h = Math.imul(h ^ vocab[c], 16777619);
         let k = (h >>> 0) & hmask;
@@ -525,10 +601,44 @@ function workerMain(): void {
       sections["search.vocabOff"] = vocabOff;
       sections["search.postOff"] = postOff;
       sections["search.post"] = post;
-      counts.searchTerms = termStrs.length;
-      termIndex.clear(); termStrs.length = 0;
+      counts.searchTerms = termCount;
       copyIdStr.length = 0;
       stage("lists");
+      // Nothing is interned after this point: drop the intern table (tens of MB) before the
+      // last stage and the finish, which only read the pool.
+      hashes = new Uint32Array(0); slots = new Int32Array(0);
+
+      // ── people search: content/peopleSearch.ts's layout, from the credit counts above ──
+      // Who: everyone with a major credit (director, creator, or one of the first 10 billed
+      // cast), numbered most major credits first, then by id (its BUILD_SQL). Names and photos
+      // stay in the pool; only the normalized names, vocabulary and postings are added.
+      const docs: number[] = [];
+      for (let p = 0; p < personIds.length; p++) if (major[p] > 0) docs.push(p);
+      docs.sort((a, b) => major[b] - major[a] || personIds[a] - personIds[b]);
+      const nameIds = sections["person.name"] as Uint32Array;
+      const textDec = new TextDecoder("utf-8", { ignoreBOM: true });
+      const poolText = (id: number) => { if (!id) return ""; const st = starts[id], at = st % CHUNK; return textDec.decode(pool.chunk(st).subarray(at, at + lenOf(id))); };
+      const normBytes = growable(Uint8Array, 1 << 20), normOffs = new Int32Array(docs.length + 1);
+      const nameWords = wordIndex();
+      for (let d = 0; d < docs.length; d++) {
+        const norm = normalize(poolText(nameIds[docs[d]]));
+        normOffs[d] = normBytes.length;
+        for (let c = 0; c < norm.length; c++) normBytes.push(norm.charCodeAt(c));
+        nameWords.addName(d, norm);
+      }
+      normOffs[docs.length] = normBytes.length;
+      const ps = nameWords.pack(); // postings in popularity order (people were added in it)
+      sections["ps.person"] = Int32Array.from(docs);
+      sections["ps.weight"] = Int32Array.from(docs, (p) => major[p]);
+      sections["ps.kinds"] = Uint8Array.from(docs, (p) => kindBits[p]);
+      sections["ps.norms"] = normBytes.out();
+      sections["ps.normOff"] = normOffs;
+      sections["ps.vocab"] = ps.vocab;
+      sections["ps.vocabOff"] = ps.vocabOff;
+      sections["ps.post"] = ps.post;
+      sections["ps.postOff"] = ps.postOff;
+      counts.peopleSearch = docs.length;
+      stage("peopleSearch");
 
       await run("COMMIT");
       const poolStart = new Uint32Array(count + 1);

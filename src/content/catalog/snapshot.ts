@@ -58,6 +58,11 @@ export class CatalogSnapshot {
     this.personCount = (s["person.id"] as Int32Array).length;
   }
 
+  /** A section by name (read only), for readers that keep their own layout (people search). */
+  section(name: string): Section {
+    return this.col(name);
+  }
+
   /** Total bytes held by the sections. */
   get bytes(): number {
     let n = 0;
