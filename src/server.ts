@@ -45,6 +45,7 @@ import { userRoutes } from "./routes/account/user";
 import { userManagementRoutes } from "./routes/account/userManagement";
 import { discoverRoutes, discoverDetailsRoute, personRoute, peopleSearchRoute } from "./routes/discover";
 import { buildPeopleIndex, markPeopleChanged } from "./content/peopleSearch";
+import { startCatalogSnapshot } from "./content/catalog/store";
 import { onDiscoverCacheClear } from "./services/discoverCache";
 import { socketService } from "./services/SocketService";
 
@@ -491,6 +492,9 @@ const init = async () => {
   // People search (content/peopleSearch.ts): built in a worker thread after the startup
   // warm-ups, rebuilt when enrichment or the people tidy changes who is in the catalog.
   setTimeout(() => void buildPeopleIndex(), 30_000).unref?.();
+  // Catalog snapshot (content/catalog/store.ts, setting catalogSnapshot, off by default): after
+  // the startup warm-ups so the two builds never peak together.
+  setTimeout(() => void startCatalogSnapshot().catch((e) => logger.warn(`[catalog] start failed: ${e?.message ?? e}`)), 60_000).unref?.();
   onDiscoverCacheClear(markPeopleChanged);
   // Channel logos for Discover (content/channels.ts): portal logos now, TMDB network logos
   // a minute later in the background (one-time, cached; retried weekly for misses).

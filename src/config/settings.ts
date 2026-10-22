@@ -90,6 +90,7 @@ const DEFS: SettingDef[] = [
 
   // Images
   { key: "imageCacheGb", type: "number", default: 20, min: 0, max: 2000, group: "Images", label: "TMDB image cache size (GB)", help: "Artwork is downloaded from TMDB once and served from this server. 0 turns the cache off (apps load TMDB directly).", apply: "live" },
+  { key: "catalogSnapshot", type: "boolean", default: false, group: "Catalog", label: "In-memory catalog snapshot", help: "Builds the packed in-memory catalog (plan Phase 1). Leave off until the pages read from it (Phase 1b); on its own it only adds memory.", apply: "restart" },
   { key: "imageCacheFolder", type: "string", default: "", group: "Images", label: "Image cache folder", help: "Empty: image-cache inside the data folder. A NAS folder mounted into the container is a good choice.", apply: "live" },
   { key: "customArtFolder", type: "string", default: "", group: "Images", label: "Custom images folder", help: "Posters, backdrops and logos chosen or uploaded in \"Edit images\". Empty: custom-art inside the data folder. Move the existing files there before changing it.", apply: "live" },
 
