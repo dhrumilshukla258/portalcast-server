@@ -11,7 +11,7 @@ import { readSnapshotFile, writeSnapshotFile } from "../src/content/catalog/form
 
 // A small database with the edge cases, built with 128-byte chunks so texts cross chunk ends.
 const COLUMNS: ColumnSpec[] = [
-  ...["id", "type", "name", "overview"].map((name) => ({ name, kind: "text" as const })),
+  ...["id", "type", "name", "overview", "artLocked"].map((name) => ({ name, kind: "text" as const })),
   { name: "enrichedAt", kind: "date" },
   ...["tmdbId", "rating", "runtime"].map((name) => ({ name, kind: "num" as const })),
 ];
@@ -35,6 +35,10 @@ async function makeDb(): Promise<string> {
   const db = new sqlite3.Database(file);
   await exec(db, "CREATE TABLE content_meta (id TEXT PRIMARY KEY, type TEXT, name TEXT, overview TEXT, enrichedAt DATETIME, tmdbId INTEGER, rating FLOAT, runtime INTEGER)");
   for (const c of copies) await exec(db, "INSERT INTO content_meta VALUES (?,?,?,?,?,?,?,?)", c);
+  // REALs SQLite's JSON would round to 15 digits: a rating, and a JSON-typed (NUMERIC affinity)
+  // column holding a number.
+  await exec(db, "ALTER TABLE content_meta ADD COLUMN artLocked JSON");
+  await exec(db, "INSERT INTO content_meta (id, type, name, rating, artLocked) VALUES ('movie_9', 'movie', 'Float', ?, '0.30000000000000004')", [0.1 + 0.2]);
   for (const t of ["content_genres", "content_countries", "content_themes"]) await exec(db, `CREATE TABLE ${t} (contentId TEXT, value TEXT)`);
   for (const [c, v] of [["movie_1", "Drama"], ["movie_1", "Action"], ["series_7", "Drama"], ["gone_9", "Drama"], ["movie_3", "Comedy"]]) {
     await exec(db, "INSERT INTO content_genres VALUES (?, ?)", [c, v]);
@@ -90,6 +94,14 @@ test("every copy column reads back as stored, across chunk ends", async () => {
   assert.equal(snap.copyIndex("movie_404"), -1);
   assert.equal(snap.copyText("overview", snap.copyIndex("movie_2")), "", "empty text is not NULL");
   assert.equal(snap.copyText("overview", snap.copyIndex("series_7"))!.charCodeAt(0), 0xfeff, "a leading BOM is kept");
+});
+
+test("floating-point values come back exactly, as the driver returns them", async () => {
+  const { snap } = await snapshot();
+  const i = snap.copyIndex("movie_9");
+  assert.equal(snap.copyNum("rating", i), 0.1 + 0.2);
+  assert.equal(snap.copyText("artLocked", i), String(0.1 + 0.2));
+  assert.equal(snap.copyText("artLocked", snap.copyIndex("movie_1")), null);
 });
 
 test("texts are stored once; number columns narrow only when every value fits", async () => {

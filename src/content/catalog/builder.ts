@@ -196,15 +196,22 @@ function workerMain(): void {
     // Pages of PAGE rows in rowid (storage) order, inside the one read transaction. Not
     // `each`: sqlite3 fetches rows faster than they are packed and queues them in native
     // memory (measured: +863 MB peak with a 32 MB worker heap). A page bounds that queue.
-    // Each row arrives as an array: [rowid, ...columns in the order asked for].
+    // Each row arrives as an array: [rowid, ...columns in the order asked for], each value as
+    // the driver returns it. SQLite's JSON writes a REAL with 15 significant digits (0.1 + 0.2
+    // came back as 0.3), so a REAL is sent as {"r": "<17 digits>"}, which round-trips to the same
+    // double; a text value is never an object, so the tag cannot be mistaken.
     const PAGE = 4000;
     const scan = async (columns: string[], table: string, onRow: (r: any[]) => void) => {
       const list = columns.map((c) => `\`${c}\``).join(", ");
+      const exact = columns.map((c) => `CASE WHEN typeof(\`${c}\`) = 'real' THEN json_object('r', printf('%!.17g', \`${c}\`)) ELSE \`${c}\` END`).join(", ");
       let after = -9007199254740991;
       for (;;) {
-        const page = await get(`SELECT json_group_array(json_array(_rid, ${list})) AS j FROM (SELECT rowid AS _rid, ${list} FROM \`${table}\` WHERE rowid > ? ORDER BY rowid LIMIT ${PAGE})`, [after]);
+        const page = await get(`SELECT json_group_array(json_array(_rid, ${exact})) AS j FROM (SELECT rowid AS _rid, ${list} FROM \`${table}\` WHERE rowid > ? ORDER BY rowid LIMIT ${PAGE})`, [after]);
         const rows: any[][] = JSON.parse(page.j);
-        for (const r of rows) onRow(r);
+        for (const r of rows) {
+          for (let i = 1; i < r.length; i++) { const v = r[i]; if (v !== null && typeof v === "object") r[i] = Number(v.r); }
+          onRow(r);
+        }
         if (rows.length < PAGE) return;
         after = rows[rows.length - 1][0];
       }

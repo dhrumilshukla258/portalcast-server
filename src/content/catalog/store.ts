@@ -15,7 +15,7 @@ import { setting } from "@/config/settings";
 import { readGenres } from "@/infra/storage";
 import { buildSnapshot, type ColumnSpec } from "./builder";
 import { CatalogSnapshot } from "./snapshot";
-import { setChangeCapture, latestChange, pruneChanges, listChangesSince } from "./changes";
+import { setChangeCapture, latestChange, pruneChanges, listChangesSince, changesSince } from "./changes";
 import { xtreamCacheKeyVersion } from "@/services/xtreamCache";
 import { listSnapshotFiles, readSnapshotFile, writeSnapshotFile } from "./format";
 
@@ -56,6 +56,47 @@ const ready = new Promise<CatalogSnapshot | null>((resolve) => { markReady = res
  *  off or could not be built; readers wait on it instead of building the views it replaces. */
 export function catalogReady(): Promise<CatalogSnapshot | null> {
   return ready;
+}
+
+/** Keys written after the snapshot was built, per log table ("title", "tags", "person"...). */
+export interface CatalogChanges {
+  snap: CatalogSnapshot;
+  keys: Map<string, Set<string>>;
+  has(tbl: string, key: string): boolean;
+}
+
+let changeState: { snap: CatalogSnapshot; seq: number; keys: Map<string, Set<string>> } | null = null;
+let changeSync: Promise<void> | null = null;
+
+/**
+ * What changed since the current snapshot: one indexed read of the change log per call,
+ * returning only rows newer than the last call, so a write made a moment ago is seen
+ * (readers serve those keys from the database). Null when there is no snapshot.
+ */
+export async function catalogChanges(): Promise<CatalogChanges | null> {
+  const snap = current;
+  if (!snap) return null;
+  if (!changeState || changeState.snap !== snap) changeState = { snap, seq: snap.version, keys: new Map() };
+  const state = changeState;
+  // Concurrent requests share one read; a request arriving after it started reads again, so
+  // it never misses a write it made before asking.
+  const read = (async () => {
+    if (changeSync) await changeSync.catch(() => undefined);
+    for (;;) {
+      const rows = await changesSince(sequelize, state.seq);
+      for (const r of rows) {
+        let set = state.keys.get(r.tbl);
+        if (!set) state.keys.set(r.tbl, (set = new Set()));
+        set.add(r.key);
+        if (r.seq > state.seq) state.seq = r.seq;
+      }
+      if (rows.length < 5000) break; // changesSince returns at most 5000 rows per call
+    }
+  })();
+  changeSync = read;
+  await read;
+  if (changeSync === read) changeSync = null;
+  return { snap, keys: state.keys, has: (tbl, key) => !!state.keys.get(tbl)?.has(key) };
 }
 
 /** The cache list under `key`, at cache version `version`, is the one in the snapshot. */

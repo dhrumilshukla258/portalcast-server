@@ -27,6 +27,7 @@ import { UNCATEGORIZED_GENRE } from "@/content/metaEnrichment";
 import { logger } from "@/infra/logger";
 import { proxiedImageUrl } from "@/providers/portalAssets";
 import { getPublicOrigin } from "@/infra/publicUrl";
+import { titleRows } from "@/content/catalog/cards";
 
 const PAGE_SIZE = 40;
 
@@ -322,13 +323,10 @@ export const discoverRoutes: ServerRoute[] = [
         type, language: q.language ? String(q.language) : undefined, tags, hidden, page, pageSize: PAGE_SIZE,
       });
 
-      const found = ids.length ? await ContentMeta.findAll({ where: { id: { [Op.in]: ids } } }) : [];
-      const byId = new Map(found.map((r: any) => [r.id as string, r]));
+      // The page's rows and tags: from the catalog snapshot when it is on (titles changed since
+      // it was built are read from the database), else from the database (catalog/cards.ts).
+      const { rows: byId, genres: genresById, countries: countriesById } = await titleRows(ids);
       const rows = ids.map((id) => byId.get(id)).filter(Boolean) as any[];
-      const [genresById, countriesById] = await Promise.all([
-        tagsByContentId(ContentGenre, ids),
-        tagsByContentId(ContentCountry, ids),
-      ]);
 
       // Same PaginatedResponse<T> shape the clients' pagination already expects.
       return {
@@ -359,8 +357,8 @@ export const discoverRoutes: ServerRoute[] = [
         ...browseIndex(idx, { type, tags: [{ kind: "genre" as const, value: genre }], hidden, page: 1, pageSize: PAGE_SIZE }),
       }));
       const allIds = [...new Set(picked.flatMap((p) => p.ids))];
-      const found = allIds.length ? await ContentMeta.findAll({ where: { id: { [Op.in]: allIds } } }) : [];
-      const [genresById, countriesById] = await Promise.all([tagsByContentId(ContentGenre, allIds), tagsByContentId(ContentCountry, allIds)]);
+      const { rows: byRowId, genres: genresById, countries: countriesById } = await titleRows(allIds);
+      const found = allIds.map((id) => byRowId.get(id)).filter(Boolean) as any[];
       const origin = getPublicOrigin(request);
       const items = await withVideoInfo(
         found.map((r: any) => toMediaItem(r, genresById, countriesById, origin)),
@@ -539,15 +537,8 @@ export const discoverRoutes: ServerRoute[] = [
       });
       if (topIds.length === 0) return { data: [] };
 
-      const topMeta = await ContentMeta.findAll({ where: { id: { [Op.in]: topIds } } });
-      const metaById = new Map((topMeta as any[]).map((m) => [m.id, m]));
+      const { rows: metaById, genres: genresById, countries: countriesById } = await titleRows(topIds);
       const top = topIds.map((id) => metaById.get(id)).filter(Boolean);
-
-      const ids = top.map((r: any) => r.id);
-      const [genresById, countriesById] = await Promise.all([
-        tagsByContentId(ContentGenre, ids),
-        tagsByContentId(ContentCountry, ids),
-      ]);
 
       return {
         data: await withVideoInfo(
