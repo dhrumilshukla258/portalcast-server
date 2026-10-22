@@ -58,9 +58,12 @@ export function registerHttpCaching(server: Server): void {
     if (homeVersion) r?.header?.("X-Home-Version", homeVersion);
 
     // Asked for at the current version: the answer cannot change at this address.
-    const asked = (request.query as Record<string, unknown>)?.v;
+    const q = (request.query ?? {}) as Record<string, unknown>;
+    const asked = q.v;
     const current = request.path === HOME_PATH ? homeVersion : version;
-    const pinned = request.method === "get" && r?.statusCode === 200 && !!current && asked === current;
+    // Never a title's own answer (seasons, episodes, files): it carries play links.
+    const opensTitle = (q.movieId !== undefined && String(q.movieId) !== "0") || q.seasonId !== undefined || q.episodeId !== undefined;
+    const pinned = request.method === "get" && r?.statusCode === 200 && !!current && asked === current && !opensTitle;
     if (pinned && request.path === HOME_PATH) {
       r.header("Cache-Control", `private, max-age=${YEAR}, immutable`);
       r.header("Vary", "Authorization");
