@@ -69,6 +69,8 @@ import { Op } from "sequelize";
 import { logger } from "./infra/logger";
 import { authCheck, type JWTPayload } from "./auth/jwt";
 import { primeDiscoverIndex } from "./content/discoverIndex";
+import { refreshSports } from "./content/sports";
+import { sportsRoutes } from "./routes/sports";
 
 // The webui loads scripts/media/artwork from many origins (streams, TMDB, Google sign-in,
 // Chromecast, YouTube trailers), so sources stay open; eval, plugins and <base> are off.
@@ -113,6 +115,7 @@ const init = async () => {
     name: "people", label: "Remove unused cast lists", dailyAtHour: 5,
     run: async () => { const r = await tidyPeople(); markPeopleChanged(); return r; },
   });
+  registerJob({ name: "sports", label: "Fetch the sports schedule", everyMs: 60 * 60 * 1000, run: refreshSports });
   registerJob({
     name: "page-cache", label: "Remove expired page answers", dailyAtHour: 5,
     run: async () => `${await ContentCache.destroy({ where: { expiresAt: { [Op.lt]: new Date() } } })} removed`,
@@ -170,6 +173,7 @@ const init = async () => {
   server.route(discoverDetailsRoute);
   server.route(personRoute);
   server.route(peopleSearchRoute);
+  server.route(sportsRoutes);
   // Is the IPTV portal reachable (services/portalHealth.ts)? Signed-in clients only.
   server.route({ method: "GET", path: "/api/v2/health/iptv", handler: () => iptvHealth() });
 

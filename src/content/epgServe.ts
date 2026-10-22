@@ -61,7 +61,7 @@ interface Columns {
 
 export interface BuiltBody { gz: Buffer; etag: string; rawBytes: number }
 
-interface Snapshot {
+export interface Snapshot {
   profileKey: string;
   rowKey: string;           // EpgCache id + timestamp: identifies the stored guide
   timestamp: Date;
@@ -336,6 +336,44 @@ function scheduleHourlyPrebuild(): void {
     if (snapshots.size > 0) scheduleHourlyPrebuild();
   }, msToNextHour);
   hourTimer.unref();
+}
+
+/**
+ * Calls `visit` for every programme on any channel that overlaps [from, to) (unix seconds), with
+ * its channel id, name and times. Parses only the programmes in range (the Sports page's guide
+ * match, content/sports.ts); yields to the event loop every 1000 channels.
+ */
+export async function forEachProgramme(
+  snap: Snapshot, from: number, to: number,
+  visit: (channelId: string, name: string, start: number, stop: number) => void,
+): Promise<void> {
+  const { cols } = snap;
+  const C = cols.channelIds.length;
+  for (let c = 0; c < C; c++) {
+    const cLo = cols.chanOff[c], cHi = cols.chanOff[c + 1];
+    if (cLo !== cHi) {
+      const lo = firstGreater(cols.maxStop, cLo, cHi, from);
+      const hi = firstAtLeast(cols.start, lo, cHi, to);
+      for (let i = lo; i < hi; i++) {
+        if (cols.stop[i] <= from) continue;
+        let name: unknown;
+        try { name = JSON.parse(cols.buf.toString("utf8", cols.byteStart[i], cols.byteEnd[i]))?.name; } catch { continue; }
+        if (typeof name === "string" && name) visit(cols.channelIds[c], name, cols.start[i], cols.stop[i]);
+      }
+    }
+    if (c % 1000 === 999) await yieldLoop();
+  }
+}
+
+/** The last programme end in the guide (unix seconds): games after it cannot match. */
+export function guideEnd(snap: Snapshot): number {
+  let end = 0;
+  const { cols } = snap;
+  for (let c = 0; c < cols.channelIds.length; c++) {
+    const hi = cols.chanOff[c + 1];
+    if (hi > cols.chanOff[c] && cols.maxStop[hi - 1] > end) end = cols.maxStop[hi - 1];
+  }
+  return end;
 }
 
 /** Called after a new guide is stored so the snapshot is rebuilt before the next client asks. */

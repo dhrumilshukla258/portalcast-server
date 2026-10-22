@@ -101,6 +101,9 @@ const DEFS: SettingDef[] = [
   { key: "backupFolder", type: "string", default: "", group: "Backups", label: "Backup folder", help: "Where the nightly database copy goes. Empty: the backups folder inside the data folder. A NAS folder mounted into the container is a good choice. The key file is never copied here.", apply: "live" },
   { key: "backupKeep", type: "number", default: 7, min: 0, max: 365, group: "Backups", label: "Nightly backups to keep", help: "0 turns backups off.", apply: "live" },
 
+  // Sports
+  { key: "sportsLeagues", type: "list", default: ["cricket", "ipl", "premier-league", "champions-league", "la-liga", "formula-1", "nba", "nfl"], group: "Sports", label: "Sports schedule: leagues", help: "The Sports page's leagues, in this order: names from sporting-events.org/data (for example premier-league, bundesliga, tennis, the-ashes). Comma-separated, at most 20. The schedule is fetched hourly while Sports is in use.", apply: "live" },
+
   // Logging
   { key: "logLevel", env: "LOG_LEVEL", type: "string", default: "info", options: ["debug", "info", "warn", "error"], group: "Logging", label: "Log level", apply: "live" },
 ];
