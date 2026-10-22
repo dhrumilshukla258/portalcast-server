@@ -40,8 +40,39 @@ const IN_USE_MS = 3 * DAY_MS;
 /** How long the first request waits for the first fetch before answering with what there is. */
 const FIRST_WAIT_MS = 8000;
 const MAX_CHANNELS = 6;
-export const DEFAULT_DAYS = 7;
-export const MAX_DAYS = 14;
+// The source lists a month or so ahead; some sports (cricket) have a game every few weeks,
+// so the page looks a month ahead.
+export const DEFAULT_DAYS = 30;
+export const MAX_DAYS = 45;
+
+/**
+ * Every league sporting-events.org offers (its /data/ page, 2026-10-22), grouped by sport in
+ * this order; what a viewer can choose from ("Choose sports"). Names from the slug, with the
+ * acronyms and accents put right.
+ */
+export const CATALOGUE: string[] = ["premier-league", "la-liga", "serie-a", "bundesliga", "ligue-1", "champions-league", "europa-league", "conference-league", "fa-cup", "nations-league", "fifa-world-cup", "copa-america", "football", "cricket", "ipl", "the-ashes", "champions-trophy", "tennis", "wimbledon", "french-open", "australian-open", "us-open-tennis", "atp-finals", "davis-cup", "table-tennis", "formula-1", "motogp", "nascar", "indycar", "wrc", "le-mans", "motorsport", "nba", "basketball", "march-madness", "nfl", "american-football", "college-football", "super-bowl", "nhl-ice-hockey", "ice-hockey", "stanley-cup", "mlb", "baseball", "world-series", "rugby-union", "rugby-league", "six-nations", "premiership-rugby", "nrl", "golf", "the-masters", "us-open-golf", "pga-championship", "the-open-championship", "ryder-cup", "mma", "boxing", "darts", "premier-league-darts", "pdc-world-championship", "snooker", "world-snooker-championship", "athletics", "diamond-league", "world-athletics-championships", "cycling", "tour-de-france", "vuelta-a-espana", "giro-ditalia", "horse-racing", "royal-ascot", "cheltenham-festival", "grand-national", "kentucky-derby", "melbourne-cup", "swimming", "rowing", "surfing", "winter-sports", "esports"];
+const NAME_FIXES: Record<string, string> = {
+  ipl: "IPL", nba: "NBA", nfl: "NFL", mlb: "MLB", nrl: "NRL", mma: "MMA", wrc: "WRC", motogp: "MotoGP", nascar: "NASCAR",
+  indycar: "IndyCar", "nhl-ice-hockey": "NHL", "fa-cup": "FA Cup", "formula-1": "Formula 1", "ligue-1": "Ligue 1",
+  "us-open-tennis": "US Open (tennis)", "us-open-golf": "US Open (golf)", "atp-finals": "ATP Finals",
+  "pga-championship": "PGA Championship", "le-mans": "Le Mans", "giro-ditalia": "Giro d'Italia",
+  "vuelta-a-espana": "Vuelta a España", "pdc-world-championship": "PDC World Championship", "fifa-world-cup": "FIFA World Cup",
+  "copa-america": "Copa América", "the-ashes": "The Ashes", "the-masters": "The Masters", "the-open-championship": "The Open",
+  football: "Football (all)", basketball: "Basketball (all)", tennis: "Tennis (all)", golf: "Golf (all)", cricket: "Cricket (all)",
+  motorsport: "Motorsport (all)", "american-football": "American football (all)", "ice-hockey": "Ice hockey (all)",
+  baseball: "Baseball (all)", athletics: "Athletics (all)", cycling: "Cycling (all)", "horse-racing": "Horse racing (all)",
+};
+export function leagueName(slug: string): string {
+  return NAME_FIXES[slug] ?? slug.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+
+/** A viewer's chosen leagues, cleaned: known slugs only, at most 20; null when unusable. */
+export function cleanLeagueChoice(v: unknown): string[] | null {
+  if (!Array.isArray(v)) return null;
+  const known = new Set(CATALOGUE);
+  const out = [...new Set(v.map((x) => String(x).trim().toLowerCase()).filter((x) => known.has(x)))].slice(0, MAX_LEAGUES);
+  return out;
+}
 
 export interface Game {
   id: string;
@@ -69,13 +100,19 @@ export interface League {
   games: Game[];
 }
 
-/** League slug -> sport, first match wins (golf and darts before the "league"/"cup" catch-all). */
+/** League slug -> sport, first match wins (golf, darts and the races before the "league"/"cup" catch-all). */
 const SPORT_OF: [RegExp, string][] = [
   [/cricket|ipl|ashes|champions-trophy/, "Cricket"],
   [/formula-1|motogp|nascar|indycar|wrc|le-mans|motorsport/, "Motorsport"],
   [/golf|masters|pga|open-championship|ryder-cup/, "Golf"],
+  [/table-tennis/, "Table tennis"],
   [/tennis|wimbledon|french-open|australian-open|atp|davis-cup/, "Tennis"],
-  [/darts|snooker/, "Darts and snooker"],
+  [/horse-racing|royal-ascot|cheltenham|grand-national|kentucky-derby|melbourne-cup/, "Horse racing"],
+  [/athletics|diamond-league/, "Athletics"],
+  [/cycling|tour-de-france|vuelta|giro/, "Cycling"],
+  [/swimming/, "Swimming"], [/rowing/, "Rowing"], [/surfing/, "Surfing"], [/winter-sports/, "Winter sports"],
+  [/esports/, "Esports"],
+  [/darts|pdc|snooker/, "Darts and snooker"],
   [/rugby|six-nations|nrl/, "Rugby"],
   [/nba|basketball|march-madness/, "Basketball"],
   [/nfl|american-football|college-football|super-bowl/, "American football"],
@@ -263,10 +300,21 @@ async function fetchLeague(slug: string): Promise<League> {
   return parseLeague(slug, data);
 }
 
-/** Fetch every configured league (one at a time, 500 ms apart). Returns a one-line summary. */
+/** Leagues viewers chose (beyond the admin's), last asked for at; fetched while in use. */
+const requested = new Map<string, number>();
+
+/** The leagues to keep current: the admin's defaults and those asked for in the last 3 days. */
+function wantedLeagues(): string[] {
+  const now = Date.now();
+  for (const [slug, at] of requested) if (now - at > IN_USE_MS) requested.delete(slug);
+  return [...new Set([...configuredLeagues(), ...requested.keys()])];
+}
+
+/** Fetch every wanted league (one at a time, 500 ms apart). Returns a one-line summary. */
 async function load(): Promise<string> {
-  const slugs = configuredLeagues();
+  const slugs = wantedLeagues();
   settingsChanged = false;
+  failedOnce.clear();
   const failed: string[] = [];
   for (let i = 0; i < slugs.length; i++) {
     if (i > 0) await new Promise((r) => setTimeout(r, FETCH_GAP_MS));
@@ -274,6 +322,7 @@ async function load(): Promise<string> {
       leagues.set(slugs[i], await fetchLeague(slugs[i]));
     } catch (e: any) {
       failed.push(slugs[i]);
+      failedOnce.add(slugs[i]);
       logger.warn(`[sports] ${slugs[i]}: ${e?.response?.status ?? e?.message ?? e}`);
     }
   }
@@ -287,9 +336,15 @@ async function load(): Promise<string> {
 }
 
 function loadOnce(): Promise<string> {
-  loading ??= load().finally(() => { loading = null; });
+  loading ??= load().finally(() => {
+    loading = null;
+    // Asked for while that load ran: one more pass for them.
+    if (wantedLeagues().some((s) => !leagues.has(s) && !failedOnce.has(s))) void loadOnce();
+  });
   return loading;
 }
+/** Leagues whose file failed in the last load (not retried at once, the hourly job does). */
+const failedOnce = new Set<string>();
 
 /** The hourly job: fetches only while Sports is in use. */
 export async function refreshSports(): Promise<string> {
@@ -314,16 +369,20 @@ async function matchesFor(games: Game[]): Promise<{ matches: Map<string, GameMat
   return { matches: await matchCache.result, guide: true };
 }
 
-/** GET /api/v2/sports: games from 6 hours ago to `days` ahead (not finished), with channels. */
-export async function sportsAnswer(days: number) {
+/**
+ * GET /api/v2/sports: games from 6 hours ago to `days` ahead (not finished), with channels,
+ * for `chosen` (the viewer's leagues; null: the admin's defaults).
+ */
+export async function sportsAnswer(days: number, chosen: string[] | null = null) {
   lastRequest = Date.now();
-  if (updatedAt === 0 || settingsChanged) {
+  const slugs = chosen && chosen.length ? chosen : configuredLeagues();
+  for (const s of slugs) requested.set(s, Date.now());
+  if (updatedAt === 0 || settingsChanged || slugs.some((s) => !leagues.has(s))) {
     await Promise.race([loadOnce().catch(() => ""), new Promise((r) => setTimeout(r, FIRST_WAIT_MS))]);
   }
   const now = Date.now();
   const from = now - 6 * HOUR_MS;
   const to = now + days * DAY_MS;
-  const slugs = configuredLeagues();
   const all = slugs.flatMap((s) => leagues.get(s)?.games ?? []);
   const games = all.filter((g) => {
     if (g.status === "completed" || g.status === "finished") return false;

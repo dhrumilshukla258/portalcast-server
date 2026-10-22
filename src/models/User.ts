@@ -39,6 +39,8 @@ export class User extends Model {
         pinnedCategories?: Record<string, string[]>;
         categoryOrder?: Record<string, string[]>;
         recentSearches?: string[];
+        /** The Sports page's leagues (sporting-events.org slugs, content/sports.ts CATALOGUE). */
+        sportsLeagues?: string[];
     };
 
     @Column(DataType.STRING)

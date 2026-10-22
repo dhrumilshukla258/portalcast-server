@@ -1,7 +1,7 @@
 // Sports schedule parsing and the strict guide match (content/sports.ts).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseLeague, needlesOf, programmeMatches, sportOf, norm } from "../src/content/sports";
+import { parseLeague, needlesOf, programmeMatches, sportOf, norm, CATALOGUE, cleanLeagueChoice, leagueName } from "../src/content/sports";
 
 const NOW = Date.parse("2026-10-22T12:00:00Z");
 const file = {
@@ -35,6 +35,19 @@ test("sportOf puts darts and golf before the league catch-all", () => {
   assert.equal(sportOf("ipl", ""), "Cricket");
   assert.equal(sportOf("bundesliga", ""), "Football");
   assert.equal(sportOf("esports", "Esports"), "Esports");
+  assert.equal(sportOf("table-tennis", ""), "Table tennis");
+  assert.equal(sportOf("melbourne-cup", ""), "Horse racing");
+  assert.equal(sportOf("us-open-tennis", ""), "Tennis");
+});
+
+test("the catalogue: every league has a sport, viewer choices are cleaned", () => {
+  // No rule: sportOf falls back to the competition name (here empty, so the slug).
+  for (const slug of CATALOGUE) assert.notEqual(sportOf(slug, ""), slug, `${slug} has no sport`);
+  assert.equal(leagueName("ipl"), "IPL");
+  assert.equal(leagueName("premier-league"), "Premier League");
+  assert.deepEqual(cleanLeagueChoice(["cricket", "CRICKET", "../etc", "tennis", 5]), ["cricket", "tennis"]);
+  assert.equal(cleanLeagueChoice("cricket"), null);
+  assert.equal(cleanLeagueChoice(CATALOGUE)!.length, 20);
 });
 
 test("match needs both teams as whole words, live programmes only", () => {

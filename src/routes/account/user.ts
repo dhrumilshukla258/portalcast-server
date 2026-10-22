@@ -1,3 +1,4 @@
+import { cleanLeagueChoice } from "@/content/sports";
 import { withProgressMirrors } from "@/content/progressMirror";
 import { uploadsDir } from "@/infra/paths";
 import { setting } from "@/config/settings";
@@ -99,11 +100,18 @@ export const userRoutes: ServerRoute[] = [
           "pinnedCategories",
           "categoryOrder",
           "recentSearches",
+          "sportsLeagues",
         ] as const;
         const filteredPayload: Record<string, unknown> = {};
         if (payload && typeof payload === "object") {
           for (const key of ALLOWED_PREF_KEYS) {
             if (key in payload) filteredPayload[key] = payload[key];
+          }
+          // Only known league names, at most 20 (content/sports.ts).
+          if ("sportsLeagues" in filteredPayload) {
+            const clean = cleanLeagueChoice(filteredPayload.sportsLeagues);
+            if (clean === null) delete filteredPayload.sportsLeagues;
+            else filteredPayload.sportsLeagues = clean;
           }
         }
 
