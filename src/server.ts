@@ -48,11 +48,13 @@ import { buildPeopleIndex, markPeopleChanged } from "./content/peopleSearch";
 import { startCatalogSnapshot } from "./content/catalog/store";
 import { viewersReady } from "./content/viewers";
 import { markHomeStale } from "./content/home";
+import { bumpAnswerInputs } from "./infra/answerVersion";
+import { onMediaInfoChange } from "./content/mediaInfo";
 import { onDiscoverCacheClear } from "./services/discoverCache";
 import { socketService } from "./services/SocketService";
 
 import { initDB, sequelize } from "./db";
-import { loadSettings, setting } from "./config/settings";
+import { loadSettings, setting, onSettingChange } from "./config/settings";
 import { settingsRoutes } from "./routes/admin/settings";
 import { overviewRoutes } from "./routes/admin/overview";
 import { migrateToProfiles, loadActiveProfileFromDB, encryptStoredCredentials } from "./config/server";
@@ -504,6 +506,10 @@ const init = async () => {
   onDiscoverCacheClear(markPeopleChanged);
   // Catalog changed (enrichment, edits): Home rows are rebuilt on the next open (content/home.ts).
   onDiscoverCacheClear(markHomeStale);
+  // Inputs of catalog answers outside the change log (infra/answerVersion.ts, Phase 3a).
+  onDiscoverCacheClear(bumpAnswerInputs);
+  onMediaInfoChange(bumpAnswerInputs);
+  onSettingChange(bumpAnswerInputs);
   // Channel logos for Discover (content/channels.ts): portal logos now, TMDB network logos
   // a minute later in the background (one-time, cached; retried weekly for misses).
   refreshChannelLogos();

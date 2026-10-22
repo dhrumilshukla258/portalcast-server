@@ -40,9 +40,16 @@ let building = false;
 let lastBuildAt = 0;
 let pendingSince = 0;
 let pollTimer: NodeJS.Timeout | null = null;
+/** The highest change-log position seen (poll, catalogChanges, builds); null before any. */
+let knownChange: number | null = null;
 let lastStatus: Record<string, unknown> = {};
 /** Per category list cache key: the xtreamCache write version the current snapshot holds. */
 let listVersions = new Map<string, string>();
+
+/** The change-log position last seen, for answer versions (infra/answerVersion.ts). */
+export function knownCatalogChange(): number | null {
+  return knownChange;
+}
 
 /** The snapshot in use, or null (off, or not built yet). Callers take it once per request. */
 export function catalogSnapshot(): CatalogSnapshot | null {
@@ -95,6 +102,7 @@ export async function catalogChanges(): Promise<CatalogChanges | null> {
       }
       if (rows.length < 5000) break; // changesSince returns at most 5000 rows per call
     }
+    if (knownChange === null || state.seq > knownChange) knownChange = state.seq;
   })();
   changeSync = read;
   await read;
@@ -156,6 +164,7 @@ export async function rebuildCatalogSnapshot(reason: string): Promise<void> {
     const swapStart = performance.now();
     current = new CatalogSnapshot(out.version, builtAt, out.counts, out.sections);
     listVersions = versions;
+    if (knownChange === null || out.version > knownChange) knownChange = out.version;
     const swapMs = performance.now() - swapStart;
     lastBuildAt = Date.now();
     clearInterval(sampler);
@@ -186,6 +195,7 @@ async function poll(): Promise<void> {
   if (building) return;
   let v: number;
   try { v = await latestChange(sequelize); } catch { return; }
+  if (knownChange === null || v > knownChange) knownChange = v;
   if (current && v <= current.version) { pendingSince = 0; return; }
   const now = Date.now();
   if (!pendingSince) pendingSince = now;
@@ -224,6 +234,7 @@ async function loadOrBuild(): Promise<void> {
       for (const key of await listChangesSince(sequelize, header.version)) versions.delete(key);
       current = loaded;
       listVersions = versions;
+      knownChange = Math.max(knownChange ?? 0, header.version, await latestChange(sequelize));
       lastBuildAt = Date.now();
       lastStatus = { loadedFrom: path.basename(saved.file), loadMs: Date.now() - t0, sizeMb: Math.round(current.bytes / 104857.6) / 10, counts: header.counts };
       logger.info(`[catalog] loaded ${path.basename(saved.file)} in ${Date.now() - t0} ms (database at v${dbVersion})`);

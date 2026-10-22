@@ -84,6 +84,12 @@ export function validateReport(r: any): string | null {
 }
 
 /** Store a measurement (latest wins). No-op when nothing changed. */
+const changeListeners: (() => void)[] = [];
+/** Called after a new quality report changed what cards show (answer versions, Phase 3a). */
+export function onMediaInfoChange(fn: () => void): void {
+  changeListeners.push(fn);
+}
+
 export async function recordMediaInfo(profileId: number, r: MediaInfoReport): Promise<VideoInfo> {
   const m = await load();
   const itemId = normalizeId(r.itemId);
@@ -95,6 +101,7 @@ export async function recordMediaInfo(profileId: number, r: MediaInfoReport): Pr
   if (prev && prev.width === info.width && prev.height === info.height && prev.fps === info.fps && prev.codec === info.codec) return prev;
   await MediaInfo.upsert({ profileId, itemType: r.itemType, itemId, width: r.width, height: r.height, fps, codec });
   m.set(key, info);
+  for (const fn of changeListeners) fn();
   logger.info(`[mediaInfo] ${r.itemType} ${itemId}: ${info.width}x${info.height}${fps ? ` @${fps}` : ""} (${info.label})`);
   return info;
 }
