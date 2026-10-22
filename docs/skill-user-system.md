@@ -69,7 +69,7 @@ All routes require a valid JWT (any role).
 |--------|------|-------------|
 | `GET` | `/api/user/profile` | Returns `{ id, email, name, role, avatarUrl, preferences }` |
 | `PUT` | `/api/user/preferences` | Merge-updates `user.preferences` (shallow merge, allowlisted keys only — see below). Pushes `preferences_changed` to the user's other sessions — see [[#Real-time preference sync]] |
-| `GET` | `/api/user/progress` | All progress records for active profile. Re-proxies `meta.screenshot_uri` through `proxiedImageUrl` on every read (see note below) |
+| `GET` | `/api/user/progress` | All progress records for active profile. Re-proxies `meta.screenshot_uri` through `proxiedImageUrl` on every read (see note below). Adds `backdrop_path` per row (the title's backdrop, read from the catalog by `meta.catalogId` when answering, never stored) for the wide Continue Watching cards (design Phase 6) |
 | `PUT` | `/api/user/progress` | Upsert progress: `{ mediaId, progress, completed, meta }` |
 | `DELETE` | `/api/user/progress/{mediaId}` | Remove one progress record |
 | `POST` | `/api/user/clear-history` | Deletes all progress for active profile + clears `recentChannels`. Also pushes `preferences_changed` — see [[#Real-time preference sync]] |
