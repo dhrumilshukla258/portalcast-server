@@ -130,3 +130,9 @@ No server restart needed.
 - `src/serverManager.ts` — Provider lifecycle (init, switch, teardown)
 - `src/services/LiveStreamService.ts` — HLS proxy for live streams
 - `src/streaming/circuitBreaker.ts` — Reusable `CircuitBreaker` class (configurable via `CB_*` env vars)
+
+## Shielding viewers from the provider (Phase 5, 2026-10-22)
+
+- **One call for the same link at once.** `makeRequest` shares an in-flight `create_link` between callers asking with the same parameters (two TVs, a double press): one portal call, all wait on it. Never cached: a later request asks again (`test/stalker-dedupe.test.ts`, fails on the old code).
+- **Provider down: a clear answer at once.** `/api/v2/movie-link` and `/api/v2/channel-link` answer `503 { error: "The IPTV provider is not answering right now. Try again in a minute.", code: "provider_unavailable" }` without calling the portal when the health check already says offline, and when the call fails because the provider cannot be reached (breaker open, timeout, refused or reset connection). Other failures keep their 500. The apps show `error`; the local library is not affected (`streaming/providerDown.ts`, `test/provider-down.test.ts`).
+- **Not done yet:** prefetching play links (detail opened, 90% of an episode). It ships off until two things are measured on the live provider: how long a link stays valid, and whether creating one disturbs a stream already playing on the account.

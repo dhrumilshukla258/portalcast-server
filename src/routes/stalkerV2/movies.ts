@@ -44,6 +44,7 @@ import { channelLogoPath, proxiedLogoPath } from "@/providers/portalAssets";
 import { fetchMovieMeta, fetchTVMeta } from "@/content/tmdb";
 import { pruneContentMeta } from "@/content/metaEnrichment";
 import { searchSubtitles, resolveSubtitleDownloadUrl } from "@/content/opensubtitles";
+import { isProviderDown, providerKnownDown, providerDownBody } from "@/streaming/providerDown";
 import {
   streamUserLabel,
   CACHE_DURATION_MS,
@@ -475,6 +476,9 @@ export const movieRoutes: ServerRoute[] = [
           return { js: { cmd: link } };
         }
 
+        // The provider is known to be down: say so at once instead of waiting on it.
+        if (providerKnownDown()) return h.response(providerDownBody()).code(503);
+
         // A sealed upstream link (infra/sealedCmd.ts) is opened here; never echoed back.
         const cmd = unsealCmd(request.query.cmd) || undefined;
         const { title, category } = request.query as { title?: string; category?: string };
@@ -606,6 +610,7 @@ export const movieRoutes: ServerRoute[] = [
         return movieLink;
       } catch (err) {
         logger.error({ err }, "error");
+        if (isProviderDown(err)) return h.response(providerDownBody()).code(503);
         return h
           .response({ success: false, error: "Failed to retrieve movie link." })
           .code(500);

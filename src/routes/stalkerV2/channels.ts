@@ -35,6 +35,7 @@ import { getPublicOrigin } from "@/infra/publicUrl";
 import { channelLogoPath, proxiedLogoPath } from "@/providers/portalAssets";
 import { fetchMovieMeta, fetchTVMeta } from "@/content/tmdb";
 import { searchSubtitles, resolveSubtitleDownloadUrl } from "@/content/opensubtitles";
+import { isProviderDown, providerKnownDown, providerDownBody } from "@/streaming/providerDown";
 import {
   streamUserLabel,
   CACHE_DURATION_MS,
@@ -230,6 +231,8 @@ export const channelRoutes: ServerRoute[] = [
     path: "/api/v2/channel-link",
     handler: async (request, h) => {
       try {
+        // The provider is known to be down: say so at once instead of waiting on it.
+        if (providerKnownDown()) return h.response(providerDownBody()).code(503);
         const channelLink: any = await serverManager
           .getProvider()
           .getChannelLink(unsealCmd(request.query.cmd) as any);
@@ -261,6 +264,7 @@ export const channelRoutes: ServerRoute[] = [
         return channelLink;
       } catch (err) {
         logger.error({ err }, "error");
+        if (isProviderDown(err)) return h.response(providerDownBody()).code(503);
         return h
           .response({
             success: false,

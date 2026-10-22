@@ -570,6 +570,10 @@ export class StalkerAPI implements IProvider {
     this.lastRequestTime = Date.now();
 
     const cacheable = this.isCacheable(params);
+    // A play link asked twice at the same moment (two TVs, a double press) is one portal call
+    // that both wait on (plan Phase 5). Shared only while in flight, never cached: links are
+    // short-lived and per request.
+    const shared = cacheable || params.action === "create_link";
     const cacheKey = this.getCacheKey(endpoint, params);
 
     if (cacheable) {
@@ -577,6 +581,8 @@ export class StalkerAPI implements IProvider {
       if (cached !== undefined) {
         return cached;
       }
+    }
+    if (shared) {
       const pending = this.inFlight.get(cacheKey);
       if (pending) {
         return pending;
@@ -683,7 +689,7 @@ export class StalkerAPI implements IProvider {
       throw new Error("Request failed after maximum authorization attempts.");
     };
 
-    if (cacheable) {
+    if (shared) {
       const promise = execute().finally(() => {
         this.inFlight.delete(cacheKey);
       });
