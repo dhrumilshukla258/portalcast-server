@@ -70,6 +70,8 @@ export interface Snapshot {
   cols: Columns;
   windows: Map<string, Promise<BuiltBody>>; // `${hours}:${from}` for the current hour only
   windowsHour: number;
+  /** Channel id -> its index in cols, made on first use (programmesOf). */
+  channelIndex?: Map<string, number>;
 }
 
 const snapshots = new Map<string, Snapshot>();
@@ -365,6 +367,23 @@ export async function forEachProgramme(
   }
 }
 
+/**
+ * One channel's programmes that are still running or upcoming, as the portal sent them: the guide
+ * refresh keeps these for a channel the portal refuses (content/epg.ts), without reading the whole
+ * stored guide back into memory.
+ */
+export function programmesOf(snap: Snapshot, channelId: string): any[] {
+  const { cols } = snap;
+  if (!snap.channelIndex) snap.channelIndex = new Map(cols.channelIds.map((id, c) => [id, c]));
+  const c = snap.channelIndex.get(channelId);
+  if (c === undefined) return [];
+  const out: any[] = [];
+  for (let i = cols.chanOff[c]; i < cols.chanOff[c + 1]; i++) {
+    try { out.push(JSON.parse(cols.buf.toString("utf8", cols.byteStart[i], cols.byteEnd[i]))); } catch { /* skip */ }
+  }
+  return out;
+}
+
 /** The last programme end in the guide (unix seconds): games after it cannot match. */
 export function guideEnd(snap: Snapshot): number {
   let end = 0;
@@ -394,3 +413,6 @@ export function parseWindowHours(v: unknown): number {
   if (!Number.isFinite(n) || n < 1) return DEFAULT_WINDOW_HOURS;
   return Math.min(n, MAX_WINDOW_HOURS);
 }
+
+/** Tests only: the columnar build, so programmesOf can be checked without a database. */
+export const buildColumnsForTests = buildColumns;

@@ -10,7 +10,7 @@ import { Channel, EPG_List, Genre } from "@/types/domain";
 import { initialConfig } from "@/config/server";
 import { ConfigProfile } from "@/models/ConfigProfile";
 import { logger } from "@/infra/logger";
-import { primeEpgSnapshot } from "@/content/epgServe";
+import { primeEpgSnapshot, getEpgSnapshot, programmesOf } from "@/content/epgServe";
 import { inBackground } from "@/services/portalPace";
 
 const CACHE_DURATION_MS = 12 * 60 * 60 * 1000;
@@ -88,14 +88,9 @@ async function fetchAndCacheEpgNow(): Promise<EpgCache> {
 
   logger.info(`Starting EPG fetch for ${filteredChannels.length} channels...`);
 
-  // A channel the portal still refuses keeps the guide it had (read once, on the first failure)
-  // instead of being stored empty.
-  let previous: Record<string, EPG_List[]> | null | undefined;
-  const previousFor = async (id: string): Promise<EPG_List[]> => {
-    if (previous === undefined) previous = (await readEpgCache(profileId).catch(() => null))?.data ?? null;
-    return previous?.[id] ?? [];
-  };
-  let failed = 0;
+  // Channels the portal refused (a 429 that outlasted the retries, a failed sign-in) are asked
+  // once more after the rest; any still refused keep the programmes they had.
+  const refused: string[] = [];
   const startedAt = Date.now();
 
   for (let i = 0; i < filteredChannels.length; i += CONCURRENCY_LIMIT) {
@@ -107,9 +102,9 @@ async function fetchAndCacheEpgNow(): Promise<EpgCache> {
           const epg = await serverManager.getProvider().getEPG(channel.id);
           return { id: channel.id, epg: epg.js || [] };
         } catch (error) {
-          failed++;
+          refused.push(channel.id);
           logger.error(`EPG fetch error for channel ${channel.id}: ${error}`);
-          return { id: channel.id, epg: await previousFor(channel.id) };
+          return { id: channel.id, epg: [] as EPG_List[] };
         }
       })
     );
@@ -132,11 +127,27 @@ async function fetchAndCacheEpgNow(): Promise<EpgCache> {
     }
   }
 
+  let kept = 0;
+  if (refused.length > 0) {
+    logger.info(`EPG fetch: asking again for ${refused.length} channels the portal refused`);
+    // The served guide holds each channel's running and upcoming programmes in compact columns;
+    // reading one channel back costs only its own programmes.
+    const served = await getEpgSnapshot().catch(() => null);
+    for (const id of refused) {
+      try {
+        epgData[id] = (await serverManager.getProvider().getEPG(id)).js || [];
+      } catch (error) {
+        epgData[id] = served ? programmesOf(served, id) : [];
+        kept++;
+        logger.warn(`EPG fetch: channel ${id} refused again, keeping its previous programmes: ${error}`);
+      }
+    }
+  }
+
   const cache: EpgCache = { timestamp: new Date(), data: epgData };
   await writeEpgCache(cache, profileId);
 
-  previous = null;
-  logger.info(`EPG cache updated: ${filteredChannels.length} channels in ${Math.round((Date.now() - startedAt) / 60000)} min${failed ? `, ${failed} kept their previous guide (portal refused)` : ""}.`);
+  logger.info(`EPG cache updated: ${filteredChannels.length} channels in ${Math.round((Date.now() - startedAt) / 60000)} min${refused.length ? `; ${refused.length - kept} refused at first and fetched again, ${kept} kept their previous programmes` : ""}.`);
   // Rebuild the served snapshot (full-guide gzip + programme windows) now, not on the first
   // client request after the refresh.
   primeEpgSnapshot();
