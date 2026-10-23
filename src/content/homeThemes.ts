@@ -27,6 +27,10 @@ export interface TitleFacts {
   rating: Float32Array;
   votes: Int32Array;
   added: Float64Array;
+  /** By rank (ms, 0 unknown): the provider's date, earliest of its versions, and the latest (a
+   *  series' last_modified moves when episodes are added: New episodes). */
+  providerAdded: Float64Array;
+  providerLatest: Float64Array;
   /** "movie:603" / "series:1396" -> rank. */
   byTmdb: Map<string, number>;
   /** "movie|the night agent" (type and [nameKey]) -> rank, the best-known title of that name. */
@@ -64,12 +68,13 @@ export function titleFacts(idx: DiscoverIndex, catalogGen: number): Promise<Titl
   if (factsCache?.key === key) return factsCache.value;
   const value = (async () => {
     const rows = (await sequelize.query(
-      "SELECT id, type, tmdbId, groupKey, year, premiered, imdbRating, imdbVotes, rating, ratingCount, createdAt, name, trimmedName, originalTitle FROM content_meta",
+      "SELECT id, type, tmdbId, groupKey, year, premiered, imdbRating, imdbVotes, rating, ratingCount, createdAt, name, trimmedName, originalTitle, providerAddedAt FROM content_meta",
       { type: QueryTypes.SELECT },
     )) as any[];
     const n = idx.ids.length;
     const year = new Int16Array(n), rating = new Float32Array(n), votes = new Int32Array(n);
     const added = new Float64Array(n).fill(Infinity);
+    const providerAdded = new Float64Array(n), providerLatest = new Float64Array(n);
     const imdbVotes = new Int32Array(n);
     const byTmdb = new Map<string, number>();
     // Versions of a title (separate groups, other languages) fold onto the card's rank: by TMDB
@@ -86,6 +91,11 @@ export function titleFacts(idx: DiscoverIndex, catalogGen: number): Promise<Titl
       const rank = rankOfFold.get(foldKey(r));
       if (rank === undefined) continue;
       if (Number.isFinite(t) && t < added[rank]) added[rank] = t;
+      const pa = Number(r.providerAddedAt) * 1000;
+      if (pa > 0) {
+        if (!providerAdded[rank] || pa < providerAdded[rank]) providerAdded[rank] = pa;
+        if (pa > providerLatest[rank]) providerLatest[rank] = pa;
+      }
       if (!year[rank]) year[rank] = yearOf(r);
       const iv = Number(r.imdbVotes) || 0, ir = Number(r.imdbRating) || 0;
       if (ir > 0 && iv > imdbVotes[rank]) { imdbVotes[rank] = iv; rating[rank] = ir; votes[rank] = Math.max(votes[rank], iv); }
@@ -108,7 +118,7 @@ export function titleFacts(idx: DiscoverIndex, catalogGen: number): Promise<Titl
         if (have === undefined || votes[rank] > votes[have]) byName.set(key, rank);
       }
     }
-    return { year, rating, votes, added, byTmdb, byName, newSince: firstSeen + 3 * DAY };
+    return { year, rating, votes, added, providerAdded, providerLatest, byTmdb, byName, newSince: firstSeen + 3 * DAY };
   })();
   factsCache = { key, value };
   value.catch(() => { if (factsCache?.value === value) factsCache = null; });
@@ -141,12 +151,31 @@ export function trendingStamp(): number {
 
 // ── rows ───────────────────────────────────────────────────────────────────────────
 
-/** Titles first seen lately (after the first import), newest first. */
+/**
+ * Titles the provider added in the last 30 days, newest first: by the provider's own date where
+ * it has one, else when this server first saw the title (never the first import: on a new install
+ * everything is new, which says nothing).
+ */
 export function justAdded(idx: DiscoverIndex, facts: TitleFacts, ok: (r: number) => boolean, now = Date.now()): number[] {
-  const since = Math.max(facts.newSince, now - 30 * DAY);
+  const since = now - 30 * DAY;
+  const when = (r: number) => facts.providerAdded[r] || (facts.added[r] >= facts.newSince ? facts.added[r] : 0);
   const out: number[] = [];
-  for (let r = 0; r < idx.ids.length; r++) if (facts.added[r] >= since && facts.added[r] !== Infinity && ok(r)) out.push(r);
-  return out.sort((a, b) => facts.added[b] - facts.added[a] || a - b);
+  for (let r = 0; r < idx.ids.length; r++) {
+    const t = when(r);
+    if (t >= since && t !== Infinity && t <= now + DAY && ok(r)) out.push(r);
+  }
+  return out.sort((a, b) => when(b) - when(a) || a - b);
+}
+
+/**
+ * The viewer's series with episodes added since they last watched (the provider moved the
+ * series' date after it), in the last 30 days, newest first.
+ */
+export function newEpisodes(facts: TitleFacts, watched: { rank: number; at: number }[], ok: (r: number) => boolean, now = Date.now()): number[] {
+  return watched
+    .filter(({ rank, at }) => facts.providerLatest[rank] > at && facts.providerLatest[rank] >= now - 30 * DAY && ok(rank))
+    .sort((a, b) => facts.providerLatest[b.rank] - facts.providerLatest[a.rank])
+    .map(({ rank }) => rank);
 }
 
 /** Trending ranks this server has, in TMDB's order; movies and series interleaved for "all". */

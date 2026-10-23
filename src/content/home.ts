@@ -35,11 +35,12 @@ import { titleKeyOf } from "@/content/people";
 import { logger } from "@/infra/logger";
 import { titleWithGroup, titlePeople, personTitles } from "@/content/catalog/cards";
 import { allViewerRows, recentProgress, isWatched, progressType, contentIdsOf, viewerGeneration, type ProgressRow } from "@/content/viewers";
-import { titleFacts, onlineTrending, trendingStamp, justAdded, trendingRanks, dailyThemes, dayNumber, nameKey, shuffled } from "@/content/homeThemes";
+import { titleFacts, onlineTrending, trendingStamp, justAdded, newEpisodes, trendingRanks, dailyThemes, dayNumber, nameKey, shuffled } from "@/content/homeThemes";
+import { onProviderDatesChanged } from "@/content/providerDates";
 import { chartsFor, chartsStamp, viewerCountries, type ChartList } from "@/content/homeCharts";
 
 export type HomeType = "all" | "movie" | "series";
-export interface HomeRow { key: string; kind: "because" | "picks" | "person" | "popular" | "trending" | "toprated" | "new" | "theme" | "chart"; title: string; ids: string[] }
+export interface HomeRow { key: string; kind: "because" | "picks" | "person" | "popular" | "trending" | "toprated" | "new" | "theme" | "chart" | "episodes"; title: string; ids: string[] }
 export interface HomeRows { rows: HomeRow[]; genreOrder: string[]; builtAt: number }
 
 const MIN_ROW = 6;
@@ -52,7 +53,7 @@ const HALF_LIFE_DAYS = 30;
 const TYPE_CODE = { movie: 1, series: 2 } as const;
 
 /** A watched title, resolved to the card the catalog shows for it. */
-interface Watched { rep: string; type: "movie" | "series"; title: string; weight: number; groupIds: string[]; row: any }
+interface Watched { rep: string; type: "movie" | "series"; title: string; weight: number; groupIds: string[]; row: any; at: number }
 
 /** Decay: a title watched HALF_LIFE_DAYS ago counts half as much as one watched today. */
 const recency = (r: ProgressRow) => Math.pow(0.5, (Date.now() - new Date(r.updatedAt).getTime()) / (HALF_LIFE_DAYS * 86_400_000));
@@ -71,7 +72,7 @@ async function watchedTitles(rows: ProgressRow[], idx: DiscoverIndex): Promise<W
       if (!rep || seen.has(rep)) break;
       seen.add(rep);
       const type = (progressType(r) ?? (found.row.type === "series" ? "series" : "movie")) as "movie" | "series";
-      out.push({ rep, type, title: found.row.trimmedName || found.row.name, weight: (r.completed ? 1 : 0.6) * recency(r), groupIds: members.map((m) => m.id), row: found.row });
+      out.push({ rep, type, title: found.row.trimmedName || found.row.name, weight: (r.completed ? 1 : 0.6) * recency(r), groupIds: members.map((m) => m.id), row: found.row, at: new Date(r.updatedAt).getTime() });
       break;
     }
   }
@@ -299,6 +300,11 @@ export async function buildHomeRows(userId: number, profileId: number, type: Hom
 
   // Just added, Trending this week and today's themes (content/homeThemes.ts).
   const facts = await titleFacts(idx, catalogGen);
+  // New episodes of series the viewer watched (watched titles are otherwise left out of Home):
+  // one show is already worth a row.
+  const episodesOk = (r: number) => !hidden.has(idx.ids[r]) && !mine.has(idx.ids[r]) && (want === 0 || idx.type[r] === want);
+  const episodeRanks = take(newEpisodes(facts, watched.filter((w) => w.type === "series").map((w) => ({ rank: idx.rankOf.get(w.rep)!, at: w.at })), episodesOk));
+  const episodesRow: HomeRow | null = episodeRanks.length ? { key: "episodes", kind: "episodes", title: "New episodes", ids: commit(episodeRanks) } : null;
   const fresh: HomeRow[] = [];
   const added = take(justAdded(idx, facts, ok));
   const newRow: HomeRow | null = added.length >= MIN_ROW ? { key: "new", kind: "new", title: "Just added", ids: commit(added) } : null;
@@ -361,8 +367,8 @@ export async function buildHomeRows(userId: number, profileId: number, type: Hom
   const byKind = (k: HomeRow["kind"]) => rows.filter((r) => r.kind === k);
   const [t1, t2, t3, t4] = themes;
   const ordered = type === "all"
-    ? [...byKind("because"), ...byKind("picks"), newRow, ...trendRows, c1, t1, ...byKind("person"), t2, c2, ...byKind("popular"), t3, t4]
-    : [...trendRows, c1, newRow, t1, ...byKind("because"), ...byKind("picks"), t2, c2, ...byKind("person"), t3, ...byKind("popular"), t4];
+    ? [episodesRow, ...byKind("because"), ...byKind("picks"), newRow, ...trendRows, c1, t1, ...byKind("person"), t2, c2, ...byKind("popular"), t3, t4]
+    : [episodesRow, ...trendRows, c1, newRow, t1, ...byKind("because"), ...byKind("picks"), t2, c2, ...byKind("person"), t3, ...byKind("popular"), t4];
   rows.length = 0;
   for (const r of ordered) if (r) rows.push(r);
 
@@ -380,6 +386,7 @@ let catalogGen = 0;
 export function markHomeStale(): void {
   catalogGen++;
 }
+onProviderDatesChanged(markHomeStale);
 
 /**
  * The viewer's rows: current ones from the cache, else built now the first time, else the

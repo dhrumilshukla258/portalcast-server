@@ -1,3 +1,4 @@
+import { fillProviderDates } from "@/content/providerDates";
 import { registerHttpCaching } from "./infra/httpCaching";
 import axios from "axios";
 import { httpClient } from "./streaming/httpClient";
@@ -118,6 +119,7 @@ const init = async () => {
   });
   registerJob({ name: "people-gender", label: "Fill in people's gender from TMDB (People tab)", everyMs: 10 * 60 * 1000, run: fillPeopleGenders });
   registerJob({ name: "sports", label: "Fetch the sports schedule", everyMs: 60 * 60 * 1000, run: refreshSports });
+  registerJob({ name: "provider-dates", label: "Read the provider's dates (Just added, New episodes)", everyMs: 6 * 60 * 60 * 1000, run: fillProviderDates });
   registerJob({
     name: "page-cache", label: "Remove expired page answers", dailyAtHour: 5,
     run: async () => `${await ContentCache.destroy({ where: { expiresAt: { [Op.lt]: new Date() } } })} removed`,

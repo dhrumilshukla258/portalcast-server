@@ -280,6 +280,9 @@ export async function initDB() {
       ["collection", "VARCHAR(255)"], ["originalTitle", "VARCHAR(255)"], ["premiered", "VARCHAR(255)"],
       ["logo", "VARCHAR(255)"], ["writers", "TEXT"], ["detailsCheckedAt", "DATETIME"], ["artLocked", "JSON"],
       ["trailerKey", "VARCHAR(255)"],
+      // The provider's own date (unix seconds): a movie's added, a series' last_modified
+      // (content/providerDates.ts). Home's Just added and New episodes.
+      ["providerAddedAt", "INTEGER"],
     ]);
     // Cast and crew stored once (content/people.ts), replacing content_people.
     await sequelize.query(
