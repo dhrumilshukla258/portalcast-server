@@ -7,6 +7,7 @@ import { tidyPeople } from "./content/people";
 import { ContentCache } from "./models/ContentCache";
 import { runStorageMigrations } from "./db/storageMigrations";
 import { titleImageRoutes } from "./routes/admin/titleImages";
+import { titleMatchRoutes } from "./routes/admin/titleMatch";
 import { evictImageCache } from "./content/imageCache";
 import { startPortalHealth, iptvHealth } from "./services/portalHealth";
 import { libraryAdminRoutes } from "./routes/library/admin";
@@ -191,6 +192,7 @@ const init = async () => {
   server.route(titleWordsRoutes);
   server.route(overviewRoutes);
   server.route(titleImageRoutes);
+  server.route(titleMatchRoutes);
   server.route(adminRoutes);
   server.route(authRoutes);
   server.route(setupRoutes);

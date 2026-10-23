@@ -286,6 +286,8 @@ export async function initDB() {
       // A series' newest episode (unix seconds), for the series viewers follow
       // (content/episodeWatch.ts). Home's New episodes.
       ["providerEpisodeAt", "INTEGER"],
+      // "Fix match" on a portal title (content/metaEnrichment.ts fixPortalMatch).
+      ["tmdbIdLocked", "INTEGER"],
     ]);
     // Cast and crew stored once (content/people.ts), replacing content_people.
     await sequelize.query(

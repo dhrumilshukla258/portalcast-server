@@ -846,7 +846,7 @@ async function runFixups(): Promise<void> {
  */
 async function fixYearMismatches(): Promise<void> {
   const rows = (await ContentMeta.findAll({
-    where: { tmdbId: { [Op.ne]: null } },
+    where: { tmdbId: { [Op.ne]: null }, tmdbIdLocked: null }, // not titles an admin matched by hand
     attributes: ["id", "type", "name", "year", "portalCategoryId"],
     raw: true,
   })) as any[];
@@ -1124,6 +1124,40 @@ async function portalListItem(cache: Map<string, Map<string, any>>, row: { id: s
 }
 
 /**
+ * Admin "Fix match" for a portal title: matched to [tmdbId] now and locked (tmdbIdLocked), so
+ * no job matches it again; null forgets the choice and matches it automatically, as when it
+ * was new. null when there is no such portal title; throws when TMDB does not know the id.
+ */
+export async function fixPortalMatch(contentId: string, tmdbId: number | null): Promise<{ tmdbId: number | null; locked: boolean } | null> {
+  const row = (await ContentMeta.findByPk(contentId, { attributes: ["id", "type", "name", "poster", "portalCategoryId"], raw: true })) as any;
+  if (!row || row.portalCategoryId === LOCAL_CATEGORY) return null;
+  const kind = row.type === "movie" ? "movie" : "tv";
+  const portalId = String(row.id).replace(/^(movie|series)_/, "");
+  const cacheKey = kind === "movie" ? `tmdb_movie_${portalId}` : `tmdb_tv_${portalId}`;
+  if (tmdbId) {
+    const meta = await fetchMetaByTmdbId(kind, tmdbId);
+    if (!meta) throw new Error(`TMDB has no ${kind === "movie" ? "movie" : "series"} ${tmdbId}`);
+    await xtreamCache.set(cacheKey, meta);
+  } else {
+    await xtreamCache.delete(cacheKey);
+  }
+  const it = await portalListItem(new Map(), row).catch(() => undefined);
+  const resolved = await resolveMeta(
+    kind, cacheKey, row.name, extractYear(it?.year || it?.releaseDate || it?.added || ""),
+    splitList(it?.genres_str ?? it?.genre), splitList(it?.country),
+    it?.stream_icon || it?.cover || row.poster || null, portalPlot(it),
+    { directors: it?.director, cast: it?.actors || it?.cast, imdbRating: it?.rating_imdb },
+  );
+  await withBusyRetry(`[MetaEnrich] fix match ${row.name}`, async () => {
+    await upsertContent(row.id, row.type, row.name, resolved, row.portalCategoryId || "");
+    await ContentMeta.update({ tmdbIdLocked: tmdbId ?? null }, { where: { id: row.id } });
+  });
+  await withBusyRetry("[MetaEnrich] updating Discover", () => recomputeRepresentatives());
+  clearDiscoverCache();
+  return { tmdbId: resolved.tmdbId ?? null, locked: !!tmdbId };
+}
+
+/**
  * Matches the portal's own people say are wrong (job "imdb-verify", when IMDb matching is on):
  * a title whose IMDb match shares a director or cast member with what the portal lists, while
  * the title it is matched to now does not (and IMDb has that title's people), is matched again
@@ -1138,7 +1172,7 @@ export async function imdbCorrectMatches(limit = 2000): Promise<string> {
   const saved = (await SystemConfig.findByPk(IMDB_VERIFY_KEY))?.value as { builtAt?: number; after?: string } | undefined;
   const after = saved?.builtAt === builtAt ? String(saved?.after ?? "") : "";
   const rows = (await ContentMeta.findAll({
-    where: { tmdbId: { [Op.ne]: null }, imdbId: { [Op.like]: "tt%" }, id: { [Op.gt]: after }, portalCategoryId: { [Op.ne]: "local" } },
+    where: { tmdbId: { [Op.ne]: null }, tmdbIdLocked: null, imdbId: { [Op.like]: "tt%" }, id: { [Op.gt]: after }, portalCategoryId: { [Op.ne]: "local" } },
     attributes: ["id", "type", "name", "imdbId", "poster", "portalCategoryId"],
     order: [["id", "ASC"]],
     limit,

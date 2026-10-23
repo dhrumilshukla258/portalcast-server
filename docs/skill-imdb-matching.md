@@ -41,6 +41,10 @@ A title matched to a different TMDB title (here, the year fix, or "Fix match") l
 
 Titles where IMDb and TMDB both fit (the same name in the same year), or nothing decides, are left as they are.
 
+## Fix match (any portal title, IMDb matching on or off)
+
+An admin's **Fix match** on a title's page (next to Edit images) searches TMDB by name, or takes a pasted IMDb id or link, TMDB link or TMDB id, and matches the title to the one picked (`fixPortalMatch`, `routes/admin/titleMatch.ts`). The choice is kept in `content_meta.tmdbIdLocked`: neither this job nor the year fix touches the title again. "Forget my choice" matches it automatically, as when it was new. Local library titles have their own Fix match (Admin → Libraries).
+
 Checked end to end with a stand-in TMDB on the same catalog: every change cost one find and one details call, no searches; by hand, e.g. "Peter - Tamil 4K" from Peter Rabbit 2 to Peter (2026), "Bob Ross : The Joy of Painting" from a 2024 namesake to the 1983 series, "Intervention" from Canine Intervention to Intervention (2005).
 
 Not done: a review list in Admin for the titles nothing decides.

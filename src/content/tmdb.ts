@@ -582,12 +582,31 @@ export interface TmdbCandidate {
   overview: string | null;
 }
 
+/**
+ * The title a pasted id or link names, for the "Fix match" picker: an IMDb id or link
+ * ("tt3741834", imdb.com/title/tt3741834), a TMDB link (themoviedb.org/movie/334543-lion) or a
+ * bare TMDB id. null when the query is none of these.
+ */
+export function idInQuery(query: string): { imdbId: string } | { tmdbId: number } | null {
+  const q = query.trim();
+  const imdb = /(?:^|imdb\.com\/title\/)(tt\d{6,})(?:[/?#].*)?$/i.exec(q);
+  if (imdb) return { imdbId: imdb[1].toLowerCase() };
+  const link = /themoviedb\.org\/(?:movie|tv)\/(\d+)/i.exec(q);
+  if (link) return { tmdbId: Number(link[1]) };
+  return /^\d{1,9}$/.test(q) ? { tmdbId: Number(q) } : null;
+}
+
 /** Search results for the admin "Fix match" picker (no scoring: the admin chooses). */
 export async function searchTmdbCandidates(kind: "movie" | "tv", query: string, year?: string | null): Promise<TmdbCandidate[]> {
-  const results = await search(kind, query, year || undefined);
-  const more = year ? await search(kind, query) : [];
+  const id = idInQuery(query);
+  const byId = id ? ("imdbId" in id ? await findTmdbIdByImdb(id.imdbId, kind) : id.tmdbId) : null;
+  const named = byId ? await tmdbGet(`/${kind}/${byId}`) : null;
+  // A bare number can also be a title ("1917", "300"): searched as well.
+  const byName = !id || /^\d+$/.test(query.trim());
+  const results = byName ? await search(kind, query, year || undefined) : [];
+  const more = byName && year ? await search(kind, query) : [];
   const seen = new Set<number>();
-  return [...results, ...more]
+  return [...(named ? [named] : []), ...results, ...more]
     .filter((r: any) => r?.id && !seen.has(r.id) && seen.add(r.id))
     .slice(0, 12)
     .map((r: any) => ({

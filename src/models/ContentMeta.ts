@@ -182,6 +182,10 @@ export class ContentMeta extends Model {
   @Column(DataType.JSON)
   declare artLocked: any | null;
 
+  /** The TMDB id an admin chose with "Fix match" (content/metaEnrichment.ts fixPortalMatch): no job matches the title again. */
+  @Column(DataType.INTEGER)
+  declare tmdbIdLocked: number | null;
+
   /** When the details backfill got TMDB's answer (even an empty one). */
   @Column(DataType.DATE)
   declare detailsCheckedAt: Date | null;
