@@ -485,6 +485,44 @@ export async function fetchTrendingIds(kind: "movie" | "tv", pages = 5): Promise
   return out;
 }
 
+/** TMDB ids from up to [pages] pages of a list endpoint ([path] already has its query). */
+async function idsOf(path: string, pages: number): Promise<number[] | null> {
+  const out: number[] = [];
+  for (let page = 1; page <= pages; page++) {
+    const data = await tmdbGet(`${path}&page=${page}`);
+    if (!data || !Array.isArray(data.results)) return out.length ? out : null;
+    for (const r of data.results) if (Number.isFinite(Number(r?.id))) out.push(Number(r.id));
+    if (page >= Number(data.total_pages || 1)) break;
+  }
+  return out;
+}
+
+/** Films in cinemas now in [region] (ISO 3166 alpha-2). */
+export function fetchNowPlayingIds(region: string, pages = 3): Promise<number[] | null> {
+  return idsOf(`/movie/now_playing?language=en-US&region=${encodeURIComponent(region)}`, pages);
+}
+
+/** Series with an episode airing in the next 7 days. */
+export function fetchOnTheAirIds(pages = 3): Promise<number[] | null> {
+  return idsOf(`/tv/on_the_air?language=en-US`, pages);
+}
+
+/** The streaming services TMDB lists for [region] (JustWatch data), most prominent first. */
+export async function fetchRegionProviders(region: string): Promise<{ id: number; name: string }[] | null> {
+  const data = await tmdbGet(`/watch/providers/movie?language=en-US&watch_region=${encodeURIComponent(region)}`);
+  if (!data || !Array.isArray(data.results)) return null;
+  return data.results
+    .map((p: any) => ({ id: Number(p.provider_id), name: String(p.provider_name || ""), order: Number(p.display_priorities?.[region] ?? p.display_priority ?? 999) }))
+    .filter((p: any) => Number.isFinite(p.id) && p.name)
+    .sort((a: any, b: any) => a.order - b.order)
+    .map(({ id, name }: any) => ({ id, name }));
+}
+
+/** The most popular titles on one streaming service in [region]. */
+export function fetchPopularOnProviderIds(kind: "movie" | "tv", region: string, providerId: number, pages = 2): Promise<number[] | null> {
+  return idsOf(`/discover/${kind}?language=en-US&sort_by=popularity.desc&watch_region=${encodeURIComponent(region)}&with_watch_providers=${providerId}`, pages);
+}
+
 // ---- one season's episodes -----------------------------------------------------------
 export interface TmdbEpisode {
   number: number;

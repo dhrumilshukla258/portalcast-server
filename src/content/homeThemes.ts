@@ -29,6 +29,8 @@ export interface TitleFacts {
   added: Float64Array;
   /** "movie:603" / "series:1396" -> rank. */
   byTmdb: Map<string, number>;
+  /** "movie|the night agent" (type and [nameKey]) -> rank, the best-known title of that name. */
+  byName: Map<string, number>;
   /** Titles first seen after this are "new" (the first import ends here). */
   newSince: number;
 }
@@ -41,6 +43,19 @@ function yearOf(r: any): number {
   return y >= 1900 && y <= 2100 ? y : 0;
 }
 
+/** A title name for matching: no accents, case, punctuation, year in brackets or leading "The". */
+export function nameKey(s: string): string {
+  return s
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/\(\d{4}\)/g, " ")
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/^the /, "");
+}
+
 const foldKey = (r: any) => (r.tmdbId ? `${r.type === "series" ? "series" : "movie"}:${r.tmdbId}` : `g:${r.groupKey || r.id}`);
 
 /** Facts for every title in the index; one database read per catalog change. */
@@ -49,7 +64,7 @@ export function titleFacts(idx: DiscoverIndex, catalogGen: number): Promise<Titl
   if (factsCache?.key === key) return factsCache.value;
   const value = (async () => {
     const rows = (await sequelize.query(
-      "SELECT id, type, tmdbId, groupKey, year, premiered, imdbRating, imdbVotes, rating, ratingCount, createdAt FROM content_meta",
+      "SELECT id, type, tmdbId, groupKey, year, premiered, imdbRating, imdbVotes, rating, ratingCount, createdAt, name, trimmedName, originalTitle FROM content_meta",
       { type: QueryTypes.SELECT },
     )) as any[];
     const n = idx.ids.length;
@@ -78,7 +93,22 @@ export function titleFacts(idx: DiscoverIndex, catalogGen: number): Promise<Titl
       if (!imdbVotes[rank] && tr > 0 && tv > votes[rank]) { rating[rank] = tr; votes[rank] = tv; }
       if (r.tmdbId) byTmdb.set(`${r.type === "series" ? "series" : "movie"}:${r.tmdbId}`, rank);
     }
-    return { year, rating, votes, added, byTmdb, newSince: firstSeen + 3 * DAY };
+    // Names, for charts that list titles by name (Netflix Top 10): the cleaned name and the
+    // original title, per type; a name shared by several titles goes to the best-known one.
+    const byName = new Map<string, number>();
+    for (const r of rows) {
+      const rank = rankOfFold.get(foldKey(r));
+      if (rank === undefined) continue;
+      const type = r.type === "series" ? "series" : "movie";
+      for (const n of [r.trimmedName, r.originalTitle, r.name]) {
+        const k = n ? nameKey(String(n)) : "";
+        if (!k) continue;
+        const key = `${type}|${k}`;
+        const have = byName.get(key);
+        if (have === undefined || votes[rank] > votes[have]) byName.set(key, rank);
+      }
+    }
+    return { year, rating, votes, added, byTmdb, byName, newSince: firstSeen + 3 * DAY };
   })();
   factsCache = { key, value };
   value.catch(() => { if (factsCache?.value === value) factsCache = null; });
@@ -146,6 +176,16 @@ function rng(seedText: string): () => number {
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+/** [xs] in an order fixed by [seed] (the same seed, the same order). */
+export function shuffled<T>(xs: T[], seed: string): T[] {
+  const rand = rng(seed), out = [...xs];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
 }
 
 let languageNames: Intl.DisplayNames | null = null;

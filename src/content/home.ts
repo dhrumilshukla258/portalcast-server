@@ -12,6 +12,8 @@
 //   popular   "Popular on this server": what other viewers here watched in the last 30 days
 //   new       "Just added": what the provider added lately (content/homeThemes.ts)
 //   trending  "Trending this week": TMDB's trending that this server has, else a vote-based chart
+//   chart     what is popular in the viewer's countries: Netflix's Top 10, in cinemas, popular
+//             on the country's streaming services, new episodes (content/homeCharts.ts)
 //   theme     rows that change every day per viewer: "Horror classics", "Best of 2016", "Best in
 //             Hindi", "All-time greats"... (content/homeThemes.ts). Top rated is no longer a
 //             fixed row: Home should feel new, not the same chart every day (owner, 2026-10-22)
@@ -33,13 +35,16 @@ import { titleKeyOf } from "@/content/people";
 import { logger } from "@/infra/logger";
 import { titleWithGroup, titlePeople, personTitles } from "@/content/catalog/cards";
 import { allViewerRows, recentProgress, isWatched, progressType, contentIdsOf, viewerGeneration, type ProgressRow } from "@/content/viewers";
-import { titleFacts, onlineTrending, trendingStamp, justAdded, trendingRanks, dailyThemes, dayNumber } from "@/content/homeThemes";
+import { titleFacts, onlineTrending, trendingStamp, justAdded, trendingRanks, dailyThemes, dayNumber, nameKey, shuffled } from "@/content/homeThemes";
+import { chartsFor, chartsStamp, viewerCountries, type ChartList } from "@/content/homeCharts";
 
 export type HomeType = "all" | "movie" | "series";
-export interface HomeRow { key: string; kind: "because" | "picks" | "person" | "popular" | "trending" | "toprated" | "new" | "theme"; title: string; ids: string[] }
+export interface HomeRow { key: string; kind: "because" | "picks" | "person" | "popular" | "trending" | "toprated" | "new" | "theme" | "chart"; title: string; ids: string[] }
 export interface HomeRows { rows: HomeRow[]; genreOrder: string[]; builtAt: number }
 
 const MIN_ROW = 6;
+/** A chart from outside (a Top 10) overlaps a catalog only partly: shorter rows are fine. */
+const MIN_CHART = 4;
 const CHART_SIZE = 40;
 const ROW_SIZE = 40;
 const SIMILAR = 30;
@@ -332,13 +337,32 @@ export async function buildHomeRows(userId: number, profileId: number, type: Hom
   }).filter((r): r is HomeRow => r !== null);
   fresh.push(...themes);
 
-  // Order: what the viewer watched leads Home, then what is new, then today's themes between
-  // the other personal rows. The Movies and Series pages lead with trending and new.
+  // What is popular out there in the viewer's countries (content/homeCharts.ts): two of the
+  // ready charts a day, chosen per viewer and day. Charts keep watched titles (a chart).
+  const countries = viewerCountries([...langW.entries()].map(([l, w]) => ({ code: idx.langs[l] ?? "", weight: w })));
+  const resolve = (c: ChartList) => {
+    const out: number[] = [];
+    const seen = new Set<number>();
+    const add = (r: number | undefined) => { if (r !== undefined && !seen.has(r) && chartOk(r)) { seen.add(r); out.push(r); } };
+    for (const t of c.tmdb ?? []) add(facts.byTmdb.get(`${t.kind}:${t.id}`));
+    for (const n of c.names ?? []) add(facts.byName.get(`${n.kind}|${nameKey(n.name)}`));
+    return out;
+  };
+  const chartRows: HomeRow[] = [];
+  for (const c of shuffled(chartsFor(countries), `${userId}:${profileId}:${dayNumber()}:${type}:charts`)) {
+    if (chartRows.length >= 2) break;
+    const ranks = take(resolve(c));
+    if (ranks.length >= MIN_CHART) chartRows.push({ key: `chart:${c.key}`, kind: "chart", title: c.title, ids: commit(ranks) });
+  }
+  const [c1, c2] = chartRows;
+
+  // Order: what the viewer watched leads Home, then what is new and popular, then today's themes
+  // and charts between the other personal rows. The Movies and Series pages lead with trending.
   const byKind = (k: HomeRow["kind"]) => rows.filter((r) => r.kind === k);
   const [t1, t2, t3, t4] = themes;
   const ordered = type === "all"
-    ? [...byKind("because"), ...byKind("picks"), newRow, ...trendRows, t1, ...byKind("person"), t2, ...byKind("popular"), t3, t4]
-    : [...trendRows, newRow, t1, ...byKind("because"), ...byKind("picks"), t2, ...byKind("person"), t3, ...byKind("popular"), t4];
+    ? [...byKind("because"), ...byKind("picks"), newRow, ...trendRows, c1, t1, ...byKind("person"), t2, c2, ...byKind("popular"), t3, t4]
+    : [...trendRows, c1, newRow, t1, ...byKind("because"), ...byKind("picks"), t2, c2, ...byKind("person"), t3, ...byKind("popular"), t4];
   rows.length = 0;
   for (const r of ordered) if (r) rows.push(r);
 
@@ -364,7 +388,7 @@ export function markHomeStale(): void {
 export async function homeRows(userId: number, profileId: number, type: HomeType): Promise<HomeRows> {
   const key = `${userId}:${profileId}:${type}`;
   // The day and TMDB's trending are part of it: themes change at midnight, trending every 6 h.
-  const gen = `${viewerGeneration()}.${catalogGen}.${notInterestedGen()}.${dayNumber()}.${trendingStamp()}`;
+  const gen = `${viewerGeneration()}.${catalogGen}.${notInterestedGen()}.${dayNumber()}.${trendingStamp()}.${chartsStamp()}`;
   const have = cache.get(key);
   if (have && have.gen === gen) return have.value;
   let job = building.get(key);
