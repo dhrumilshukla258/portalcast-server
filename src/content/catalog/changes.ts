@@ -44,6 +44,32 @@ const SOURCES: Source[] = [
   },
 ];
 
+/**
+ * Columns no catalog answer and no snapshot reads: bookkeeping for the enrichment schedule and
+ * the list cache's expiry. An UPDATE that changes only these is not a change: it does not move
+ * the catalog version (which makes every app fetch its screens again) nor schedule a snapshot
+ * rebuild. Owner, 2026-10-23: the daily catalog warm rewrote every unchanged category list to
+ * extend its expiry, and each rewrite counted as a change. Every other column counts, including
+ * columns added later (the list is read from the table when the triggers are made).
+ */
+const NOT_SERVED: Record<string, string[]> = {
+  content_meta: ["updatedAt", "backdropCheckedAt", "omdbCheckedAt", "ratingsCheckedAt", "detailsCheckedAt"],
+  content_overrides: ["updatedAt"],
+  genre_overrides: ["updatedAt"],
+  genres: ["updatedAt"],
+  xtream_cache: ["expiresAt"],
+};
+
+/** SQL that is true when an UPDATE changed a column that counts (see NOT_SERVED). */
+async function changedCondition(db: Sequelize, table: string): Promise<string | null> {
+  const cols = ((await db.query(`PRAGMA table_info(\`${table}\`)`, { type: QueryTypes.SELECT })) as any[]).map((c) => String(c.name));
+  const skip = new Set(NOT_SERVED[table] ?? []);
+  const counted = cols.filter((c) => !skip.has(c));
+  if (!counted.length) return null;
+  const q = (c: string) => `"${c.replace(/"/g, '""')}"`;
+  return `(${counted.map((c) => `OLD.${q(c)} IS NOT NEW.${q(c)}`).join(" OR ")})`;
+}
+
 const EVENTS = [
   { ev: "INSERT", rows: ["NEW"] as const },
   { ev: "UPDATE", rows: ["NEW", "OLD"] as const },
@@ -64,6 +90,7 @@ export async function setChangeCapture(db: Sequelize, on: boolean): Promise<void
     "CREATE TABLE IF NOT EXISTS `catalog_changes` (`seq` INTEGER PRIMARY KEY AUTOINCREMENT, `tbl` TEXT NOT NULL, `key` TEXT NOT NULL, `at` INTEGER NOT NULL, UNIQUE (`tbl`, `key`))",
   );
   for (const s of SOURCES) {
+    const changed = await changedCondition(db, s.table);
     for (const { ev, rows } of EVENTS) {
       // UPDATE logs both keys only when the key itself changed (rare: an id rename).
       const now = "CAST(strftime('%s','now') AS INTEGER) * 1000";
@@ -75,7 +102,9 @@ export async function setChangeCapture(db: Sequelize, on: boolean): Promise<void
       const inserts = rows.filter((r, i) => i === 0 || ev !== "UPDATE").flatMap((r) => log(s.key(r)));
       if (ev === "UPDATE") inserts.push(...log(s.key("OLD"), `${s.key("OLD")} IS NOT ${s.key("NEW")}`));
       const row = rows[0];
-      const when = s.when ? ` WHEN ${s.when(row)}` : "";
+      // An UPDATE counts only when a served column changed (NOT_SERVED above).
+      const conds = [s.when ? `(${s.when(row)})` : "", ev === "UPDATE" && changed ? changed : ""].filter(Boolean);
+      const when = conds.length ? ` WHEN ${conds.join(" AND ")}` : "";
       await db.query(
         `CREATE TRIGGER IF NOT EXISTS \`${triggerName(s, ev)}\` AFTER ${ev} ON \`${s.table}\` FOR EACH ROW${when} BEGIN ${inserts.join(" ")} END`,
       );

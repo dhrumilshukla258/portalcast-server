@@ -225,12 +225,16 @@ export const xtreamCache = {
   },
 
   async set(key: string, value: any): Promise<void> {
-    pendingWrites.delete(key);
+    const hadPending = pendingWrites.delete(key);
     const expiresAt = new Date(Date.now() + TTL_MS);
     const raw = JSON.stringify(value);
+    // The same value again (a refresh that found nothing new, extending the expiry): views
+    // built from it stay valid, so the key's version stays. Only when the last value is known
+    // for sure: none was waiting to be written and the memory copy is this one.
+    const same = !hadPending && memRaw.get(key)?.value === raw;
     await XtreamCache.upsert({ key, value: await encodeCacheValue(raw), expiresAt });
     memSet(key, raw, expiresAt);
-    bumpVersion(key);
+    if (!same) bumpVersion(key);
   },
 
   async delete(key: string): Promise<void> {
