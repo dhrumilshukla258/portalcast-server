@@ -16,7 +16,7 @@ import { SystemConfig } from "@/models/SystemConfig";
 import { readGenres } from "@/infra/storage";
 import { xtreamCache, fetchSeriesInfo } from "@/services/xtreamCache";
 import { inBackground } from "@/services/portalPace";
-import { allViewerRows, viewersReady, progressType, contentIdsOf } from "@/content/viewers";
+import { allViewerRows, viewersReady, progressType, catalogIdOf } from "@/content/viewers";
 import { providerSeconds, notifyProviderDatesChanged } from "@/content/providerDates";
 import { logger } from "@/infra/logger";
 
@@ -31,6 +31,26 @@ const FORGET_AFTER = 60 * DAY;
 const MAX_FAILURES_IN_A_ROW = 3;
 
 interface SeriesState { n: number; at: number }
+
+/**
+ * A series history row's possible portal series ids, best first: the catalog id the app stored,
+ * then meta.mediaId (the series on rows whose own mediaId is an episode's file), then mediaId.
+ * The first one the portal lists as a series is used (checkWatchedSeriesNow).
+ */
+export function seriesCandidates(row: { mediaId: unknown; meta: unknown }): number[] {
+  let meta: any = row.meta;
+  if (typeof meta === "string") { try { meta = JSON.parse(meta); } catch { meta = null; } }
+  const out: number[] = [];
+  const add = (v: unknown) => {
+    const m = /^(?:series_)?(\d+)$/.exec(String(v ?? ""));
+    if (m && !out.includes(Number(m[1]))) out.push(Number(m[1]));
+  };
+  const catalogId = catalogIdOf(row);
+  if (catalogId?.startsWith("series_")) add(catalogId);
+  add(meta?.mediaId);
+  add(row.mediaId);
+  return out;
+}
 
 /** Episodes in a stored series info, and the newest episode date the portal gave (seconds). */
 export function episodeSummary(info: any): { n: number; newest: number } {
@@ -68,31 +88,37 @@ export function checkWatchedSeries(): Promise<string> {
 async function checkWatchedSeriesNow(): Promise<string> {
   await viewersReady();
   const now = Date.now();
-  // The series watched lately (portal ids), most recent first.
-  const lastWatched = new Map<number, number>();
+  // The series history rows of the last 30 days, each with its possible series ids.
+  const recent: { at: number; ids: number[] }[] = [];
   for (const v of allViewerRows()) {
     for (const r of v.rows) {
       const at = new Date(r.updatedAt).getTime();
       if (!(at >= now - WATCHED_WITHIN) || progressType(r) !== "series") continue;
-      for (const id of contentIdsOf(r)) {
-        const m = /^series_(\d+)$/.exec(id);
-        if (m && at > (lastWatched.get(Number(m[1])) ?? 0)) lastWatched.set(Number(m[1]), at);
-      }
+      const ids = seriesCandidates(r);
+      if (ids.length) recent.push({ at, ids });
     }
   }
-  if (!lastWatched.size) return "no series watched lately";
+  if (!recent.length) return "no series watched lately";
 
-  // Only series the current portal lists (a profile switch or a removed series is skipped).
+  // Which of them the current portal lists as series (a profile switch, a removed series or an
+  // episode's file id is skipped); each row counts for its first listed id.
+  const wanted = new Set(recent.flatMap((x) => x.ids));
   const listed = new Set<number>();
   for (const genre of await readGenres("series")) {
     if (!genre.id || genre.id === "*") continue;
     const list = await xtreamCache.get<any[]>(`series_list_${genre.id}`);
-    if (Array.isArray(list)) for (const s of list) if (lastWatched.has(Number(s?.series_id))) listed.add(Number(s.series_id));
+    if (Array.isArray(list)) for (const s of list) if (wanted.has(Number(s?.series_id))) listed.add(Number(s.series_id));
+  }
+  // The series watched lately (portal ids) and when, most recent first below.
+  const lastWatched = new Map<number, number>();
+  for (const { at, ids } of recent) {
+    const id = ids.find((x) => listed.has(x));
+    if (id !== undefined && at > (lastWatched.get(id) ?? 0)) lastWatched.set(id, at);
   }
 
   const row = await SystemConfig.findByPk(STATE_KEY);
   const state: Record<string, SeriesState> = row?.value && typeof row.value === "object" ? { ...row.value } : {};
-  const due = [...listed]
+  const due = [...lastWatched.keys()]
     .filter((id) => !(now - (state[id]?.at ?? 0) < RECHECK_AFTER))
     .sort((a, b) => lastWatched.get(b)! - lastWatched.get(a)!)
     .slice(0, MAX_PER_RUN);

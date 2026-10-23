@@ -2,7 +2,7 @@
 // (services/xtreamCache.ts).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { episodeSummary, newEpisodesAt } from "../src/content/episodeWatch";
+import { episodeSummary, newEpisodesAt, seriesCandidates } from "../src/content/episodeWatch";
 import { mapVodItem } from "../src/services/xtreamCache";
 
 const DAY = 86_400_000;
@@ -39,4 +39,11 @@ test("list dates: the Xtream adapter's time is read, a Stalker duration is not a
   assert.equal(mapVodItem({ id: "1", name: "A", time: 1761000000 }, 1, 5).added, "1761000000", "Xtream: time holds added");
   assert.equal(mapVodItem({ id: "1", name: "A", time: "120" }, 1, 5).added, "", "Stalker: time is minutes");
   assert.equal(mapVodItem({ id: "1", name: "A", added: "2025-05-01 10:00:00", time: "95" }, 1, 5).added, String(sec(Date.parse("2025-05-01 10:00:00"))));
+});
+
+test("a history row's series: the stored catalog id, then meta.mediaId (rows saved with an episode's file), then mediaId", () => {
+  assert.deepEqual(seriesCandidates({ mediaId: "3206331", meta: JSON.stringify({ type: "series", mediaId: "569231" }) }), [569231, 3206331]);
+  assert.deepEqual(seriesCandidates({ mediaId: "567747", meta: { type: "series", mediaId: "567747", catalogId: "series_100" } }), [100, 567747]);
+  assert.deepEqual(seriesCandidates({ mediaId: "77", meta: { type: "series", catalogId: "series_L18" } }), [77], "a library id is not a portal id");
+  assert.deepEqual(seriesCandidates({ mediaId: "abc", meta: null }), []);
 });
