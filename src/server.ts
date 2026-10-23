@@ -13,7 +13,7 @@ import { libraryAdminRoutes } from "./routes/library/admin";
 import { localStreamRoutes } from "./routes/library/stream";
 import { scanLibraries } from "./content/library/scanner";
 import { setupRoutes, needsSetup } from "./routes/account/setup";
-import { registerJob, startJobs } from "./services/jobs";
+import { registerJob, startJobs, runJobNow } from "./services/jobs";
 import { prefillCardPosters } from "./content/posterPrefill";
 import { runIntegrityCheck } from "./services/integrity";
 import { backupDatabase } from "./services/backup";
@@ -65,7 +65,8 @@ import { onTitleWordsChanged, watchActiveProfile, applyActiveProfileWords } from
 import { overviewRoutes } from "./routes/admin/overview";
 import { migrateToProfiles, loadActiveProfileFromDB, encryptStoredCredentials } from "./config/server";
 import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres } from "./services/xtreamCache";
-import { enrichContentMeta, sweepStaleContent, recleanForWords } from "./content/metaEnrichment";
+import { enrichContentMeta, sweepStaleContent, recleanForWords, imdbRetryUnmatched } from "./content/metaEnrichment";
+import { buildImdbIndex, imdbIndexReady } from "./content/imdbIndex";
 import { fetchAndCacheEpg } from "./content/epg";
 import { getEpgSnapshot } from "./content/epgServe";
 import { EpgCache } from "./models/EpgCache";
@@ -126,6 +127,17 @@ const init = async () => {
   // Each watched series at most once a day (content/episodeWatch.ts); a run every 6 h picks up
   // what a restart or a busy portal left.
   registerJob({ name: "new-episodes", label: "Check the series viewers follow for new episodes", everyMs: 6 * 60 * 60 * 1000, run: checkWatchedSeries });
+  // IMDb matching (setting imdbMatching, off by default; content/imdbIndex.ts): the files are
+  // downloaded and indexed weekly, and at once when the setting is turned on (or the index is
+  // missing at start-up); titles TMDB never matched are tried against it a few hundred at a time.
+  registerJob({
+    name: "imdb-titles", label: "Download IMDb titles and build the match index (when IMDb matching is on)", everyMs: 7 * 24 * 60 * 60 * 1000,
+    run: async () => (setting<boolean>("imdbMatching") ? buildImdbIndex() : "IMDb matching is off"),
+  });
+  registerJob({ name: "imdb-unmatched", label: "Try titles TMDB never matched against IMDb", everyMs: 6 * 60 * 60 * 1000, run: () => imdbRetryUnmatched() });
+  onSettingChange((key) => { if (key === "imdbMatching" && setting<boolean>("imdbMatching") && !imdbIndexReady()) runJobNow("imdb-titles"); });
+  // Missing at start-up: built after the start-up warm-ups, not on top of them.
+  setTimeout(() => { if (setting<boolean>("imdbMatching") && !imdbIndexReady()) runJobNow("imdb-titles"); }, 10 * 60_000).unref?.();
   registerJob({
     name: "page-cache", label: "Remove expired page answers", dailyAtHour: 5,
     run: async () => `${await ContentCache.destroy({ where: { expiresAt: { [Op.lt]: new Date() } } })} removed`,

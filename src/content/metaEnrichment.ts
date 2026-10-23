@@ -13,6 +13,7 @@ import { xtreamCache, catchupScan } from "@/services/xtreamCache";
 import { readGenres } from "@/infra/storage";
 import { logger } from "@/infra/logger";
 import { fetchMovieMeta, fetchTVMeta, fetchMetaByTmdbId, TmdbMeta } from "@/content/tmdb";
+import { tmdbMetaViaImdb, matchImdb, imdbMatchingOn, imdbBuiltAt } from "@/content/imdbIndex";
 import { themesForKeywordIds } from "@/content/themes";
 import { ContentMeta, ContentType, ContentMetaSource } from "@/models/ContentMeta";
 import { ContentGenre } from "@/models/ContentGenre";
@@ -130,7 +131,9 @@ async function resolveMeta(
   // re-fetch fresh instead of degrading quietly.
   const isLegacyShape = tmdb && !("_not_found" in tmdb) && (!("originalLanguage" in tmdb) || !("releaseYear" in tmdb) || !("rating" in tmdb) || !("imdbId" in tmdb) || !("details" in tmdb));
   if (!tmdb || isLegacyShape) {
-    const fetched = kind === "movie" ? await fetchMovieMeta(name, year) : await fetchTVMeta(name, year);
+    // IMDb first when it is on (content/imdbIndex.ts); otherwise, or when it finds nothing, the
+    // TMDB search as before.
+    const fetched = (await tmdbMetaViaImdb(kind, name, year)) ?? (kind === "movie" ? await fetchMovieMeta(name, year) : await fetchTVMeta(name, year));
     tmdb = fetched || { _not_found: true };
     await xtreamCache.set(cacheKey, tmdb);
     await sleep(THROTTLE_MS);
@@ -1086,6 +1089,51 @@ export function recleanForWords(words: string[]): void {
       recleanRunning = false;
     }
   })();
+}
+
+/**
+ * Titles TMDB never matched, tried against IMDb (job "imdb-unmatched", when IMDb matching is
+ * on; content/imdbIndex.ts): [limit] rows per run in id order from where the last run stopped,
+ * from the start again after each new index. TMDB is asked only for the ones IMDb found.
+ */
+const IMDB_CURSOR_KEY = "imdb_unmatched_cursor";
+export async function imdbRetryUnmatched(limit = 400): Promise<string> {
+  if (!imdbMatchingOn()) return "IMDb matching is off or not built yet";
+  const builtAt = await imdbBuiltAt();
+  const saved = (await SystemConfig.findByPk(IMDB_CURSOR_KEY))?.value as { builtAt?: number; after?: string } | undefined;
+  const after = saved?.builtAt === builtAt ? String(saved?.after ?? "") : "";
+  const rows = (await ContentMeta.findAll({
+    where: { tmdbId: null, id: { [Op.gt]: after }, portalCategoryId: { [Op.ne]: "local" } },
+    attributes: ["id", "type", "name", "year", "poster", "portalCategoryId"],
+    order: [["id", "ASC"]],
+    limit,
+    raw: true,
+  })) as any[];
+  let found = 0, matched = 0;
+  for (const row of rows) {
+    const m = await matchImdb(row.name, row.type === "series" ? "series" : "movie", parseInt(String(row.year || ""), 10) || 0).catch(() => null);
+    if (!m) continue;
+    found++;
+    const kind = row.type === "movie" ? "movie" : "tv";
+    const portalId = String(row.id).replace(/^(movie|series)_/, "");
+    const cacheKey = kind === "movie" ? `tmdb_movie_${portalId}` : `tmdb_tv_${portalId}`;
+    try {
+      await xtreamCache.delete(cacheKey);
+      const [genres, countries] = await Promise.all([
+        ContentGenre.findAll({ where: { contentId: row.id }, attributes: ["value"], raw: true }),
+        ContentCountry.findAll({ where: { contentId: row.id }, attributes: ["value"], raw: true }),
+      ]);
+      const resolved = await resolveMeta(kind, cacheKey, row.name, row.year || "",
+        (genres as any[]).map((g) => g.value).filter((v) => v !== UNCATEGORIZED_GENRE), (countries as any[]).map((c) => c.value), row.poster || null);
+      if (resolved.tmdbId) { matched++; await upsertContent(row.id, row.type, row.name, resolved, row.portalCategoryId || ""); }
+    } catch (e: any) {
+      logger.error(`[MetaEnrich] IMDb retry ${row.name}: ${e.message}`);
+    }
+  }
+  const last = rows.length ? String(rows[rows.length - 1].id) : after;
+  await SystemConfig.upsert({ key: IMDB_CURSOR_KEY, value: { builtAt, after: rows.length < limit ? "￿" : last } });
+  if (matched) clearDiscoverCache();
+  return rows.length ? `${rows.length} unmatched titles checked, ${found} found on IMDb, ${matched} matched` : "every unmatched title checked against this index";
 }
 
 /**
