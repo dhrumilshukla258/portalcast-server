@@ -114,6 +114,33 @@ const VARIANT_ALTERNATION = [...ALIAS_TO_CANONICAL.keys(), ...QUALITY_TAGS, LANG
 
 const VARIANT_RE = new RegExp(`\\b(${VARIANT_ALTERNATION})\\b`, "gi");
 
+// Short language codes ("ben", "mal", "mar", "pt", "en", "hin") are also ordinary words at the
+// start or inside real titles: "Ben 10: Alien Force" became "10: Alien Force", "Bigga Than Ben"
+// "Bigga Than", "PT Sir" "Sir" (80 titles on one catalog; owner, 2026-10-23). A short code is a
+// tag only where something marks it as one: a separator before it ("Title - Ben", "Title (Tam)"),
+// a closing bracket after it, or another tag next to it ("Title Mal HD"). Full language names and
+// quality tags are taken wherever they are, as before.
+const SHORT_CODES = new Set([...ALIAS_TO_CANONICAL.keys()].filter((a) => a.length <= 3));
+// The neighbouring tag must be a real one (a full language name, a quality mark), not another
+// short code: in "Kan Kan Men Bhagwan" neither "Kan" is a tag.
+const NEIGHBOUR_TAGS = [...ALIAS_TO_CANONICAL.keys()].filter((a) => a.length > 3).concat(QUALITY_TAGS, [LANGUAGE_SUB_PATTERN])
+  .sort((a, b) => b.length - a.length).join("|");
+const TAG_BEFORE_RE = new RegExp(`\\b(?:${NEIGHBOUR_TAGS})$`, "i");
+const TAG_AFTER_RE = new RegExp(`^(?:${NEIGHBOUR_TAGS})\\b`, "i");
+
+function stripVariantTags(name: string): string {
+  return name.replace(VARIANT_RE, (match: string, _tag: string, offset: number, all: string) => {
+    if (!SHORT_CODES.has(match.toLowerCase())) return "";
+    const before = all.slice(0, offset).replace(/\s+$/, "");
+    const after = all.slice(offset + match.length).replace(/^\s+/, "");
+    if (!before) return match; // the first word of a name is the title's
+    // Written in capitals at the very end of a name that is not ("Rosa Morena PT"): a tag.
+    const capsAtEnd = !after && match.length >= 2 && match === match.toUpperCase() && before !== before.toUpperCase();
+    const marked = capsAtEnd || /[-–(\[|:,\/]$/.test(before) || /^[)\]]/.test(after) || TAG_BEFORE_RE.test(before) || TAG_AFTER_RE.test(after);
+    return marked ? "" : match;
+  });
+}
+
 // The trailing \b (before the optional separator) is load-bearing — without
 // it, these alternatives matched as raw substrings, not whole words, so a
 // real title merely starting with the same letters as a channel name got
@@ -144,10 +171,8 @@ const TURKISH_TAG_RE = /\s*[-–(\[]\s*turkish\s*[)\]]?\s*$/i;
 const TURKISH_LABEL_RE = /^\s*(?:turkish(?:\s+dramas?)?|web\s+series)\s*:\s*/i;
 
 function stripNoise(name: string): string {
-  return stripChannelPrefix(name)
-    .replace(TURKISH_LABEL_RE, "")
-    .replace(TURKISH_TAG_RE, "")
-    .replace(VARIANT_RE, "")
+  const withoutLabels = stripChannelPrefix(name).replace(TURKISH_LABEL_RE, "").replace(TURKISH_TAG_RE, "");
+  return stripVariantTags(withoutLabels)
     // Removing a tag from "Title - Hindi" or "Title (ES)" leaves the separator behind
     // ("Title -" / "Title ()") — without cleaning it up, two titles differing only by
     // tag never produce the same grouping key ("Title -" !== "Title"), silently

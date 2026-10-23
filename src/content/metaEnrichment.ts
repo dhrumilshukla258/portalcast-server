@@ -797,6 +797,14 @@ async function runFixups(): Promise<void> {
     await recomputeRepresentatives();
     clearDiscoverCache();
   });
+  // Short language codes count as tags only where marked ("Title - Ben", "Title (Tam)"), no
+  // longer inside titles ("Ben 10", "En Kadhale", "La Vie en Rose"; titleClean.ts): the cleaned
+  // names that grew back and their groups are rewritten (about 200 rows on one catalog).
+  await step("reclean-short-codes", async () => {
+    await regroupAll();
+    await recomputeRepresentatives();
+    clearDiscoverCache();
+  });
   // The first run read only object-shaped meta and sealed nothing: stored meta is JSON text.
   await step("seal-progress-links", async () => {});
   await step("seal-progress-links-2", sealProgressLinks);
