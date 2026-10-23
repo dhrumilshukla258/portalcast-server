@@ -29,6 +29,11 @@ export function onProviderDatesChanged(fn: () => void): void {
   onChanged = fn;
 }
 
+/** Dates changed elsewhere (content/episodeWatch.ts): Home's rows are rebuilt. */
+export function notifyProviderDatesChanged(): void {
+  onChanged?.();
+}
+
 export async function fillProviderDates(): Promise<string> {
   // 1. Every title's date from the cached lists, one category at a time. A title listed in more
   //    than one category keeps the earliest date for a movie (when it first arrived) and the

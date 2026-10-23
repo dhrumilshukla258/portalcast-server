@@ -28,7 +28,7 @@ export interface TitleFacts {
   votes: Int32Array;
   added: Float64Array;
   /** By rank (ms, 0 unknown): the provider's date, earliest of its versions, and the latest (a
-   *  series' last_modified moves when episodes are added: New episodes). */
+   *  series' last_modified, or its newest episode from content/episodeWatch.ts: New episodes). */
   providerAdded: Float64Array;
   providerLatest: Float64Array;
   /** "movie:603" / "series:1396" -> rank. */
@@ -107,7 +107,7 @@ export function titleFacts(idx: DiscoverIndex, catalogGen: number): Promise<Titl
     // (once every vote is known, below).
     const nameKeys: string[] = [], nameRanks: number[] = [];
     let firstSeen = Infinity;
-    for await (const rows of metaPages("type, tmdbId, groupKey, id, year, premiered, imdbRating, imdbVotes, rating, ratingCount, createdAt, name, trimmedName, originalTitle, providerAddedAt")) {
+    for await (const rows of metaPages("type, tmdbId, groupKey, id, year, premiered, imdbRating, imdbVotes, rating, ratingCount, createdAt, name, trimmedName, originalTitle, providerAddedAt, providerEpisodeAt")) {
       for (const r of rows) {
         const t = Date.parse(String(r.createdAt ?? ""));
         if (Number.isFinite(t) && t < firstSeen) firstSeen = t;
@@ -119,6 +119,8 @@ export function titleFacts(idx: DiscoverIndex, catalogGen: number): Promise<Titl
           if (!providerAdded[rank] || pa < providerAdded[rank]) providerAdded[rank] = pa;
           if (pa > providerLatest[rank]) providerLatest[rank] = pa;
         }
+        const ea = Number(r.providerEpisodeAt) * 1000;
+        if (ea > providerLatest[rank]) providerLatest[rank] = ea;
         if (!year[rank]) year[rank] = yearOf(r);
         const iv = Number(r.imdbVotes) || 0, ir = Number(r.imdbRating) || 0;
         if (ir > 0 && iv > imdbVotes[rank]) { imdbVotes[rank] = iv; rating[rank] = ir; votes[rank] = Math.max(votes[rank], iv); }

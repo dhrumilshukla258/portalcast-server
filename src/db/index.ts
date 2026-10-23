@@ -283,6 +283,9 @@ export async function initDB() {
       // The provider's own date (unix seconds): a movie's added, a series' last_modified
       // (content/providerDates.ts). Home's Just added and New episodes.
       ["providerAddedAt", "INTEGER"],
+      // A series' newest episode (unix seconds), for the series viewers follow
+      // (content/episodeWatch.ts). Home's New episodes.
+      ["providerEpisodeAt", "INTEGER"],
     ]);
     // Cast and crew stored once (content/people.ts), replacing content_people.
     await sequelize.query(

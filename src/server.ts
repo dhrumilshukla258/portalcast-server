@@ -51,6 +51,7 @@ import { buildPeopleIndex, markPeopleChanged } from "./content/peopleSearch";
 import { startCatalogSnapshot } from "./content/catalog/store";
 import { viewersReady } from "./content/viewers";
 import { markHomeStale, primeHomeFacts } from "./content/home";
+import { checkWatchedSeries } from "./content/episodeWatch";
 import { bumpAnswerInputs } from "./infra/answerVersion";
 import { onMediaInfoChange } from "./content/mediaInfo";
 import { onDiscoverCacheClear } from "./services/discoverCache";
@@ -120,6 +121,9 @@ const init = async () => {
   registerJob({ name: "people-gender", label: "Fill in people's gender from TMDB (People tab)", everyMs: 10 * 60 * 1000, run: fillPeopleGenders });
   registerJob({ name: "sports", label: "Fetch the sports schedule", everyMs: 60 * 60 * 1000, run: refreshSports });
   registerJob({ name: "provider-dates", label: "Read the provider's dates (Just added, New episodes)", everyMs: 6 * 60 * 60 * 1000, run: fillProviderDates });
+  // Each watched series at most once a day (content/episodeWatch.ts); a run every 6 h picks up
+  // what a restart or a busy portal left.
+  registerJob({ name: "new-episodes", label: "Check the series viewers follow for new episodes", everyMs: 6 * 60 * 60 * 1000, run: checkWatchedSeries });
   registerJob({
     name: "page-cache", label: "Remove expired page answers", dailyAtHour: 5,
     run: async () => `${await ContentCache.destroy({ where: { expiresAt: { [Op.lt]: new Date() } } })} removed`,

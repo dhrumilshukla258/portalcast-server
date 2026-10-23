@@ -319,8 +319,18 @@ function toUnixAdded(added: any): string {
   return isNaN(d.getTime()) ? "" : String(Math.floor(d.getTime() / 1000));
 }
 
+/**
+ * A Unix time in `time`: the Xtream adapter (providers/xtream-client.ts) puts the panel's
+ * added / last_modified there. On Stalker portals `time` is a duration in minutes, which is
+ * never mistaken for a date (anything before 2001 is not one).
+ */
+function unixTime(t: any): string {
+  const n = Number(t);
+  return Number.isFinite(n) && n > 1_000_000_000 ? String(Math.floor(n)) : "";
+}
+
 export function mapVodItem(m: any, num: number, categoryId: string | number): any {
-  const added = toUnixAdded(m.added);
+  const added = toUnixAdded(m.added || unixTime(m.time));
   // No per-movie rows any more (vod_info_*, vod_cmd_*, ~30,000 of them): nothing read
   // vod_cmd_* since the Xtream emulation went, and vod_info_*'s two uses (stream label,
   // broken-stream check) read the in-memory catalog (content/catalog/all.ts allItem).
@@ -363,7 +373,7 @@ function mapSeriesItem(s: any, num: number, categoryId: string | number): any {
     director:         s.director || "",
     genre:            s.genres_str || "",
     releaseDate:      s.year || "",
-    last_modified:    s.added || "",
+    last_modified:    s.added || unixTime(s.time) || "",
     rating:           s.rating_imdb || 0,
     category_id:      String(categoryId),
     youtube_trailer:  "",
@@ -633,9 +643,107 @@ export function warmSeriesInfoCache(): Promise<void> {
   return inBackground(() => warmSeriesInfoCacheNow());
 }
 
+/**
+ * Reads one series' seasons and episodes from the portal and stores them as series_info_<id>
+ * (the warm-up below; content/episodeWatch.ts for the series people watch). The caller paces
+ * the calls; the seasons are read 300 ms apart.
+ */
+export async function fetchSeriesInfo(seriesId: number): Promise<any> {
+  const provider = serverManager.getProvider();
+  const cacheKey = `series_info_${seriesId}`;
+  const seasonsData = await provider.getMovies({ category: "*", page: 1, movieId: seriesId });
+  const allItems = (seasonsData?.js?.data || []) as any[];
+  let seasons = allItems.filter((s: any) => s.is_season);
+  // Fallback: portal may not set is_season — detect by season_number/season_name
+  if (seasons.length === 0) {
+    const candidates = allItems.filter((s: any) => !s.is_episode && s.id);
+    seasons = candidates.filter((s: any) => s.season_number || s.season_name);
+  }
+  const seriesItem = allItems.find((i: any) => i[seriesFlag()]) || allItems[0];
+
+  logger.info(`[XtreamSeriesInfo] ${cacheKey}: ${allItems.length} items, ${seasons.length} seasons (first keys: ${allItems[0] ? Object.keys(allItems[0]).slice(0, 8).join(",") : "none"})`);
+
+  const episodesMap: Record<string, any[]> = {};
+  let totalEpInfo = 0;
+
+  for (const season of seasons) {
+    await new Promise((r) => setTimeout(r, 300));
+    const seasonNum = String(season.season_number || "1");
+    const seasonIdInt = parseInt(season.id);
+    let allEps = await fetchAllPages(async (page) => {
+      const r = await provider.getMovies({ category: "*", page, movieId: seriesId, seasonId: seasonIdInt });
+      return r?.js?.data || [];
+    });
+    // Fallback: some portals store episodes under type:"series" not type:"vod"
+    if (allEps.length === 0) {
+      allEps = await fetchAllPages(async (page) => {
+        const r = await provider.getSeries({ category: "*", page, movieId: seriesId, seasonId: seasonIdInt });
+        return r?.js?.data || [];
+      });
+    }
+    const episodes = allEps.filter((e: any) => e.is_episode);
+    // Fallback: portal may not set is_episode flag — use all returned items
+    const effectiveEps = episodes.length > 0 ? episodes : allEps;
+    logger.info(`[XtreamSeriesInfo] ${cacheKey} season ${seasonNum} (id=${season.id}): ${allEps.length} raw items, ${effectiveEps.length} effective eps`);
+
+    episodesMap[seasonNum] = effectiveEps.map((ep: any, idx: number) => {
+      const epNum = parseInt(String(ep.series_number || (idx + 1)));
+      // Episode id -> series, in the compact episode_index table (content/episodeIndex.ts).
+      rememberEpisode(ep.id, seriesId, epNum);
+      totalEpInfo++;
+      return {
+        id:                  ep.id,
+        episode_num:         epNum,
+        title:               ep.name || `Episode ${epNum}`,
+        container_extension: "m3u8",
+        info: {
+          season:        parseInt(seasonNum),
+          plot:          "",
+          duration_secs: 0,
+          rating:        0,
+          movie_image:   "",
+          releasedate:   ep.date_add || "",
+        },
+        direct_source: "",
+      };
+    });
+  }
+
+  const result = {
+    info: {
+      name:             seriesItem?.name || "",
+      cover:            buildIconUrl(seriesItem?.screenshot_uri),
+      plot:             seriesItem?.description || "",
+      cast:             seriesItem?.actors || "",
+      director:         seriesItem?.director || "",
+      genre:            seriesItem?.genres_str || "",
+      releaseDate:      seriesItem?.year || "",
+      rating:           seriesItem?.rating_imdb || 0,
+      backdrop_path:    [],
+      youtube_trailer:  "",
+      episode_run_time: "",
+      category_id:      seriesItem?.category_id || "0",
+    },
+    episodes: episodesMap,
+    seasons: seasons.map((s: any) => ({
+      air_date:      s.date_add || "",
+      episode_count: parseInt(s.season_series || 0),
+      id:            parseInt(s.id),
+      name:          s.season_name || `Season ${s.season_number}`,
+      overview:      "",
+      season_number: parseInt(s.season_number || 1),
+      cover:         "",
+      cover_big:     "",
+    })),
+  };
+
+  await xtreamCache.set(cacheKey, result);
+  logger.info(`[XtreamSeriesInfo] Warmed ${cacheKey}: ${totalEpInfo} episodes indexed`);
+  return result;
+}
+
 async function warmSeriesInfoCacheNow(): Promise<void> {
   const genres = await readGenres("series");
-  const provider = serverManager.getProvider();
   const seen = new Set<number>();
 
   for (const genre of genres) {
@@ -663,94 +771,7 @@ async function warmSeriesInfoCacheNow(): Promise<void> {
         // Throttle to avoid 429 from portal
         await new Promise((r) => setTimeout(r, 500));
 
-        const seasonsData = await provider.getMovies({ category: "*", page: 1, movieId: seriesId });
-        const allItems = (seasonsData?.js?.data || []) as any[];
-        let seasons = allItems.filter((s: any) => s.is_season);
-        // Fallback: portal may not set is_season — detect by season_number/season_name
-        if (seasons.length === 0) {
-          const candidates = allItems.filter((s: any) => !s.is_episode && s.id);
-          seasons = candidates.filter((s: any) => s.season_number || s.season_name);
-        }
-        const seriesItem = allItems.find((i: any) => i[seriesFlag()]) || allItems[0];
-
-        logger.info(`[XtreamSeriesInfo] ${cacheKey}: ${allItems.length} items, ${seasons.length} seasons (first keys: ${allItems[0] ? Object.keys(allItems[0]).slice(0, 8).join(",") : "none"})`);
-
-        const episodesMap: Record<string, any[]> = {};
-        let totalEpInfo = 0;
-
-        for (const season of seasons) {
-          await new Promise((r) => setTimeout(r, 300));
-          const seasonNum = String(season.season_number || "1");
-          const seasonIdInt = parseInt(season.id);
-          let allEps = await fetchAllPages(async (page) => {
-            const r = await provider.getMovies({ category: "*", page, movieId: seriesId, seasonId: seasonIdInt });
-            return r?.js?.data || [];
-          });
-          // Fallback: some portals store episodes under type:"series" not type:"vod"
-          if (allEps.length === 0) {
-            allEps = await fetchAllPages(async (page) => {
-              const r = await provider.getSeries({ category: "*", page, movieId: seriesId, seasonId: seasonIdInt });
-              return r?.js?.data || [];
-            });
-          }
-          const episodes = allEps.filter((e: any) => e.is_episode);
-          // Fallback: portal may not set is_episode flag — use all returned items
-          const effectiveEps = episodes.length > 0 ? episodes : allEps;
-          logger.info(`[XtreamSeriesInfo] ${cacheKey} season ${seasonNum} (id=${season.id}): ${allEps.length} raw items, ${effectiveEps.length} effective eps`);
-
-          episodesMap[seasonNum] = effectiveEps.map((ep: any, idx: number) => {
-            const epNum = parseInt(String(ep.series_number || (idx + 1)));
-            // Episode id -> series, in the compact episode_index table (content/episodeIndex.ts).
-            rememberEpisode(ep.id, seriesId, epNum);
-            totalEpInfo++;
-            return {
-              id:                  ep.id,
-              episode_num:         epNum,
-              title:               ep.name || `Episode ${epNum}`,
-              container_extension: "m3u8",
-              info: {
-                season:        parseInt(seasonNum),
-                plot:          "",
-                duration_secs: 0,
-                rating:        0,
-                movie_image:   "",
-                releasedate:   ep.date_add || "",
-              },
-              direct_source: "",
-            };
-          });
-        }
-
-        const result = {
-          info: {
-            name:             seriesItem?.name || "",
-            cover:            buildIconUrl(seriesItem?.screenshot_uri),
-            plot:             seriesItem?.description || "",
-            cast:             seriesItem?.actors || "",
-            director:         seriesItem?.director || "",
-            genre:            seriesItem?.genres_str || "",
-            releaseDate:      seriesItem?.year || "",
-            rating:           seriesItem?.rating_imdb || 0,
-            backdrop_path:    [],
-            youtube_trailer:  "",
-            episode_run_time: "",
-            category_id:      seriesItem?.category_id || "0",
-          },
-          episodes: episodesMap,
-          seasons: seasons.map((s: any) => ({
-            air_date:      s.date_add || "",
-            episode_count: parseInt(s.season_series || 0),
-            id:            parseInt(s.id),
-            name:          s.season_name || `Season ${s.season_number}`,
-            overview:      "",
-            season_number: parseInt(s.season_number || 1),
-            cover:         "",
-            cover_big:     "",
-          })),
-        };
-
-        await xtreamCache.set(cacheKey, result);
-        logger.info(`[XtreamSeriesInfo] Warmed ${cacheKey}: ${totalEpInfo} episodes indexed`);
+        await fetchSeriesInfo(seriesId);
       } catch (e: any) {
         logger.error(`[XtreamSeriesInfo] Failed ${cacheKey}: ${e.message}`);
       }
