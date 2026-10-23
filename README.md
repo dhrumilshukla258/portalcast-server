@@ -61,6 +61,8 @@ docker compose up -d
 
 Update: `docker compose pull && docker compose up -d`. Use `:latest` for the newest build of `main`, or a release such as `:1.1.0` to stay on it. Keep your `docker-compose.yml` private: it may hold your keys.
 
+To help test the next version before it is released, use `:beta` instead of `:latest` (pre-release packages are on the [releases](https://github.com/dhrumilshukla258/portalcast-server/releases) page, marked *Pre-release*). Beta builds may change the database in ways the current release has not seen yet: back up your data folder first, and switch back to `:latest` once that release is out.
+
 Building the image yourself instead (for example to run your own fork): point the compose file at the repository and run `docker compose build` before `up`:
 
 ```yaml

@@ -1,6 +1,8 @@
 # Native PortalCast Server packages, attached to a GitHub Release.
 #
 #   git tag v1.2.0 && git push origin v1.2.0      -> builds everything and publishes the release
+#   git tag v1.3.0-beta.1 && git push origin v1.3.0-beta.1 -> the same, as a pre-release (never
+#                                                   shown as the latest release)
 #   Actions > Release > Run workflow               -> test build (artifacts only, no release)
 #
 # Each package bundles the official Node.js runtime (same major as the Docker image) and the
@@ -136,3 +138,4 @@ jobs:
         with:
           files: assets/*
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
