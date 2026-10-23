@@ -12,8 +12,10 @@
 //   - overrides, Discover cache clears (enrichment, local library scans, edits), video quality
 //     reports and setting changes: counted here
 //   - the active IPTV profile
-// Personal answers (Home) add the viewer store's generation (X-Home-Version): watch progress
-// changes every few seconds during playback and must not move the catalog version.
+// Personal answers (Home) add what that viewer's Home depends on (X-Home-Version, content/home.ts
+// homeVersionOf): their own history, what anyone has watched, the day, trending and charts.
+// Watch progress changes every 30 s during playback and must not move the catalog version, nor
+// other viewers' Home version.
 //
 // The change log is read by the catalog store's 5 s poll (and on every catalogChanges call):
 // an answer cached in those seconds after a write is stale only until the app sees the next
@@ -24,6 +26,7 @@ import { setting } from "@/config/settings";
 import { overridesGeneration } from "@/content/overrides";
 import { catalogSnapshot, knownCatalogChange } from "@/content/catalog/store";
 import { viewerGeneration } from "@/content/viewers";
+import { homeVersionOf } from "@/content/home";
 import { getActiveProfileId } from "@/routes/stalkerV2/shared";
 
 const BOOT = crypto.randomBytes(4).toString("hex");
@@ -42,7 +45,13 @@ export async function catalogAnswerVersion(): Promise<string | null> {
   return `${BOOT}.${seq}.${overridesGeneration()}.${inputs}.${(await getActiveProfileId()) ?? 0}`;
 }
 
-/** The version of personal answers (Home): the catalog version plus every viewer's progress. */
-export function homeAnswerVersion(catalogVersion: string): string {
-  return `${catalogVersion}.${viewerGeneration()}`;
+/**
+ * The version of personal answers (Home): the catalog version plus everything this viewer's
+ * Home depends on. Without a signed-in viewer (or an active profile), every viewer's progress,
+ * as before.
+ */
+export async function homeAnswerVersion(catalogVersion: string, userId?: number): Promise<string> {
+  const profileId = userId === undefined ? undefined : await getActiveProfileId();
+  if (userId === undefined || profileId === undefined) return `${catalogVersion}.${viewerGeneration()}`;
+  return `${catalogVersion}.${homeVersionOf(userId, profileId)}`;
 }

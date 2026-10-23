@@ -568,7 +568,11 @@ export const discoverRoutes: ServerRoute[] = [
         .filter((r) => r.data.length > 0);
       const body = { rows, genreOrder: home.genreOrder };
       // The tag is the answer itself (cards included), so a renamed title is never a stale 304.
-      return h.response(body).etag(createHash("sha1").update(JSON.stringify(body)).digest("base64url").slice(0, 22));
+      const res = h.response(body).etag(createHash("sha1").update(JSON.stringify(body)).digest("base64url").slice(0, 22));
+      // The previous rows while new ones are built: asked again next time, never kept for this
+      // version (infra/httpCaching.ts would otherwise keep them until the version moves).
+      if (home.stale) res.header("Cache-Control", "no-cache");
+      return res;
     },
   },
 

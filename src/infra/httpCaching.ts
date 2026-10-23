@@ -18,6 +18,7 @@ import crypto from "crypto";
 import type { Server } from "@hapi/hapi";
 import { iptvHealth } from "@/services/portalHealth";
 import { catalogAnswerVersion, homeAnswerVersion } from "@/infra/answerVersion";
+import { authCheck } from "@/auth/jwt";
 
 const YEAR = 365 * 24 * 60 * 60;
 const HOME_PATH = "/api/v2/home";
@@ -49,7 +50,9 @@ export function registerHttpCaching(server: Server): void {
     const version = await catalogAnswerVersion().catch(() => null);
     // Both on every answer: an app whose screens all come from its cache still learns new
     // versions from whatever else it asks (progress saves, status polls).
-    const homeVersion = version ? homeAnswerVersion(version) : null;
+    // Per viewer: one viewer's playback does not replace another's cached Home.
+    const viewer = version ? authCheck(request) : false;
+    const homeVersion = version ? await homeAnswerVersion(version, viewer ? viewer.userId : undefined).catch(() => null) : null;
     if (r?.isBoom) {
       r.output.headers["X-IPTV"] = iptv;
       if (version) r.output.headers["X-Catalog-Version"] = version;
@@ -67,7 +70,8 @@ export function registerHttpCaching(server: Server): void {
     // Never a title's own answer (seasons, episodes, files): it carries play links.
     const opensTitle = (q.movieId !== undefined && String(q.movieId) !== "0") || q.seasonId !== undefined || q.episodeId !== undefined;
     const pinned = request.method === "get" && r?.statusCode === 200 && !!current && asked === current && !opensTitle;
-    if (pinned && request.path === HOME_PATH) {
+    // A Home that sets its own Cache-Control (the previous rows, content/home.ts) is not kept.
+    if (pinned && request.path === HOME_PATH && !r.headers?.["cache-control"]) {
       r.header("Cache-Control", `private, max-age=${YEAR}, immutable`);
       r.header("Vary", "Authorization");
       return h.continue;

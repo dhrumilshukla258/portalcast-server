@@ -31,6 +31,16 @@ let viewers = new Map<string, Viewer>();
 let loaded: Promise<void> | null = null;
 /** Bumped on every change: Home rows and other derived data compare it (Phase 2 nearline). */
 let generation = 0;
+/**
+ * Finer than [generation], for Home (content/home.ts, infra/answerVersion.ts): one viewer's own
+ * changes, and changes to what anyone has watched (the "Popular on this server" row). A
+ * position saved every 30 s while someone watches moves only that viewer's (owner, 2026-10-23:
+ * one viewer's playback emptied every viewer's cached Home).
+ */
+let loadGeneration = 0;
+const ownGeneration = new Map<string, number>();
+let watchedGeneration = 0;
+const MONTH_MS = 30 * 86_400_000; // the window "Popular on this server" counts
 const listeners: ((userId: number, profileId: number) => void)[] = [];
 
 /** No active IPTV profile: as before (a query on profileId undefined failed), an error. */
@@ -61,6 +71,7 @@ async function loadAll(): Promise<void> {
   }
   viewers = next;
   generation++;
+  loadGeneration++;
 }
 
 /** Loads the store once (later calls wait for the same load). */
@@ -78,6 +89,19 @@ async function reload(changedViewers?: { userId: number; profileId: number }[]):
 
 export function viewerGeneration(): number {
   return generation;
+}
+
+/** Changes when this viewer's history changes, or when what anyone has watched changes. */
+export function viewerGenerationOf(userId: number, profileId: number): string {
+  return `${loadGeneration}.${ownGeneration.get(`${userId}:${profileId}`) ?? 0}.${watchedGeneration}`;
+}
+
+/** A save changed what this row counts for in others' Home: watched or not, or a watched title
+ *  coming back into the last 30 days. */
+function watchedChanged(before: ProgressRow | undefined, after: ProgressRow | undefined): boolean {
+  const was = !!before && isWatched(before), is = !!after && isWatched(after);
+  if (was !== is) return true;
+  return is && !!before && new Date(before.updatedAt).getTime() < Date.now() - MONTH_MS;
 }
 
 /** Called after a viewer's progress changed (Phase 2: their Home rows are rebuilt). */
@@ -133,8 +157,12 @@ export async function saveProgress(userId: number | undefined, profileId: number
     const stored = await UserProgress.findOne({ where });
     let v = viewers.get(key);
     if (!v) viewers.set(key, (v = new Map()));
-    if (stored) v.set(mediaId, stored.toJSON() as ProgressRow); else v.delete(mediaId);
+    const before = v.get(mediaId);
+    const after = stored ? (stored.toJSON() as ProgressRow) : undefined;
+    if (after) v.set(mediaId, after); else v.delete(mediaId);
     generation++;
+    ownGeneration.set(key, (ownGeneration.get(key) ?? 0) + 1);
+    if (watchedChanged(before, after)) watchedGeneration++;
   });
   for (const fn of listeners) fn(userId!, profileId!);
 }
@@ -145,8 +173,11 @@ export async function deleteProgress(userId: number | undefined, profileId: numb
   const key = viewerKey(userId, profileId);
   await UserProgress.destroy({ where: { userId: userId!, profileId: profileId!, ...(mediaId !== undefined ? { mediaId } : {}) } });
   const v = viewers.get(key);
+  const removed = !v ? [] : mediaId !== undefined ? [v.get(mediaId)] : [...v.values()];
   if (v) { if (mediaId !== undefined) v.delete(mediaId); else v.clear(); }
   generation++;
+  ownGeneration.set(key, (ownGeneration.get(key) ?? 0) + 1);
+  if (removed.some((r) => r && isWatched(r))) watchedGeneration++;
   for (const fn of listeners) fn(userId!, profileId!);
 }
 

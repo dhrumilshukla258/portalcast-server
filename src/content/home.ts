@@ -34,14 +34,20 @@ import { getHiddenContentKeySet } from "@/content/overrides";
 import { titleKeyOf } from "@/content/people";
 import { logger } from "@/infra/logger";
 import { titleWithGroup, titlePeople, personTitles } from "@/content/catalog/cards";
-import { allViewerRows, recentProgress, isWatched, progressType, contentIdsOf, viewerGeneration, type ProgressRow } from "@/content/viewers";
+import { allViewerRows, recentProgress, isWatched, progressType, contentIdsOf, viewerGenerationOf, type ProgressRow } from "@/content/viewers";
 import { titleFacts, onlineTrending, trendingStamp, justAdded, newEpisodes, trendingRanks, dailyThemes, dayNumber, nameKey, shuffled } from "@/content/homeThemes";
 import { onProviderDatesChanged } from "@/content/providerDates";
 import { chartsFor, chartsStamp, viewerCountries, type ChartList } from "@/content/homeCharts";
 
 export type HomeType = "all" | "movie" | "series";
 export interface HomeRow { key: string; kind: "because" | "picks" | "person" | "popular" | "trending" | "toprated" | "new" | "theme" | "chart" | "episodes"; title: string; ids: string[] }
-export interface HomeRows { rows: HomeRow[]; genreOrder: string[]; builtAt: number }
+export interface HomeRows {
+  rows: HomeRow[];
+  genreOrder: string[];
+  builtAt: number;
+  /** The previous rows, served while new ones are built: not to be kept as the current Home. */
+  stale?: boolean;
+}
 
 const MIN_ROW = 6;
 /** A chart from outside (a Top 10) overlaps a catalog only partly: shorter rows are fine. */
@@ -435,13 +441,22 @@ export function primeHomeFacts(): void {
 }
 
 /**
+ * Everything a viewer's Home depends on: their history and what others watched, the catalog,
+ * Not interested, the day (themes), TMDB's trending and the charts. The rows are rebuilt when it
+ * changes, and the apps' cached Home is replaced (X-Home-Version, infra/answerVersion.ts).
+ */
+export function homeVersionOf(userId: number, profileId: number): string {
+  return `${viewerGenerationOf(userId, profileId)}.${catalogGen}.${notInterestedGen()}.${dayNumber()}.${trendingStamp()}.${chartsStamp()}`;
+}
+
+/**
  * The viewer's rows: current ones from the cache, else built now the first time, else the
  * previous ones while new ones are built in the background (Home never waits on a rebuild).
  */
 export async function homeRows(userId: number, profileId: number, type: HomeType): Promise<HomeRows> {
   const key = `${userId}:${profileId}:${type}`;
   // The day and TMDB's trending are part of it: themes change at midnight, trending every 6 h.
-  const gen = `${viewerGeneration()}.${catalogGen}.${notInterestedGen()}.${dayNumber()}.${trendingStamp()}.${chartsStamp()}`;
+  const gen = homeVersionOf(userId, profileId);
   const have = cache.get(key);
   if (have && have.gen === gen) return have.value;
   let job = building.get(key);
@@ -458,7 +473,7 @@ export async function homeRows(userId: number, profileId: number, type: HomeType
   }
   if (have) {
     job.catch((e) => logger.warn(`[home] rows for ${key} failed (previous kept): ${e?.message ?? e}`));
-    return have.value;
+    return { ...have.value, stale: true };
   }
   return job;
 }
