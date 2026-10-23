@@ -30,39 +30,47 @@ export function onProviderDatesChanged(fn: () => void): void {
 }
 
 export async function fillProviderDates(): Promise<string> {
-  let seen = 0, changed = 0;
+  // 1. Every title's date from the cached lists, one category at a time. A title listed in more
+  //    than one category keeps the earliest date for a movie (when it first arrived) and the
+  //    latest for a series (its newest episodes): one value per title, so runs do not flip it.
+  const found = new Map<string, number>();
+  let seen = 0;
   for (const type of ["movie", "series"] as const) {
-    const genres = await readGenres(type);
-    for (const genre of genres) {
+    for (const genre of await readGenres(type)) {
       if (!genre.id || genre.id === "*") continue;
       const list = await xtreamCache.get<any[]>(type === "movie" ? `vod_streams_${genre.id}` : `series_list_${genre.id}`);
-      if (!Array.isArray(list) || !list.length) continue;
-      const pairs: [string, number][] = [];
+      if (!Array.isArray(list)) continue;
+      seen += list.length;
       for (const it of list) {
         const id = type === "movie" ? it?.stream_id : it?.series_id;
         const sec = providerSeconds(type === "movie" ? it?.added : it?.last_modified ?? it?.added);
-        if (id !== undefined && id !== null && sec) pairs.push([`${type}_${id}`, sec]);
+        if (id === undefined || id === null || !sec) continue;
+        const key = `${type}_${id}`;
+        const have = found.get(key);
+        if (have === undefined || (type === "movie" ? sec < have : sec > have)) found.set(key, sec);
       }
-      if (!pairs.length) continue;
-      seen += pairs.length;
-      await sequelize.transaction(async (transaction) => {
-        // SQLite's own count of changed rows on this connection, before and after.
-        const total = async () => Number(((await sequelize.query("SELECT total_changes() AS n", { transaction, type: QueryTypes.SELECT })) as any[])[0]?.n ?? 0);
-        const before = await total();
-        for (const [id, sec] of pairs) {
-          await sequelize.query(
-            "UPDATE content_meta SET providerAddedAt = ? WHERE id = ? AND (providerAddedAt IS NULL OR providerAddedAt <> ?)",
-            { replacements: [sec, id, sec], transaction },
-          );
-        }
-        changed += (await total()) - before;
-      });
       await new Promise((r) => setImmediate(r));
     }
   }
-  if (changed > 0) {
-    logger.info(`[provider-dates] ${changed} titles got a new provider date (${seen} read)`);
+
+  // 2. Only dates that differ from what is stored are written (the first run writes them all,
+  //    later runs a handful: quick, and the write lock is held only briefly), 500 per transaction.
+  const changes: [string, number][] = [];
+  for (const r of (await sequelize.query("SELECT id, providerAddedAt FROM content_meta", { type: QueryTypes.SELECT })) as any[]) {
+    const sec = found.get(String(r.id));
+    if (sec && sec !== (Number(r.providerAddedAt) || 0)) changes.push([String(r.id), sec]);
+  }
+  for (let i = 0; i < changes.length; i += 500) {
+    await sequelize.transaction(async (transaction) => {
+      for (const [id, sec] of changes.slice(i, i + 500)) {
+        await sequelize.query("UPDATE content_meta SET providerAddedAt = ? WHERE id = ?", { replacements: [sec, id], transaction });
+      }
+    });
+    await new Promise((r) => setImmediate(r));
+  }
+  if (changes.length) {
+    logger.info(`[provider-dates] ${changes.length} titles got a new provider date (${seen} read)`);
     onChanged?.();
   }
-  return `${seen} titles read, ${changed} dates changed`;
+  return `${seen} titles read, ${changes.length} dates changed`;
 }

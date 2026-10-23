@@ -261,13 +261,43 @@ export async function buildHomeRows(userId: number, profileId: number, type: Hom
     if (ranks.length >= MIN_ROW) rows.push({ key: `because:${w.rep}`, kind: "because", title: `Because you watched ${w.title}`, ids: commit(ranks.slice(0, SIMILAR)) });
   }
 
-  // Top picks: genre weights over each genre's titles, language and people on top.
+  // Online data, used by Top picks below and by the chart rows after (content/homeThemes.ts,
+  // content/homeCharts.ts).
+  const facts = await titleFacts(idx, catalogGen);
+  const online = await onlineTrending().catch(() => null);
+  // Charts keep watched titles (a chart); hidden and Not interested ones go.
+  const chartOk = (r: number) => (want === 0 || idx.type[r] === want) && !hidden.has(idx.ids[r]) && !mine.has(idx.ids[r]);
+  const countries = viewerCountries([...langW.entries()].map(([l, w]) => ({ code: idx.langs[l] ?? "", weight: w })));
+  const resolve = (c: ChartList) => {
+    const out: number[] = [];
+    const seen = new Set<number>();
+    const add = (r: number | undefined) => { if (r !== undefined && !seen.has(r) && chartOk(r)) { seen.add(r); out.push(r); } };
+    for (const t of c.tmdb ?? []) add(facts.byTmdb.get(`${t.kind}:${t.id}`));
+    for (const n of c.names ?? []) add(facts.byName.get(`${n.kind}|${nameKey(n.name)}`));
+    return out;
+  };
+  const countryCharts = chartsFor(countries);
+  // Popular right now, 0..1 per title (1 = the top of a list): TMDB's trending and the viewer's
+  // countries' charts (owner, 2026-10-23: the online stats in the personal rows too).
+  const popularity = new Map<number, number>();
+  const addPopular = (ranks: number[]) => ranks.forEach((r, i) => { const v = 1 - i / ranks.length; if (v > (popularity.get(r) ?? 0)) popularity.set(r, v); });
+  if (online) addPopular(trendingRanks(facts, online, type, chartOk));
+  for (const c of countryCharts) addPopular(resolve(c));
+
+  // Top picks: genre weights over each genre's titles, language and people on top, then what is
+  // popular out there right now: up to +40 % of the best score, only for titles that already
+  // match the viewer's taste (a chart never brings in something unrelated).
   if (watched.length) {
     const sc = new Scores(n);
     for (const [g, gw] of genreW) { const list = idx.postings.genre.get(g); if (list) for (let i = 0; i < list.length; i++) sc.add(list[i], gw); }
     for (const r of sc.touched) { const lw = langW.get(idx.lang[r]); if (lw) sc.s[r] += lw * 1.5; }
     const topPeople = [...personW.entries()].sort((a, b) => b[1].w - a[1].w).slice(0, 10);
     for (const [pid, e] of topPeople) for (const r of await ranksOfPerson(pid, idx)) sc.add(r, e.w * 2);
+    if (popularity.size) {
+      let best = 0;
+      for (const r of sc.touched) if (sc.s[r] > best) best = sc.s[r];
+      for (const [r, p] of popularity) if (sc.s[r] > 0) sc.s[r] += best * 0.4 * p;
+    }
     const ranks = take(sc.top(ROW_SIZE * 2, ok));
     if (ranks.length >= MIN_ROW) rows.push({ key: "picks", kind: "picks", title: "Top picks for you", ids: commit(ranks) });
 
@@ -299,7 +329,6 @@ export async function buildHomeRows(userId: number, profileId: number, type: Hom
   if (popular.length >= MIN_ROW) rows.push({ key: "popular", kind: "popular", title: "Popular on this server", ids: commit(popular) });
 
   // Just added, Trending this week and today's themes (content/homeThemes.ts).
-  const facts = await titleFacts(idx, catalogGen);
   // New episodes of series the viewer watched (watched titles are otherwise left out of Home):
   // one show is already worth a row.
   const episodesOk = (r: number) => !hidden.has(idx.ids[r]) && !mine.has(idx.ids[r]) && (want === 0 || idx.type[r] === want);
@@ -309,10 +338,8 @@ export async function buildHomeRows(userId: number, profileId: number, type: Hom
   const added = take(justAdded(idx, facts, ok));
   const newRow: HomeRow | null = added.length >= MIN_ROW ? { key: "new", kind: "new", title: "Just added", ids: commit(added) } : null;
 
-  // Trending: a chart, so watched titles stay; hidden and Not interested ones do not.
-  const chartOk = (r: number) => (want === 0 || idx.type[r] === want) && !hidden.has(idx.ids[r]) && !mine.has(idx.ids[r]);
+  // Trending: a chart, so watched titles stay (chartOk above).
   const trendRows: HomeRow[] = [];
-  const online = await onlineTrending().catch(() => null);
   if (online) {
     const ranks = take(trendingRanks(facts, online, type, chartOk));
     if (ranks.length >= MIN_ROW) trendRows.push({ key: `trending:${type}`, kind: "trending", title: "Trending this week", ids: commit(ranks) });
@@ -345,17 +372,8 @@ export async function buildHomeRows(userId: number, profileId: number, type: Hom
 
   // What is popular out there in the viewer's countries (content/homeCharts.ts): two of the
   // ready charts a day, chosen per viewer and day. Charts keep watched titles (a chart).
-  const countries = viewerCountries([...langW.entries()].map(([l, w]) => ({ code: idx.langs[l] ?? "", weight: w })));
-  const resolve = (c: ChartList) => {
-    const out: number[] = [];
-    const seen = new Set<number>();
-    const add = (r: number | undefined) => { if (r !== undefined && !seen.has(r) && chartOk(r)) { seen.add(r); out.push(r); } };
-    for (const t of c.tmdb ?? []) add(facts.byTmdb.get(`${t.kind}:${t.id}`));
-    for (const n of c.names ?? []) add(facts.byName.get(`${n.kind}|${nameKey(n.name)}`));
-    return out;
-  };
   const chartRows: HomeRow[] = [];
-  for (const c of shuffled(chartsFor(countries), `${userId}:${profileId}:${dayNumber()}:${type}:charts`)) {
+  for (const c of shuffled(countryCharts, `${userId}:${profileId}:${dayNumber()}:${type}:charts`)) {
     if (chartRows.length >= 2) break;
     const ranks = take(resolve(c));
     if (ranks.length >= MIN_CHART) chartRows.push({ key: `chart:${c.key}`, kind: "chart", title: c.title, ids: commit(ranks) });
