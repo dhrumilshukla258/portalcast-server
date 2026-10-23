@@ -470,6 +470,21 @@ export async function fetchTvNetworks(tmdbId: number): Promise<TmdbNetwork[] | n
   }));
 }
 
+// ---- trending -----------------------------------------------------------------------
+/**
+ * TMDB's trending this week ([pages] x 20, most trending first): TMDB ids. Null without a TMDB
+ * key or when TMDB does not answer. Home's "Trending this week" (content/homeThemes.ts).
+ */
+export async function fetchTrendingIds(kind: "movie" | "tv", pages = 5): Promise<number[] | null> {
+  const out: number[] = [];
+  for (let page = 1; page <= pages; page++) {
+    const data = await tmdbGet(`/trending/${kind}/week?language=en-US&page=${page}`);
+    if (!data || !Array.isArray(data.results)) return out.length ? out : null;
+    for (const r of data.results) if (Number.isFinite(Number(r?.id))) out.push(Number(r.id));
+  }
+  return out;
+}
+
 // ---- one season's episodes -----------------------------------------------------------
 export interface TmdbEpisode {
   number: number;

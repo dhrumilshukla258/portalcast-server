@@ -1,7 +1,7 @@
 // Home rows prepared per viewer (plan, Phase 2): the personal rows of the Discover/Home page,
 // computed when the viewer's watching changes or the catalog does, not on every open.
 //
-// Rows (a row with fewer than MIN_ROW titles is left out; a title is in at most two rows; the
+// Rows (a row with fewer than MIN_ROW titles is left out; a title is in one row only; the
 // versions of a title count once: only representative titles are offered, and every version of
 // something watched is left out):
 //   because   "Because you watched X": up to 3, one per recently watched title, its most
@@ -10,6 +10,11 @@
 //             weights (what they watched, more recent counting more)
 //   person    "More with <name>": the actor or director the viewer watched most (2+ titles)
 //   popular   "Popular on this server": what other viewers here watched in the last 30 days
+//   new       "Just added": what the provider added lately (content/homeThemes.ts)
+//   trending  "Trending this week": TMDB's trending that this server has, else a vote-based chart
+//   theme     rows that change every day per viewer: "Horror classics", "Best of 2016", "Best in
+//             Hindi", "All-time greats"... (content/homeThemes.ts). Top rated is no longer a
+//             fixed row: Home should feel new, not the same chart every day (owner, 2026-10-22)
 // plus `genreOrder`: the viewer's genres, most watched first, for the genre rows the apps page
 // through themselves. Continue Watching stays where it is (the apps build it from progress).
 //
@@ -28,9 +33,10 @@ import { titleKeyOf } from "@/content/people";
 import { logger } from "@/infra/logger";
 import { titleWithGroup, titlePeople, personTitles } from "@/content/catalog/cards";
 import { allViewerRows, recentProgress, isWatched, progressType, contentIdsOf, viewerGeneration, type ProgressRow } from "@/content/viewers";
+import { titleFacts, onlineTrending, trendingStamp, justAdded, trendingRanks, dailyThemes, dayNumber } from "@/content/homeThemes";
 
 export type HomeType = "all" | "movie" | "series";
-export interface HomeRow { key: string; kind: "because" | "picks" | "person" | "popular" | "trending" | "toprated"; title: string; ids: string[] }
+export interface HomeRow { key: string; kind: "because" | "picks" | "person" | "popular" | "trending" | "toprated" | "new" | "theme"; title: string; ids: string[] }
 export interface HomeRows { rows: HomeRow[]; genreOrder: string[]; builtAt: number }
 
 const MIN_ROW = 6;
@@ -215,8 +221,9 @@ export async function buildHomeRows(userId: number, profileId: number, type: Hom
   const excluded = new Set<number>();
   for (const w of watched) for (const id of w.groupIds) { const r = idx.rankOf.get(id); if (r !== undefined) excluded.add(r); }
   const ok = (r: number) => (want === 0 || idx.type[r] === want) && !excluded.has(r) && !hidden.has(idx.ids[r]) && !mine.has(idx.ids[r]);
-  const used = new Map<number, number>(); // rank -> rows it is in (at most two)
-  const take = (ranks: number[]) => ranks.filter((r) => (used.get(r) ?? 0) < 2).slice(0, ROW_SIZE);
+  // A title is in one row only: Home never shows the same card twice (owner, 2026-10-22).
+  const used = new Map<number, number>(); // rank -> rows it is in
+  const take = (ranks: number[]) => ranks.filter((r) => !used.has(r)).slice(0, ROW_SIZE);
   const commit = (ranks: number[]) => { for (const r of ranks) used.set(r, (used.get(r) ?? 0) + 1); return ranks.map((r) => idx.ids[r]); };
   const rows: HomeRow[] = [];
 
@@ -285,23 +292,55 @@ export async function buildHomeRows(userId: number, profileId: number, type: Hom
   const popular = take([...votes.entries()].filter(([r]) => ok(r)).sort((a, b) => b[1] - a[1] || a[0] - b[0]).map(([r]) => r));
   if (popular.length >= MIN_ROW) rows.push({ key: "popular", kind: "popular", title: "Popular on this server", ids: commit(popular) });
 
-  // Trending now and Top rated (the same for everyone): first on the Movies and Series pages,
-  // after the personal rows on Home. Hidden titles are left out; watched ones stay (a chart).
-  const ch = await charts();
-  const chartRows: HomeRow[] = [];
-  const chart = (ids: string[]) => ids.filter((id) => !hidden.has(id) && !mine.has(id)).slice(0, ROW_SIZE);
-  if (type === "all") {
-    for (const t of ["movie", "series"] as const) {
-      const ids = chart(ch.trending[t]);
-      if (ids.length >= MIN_ROW) chartRows.push({ key: `trending:${t}`, kind: "trending", title: `Trending now · ${t === "movie" ? "Movies" : "Series"}`, ids });
-    }
-    rows.push(...chartRows);
-  } else {
-    const trending = chart(ch.trending[type]), top = chart(ch.topRated[type]);
-    if (trending.length >= MIN_ROW) chartRows.push({ key: `trending:${type}`, kind: "trending", title: "Trending now", ids: trending });
-    if (top.length >= MIN_ROW) chartRows.push({ key: `toprated:${type}`, kind: "toprated", title: "Top rated", ids: top });
-    rows.unshift(...chartRows);
+  // Just added, Trending this week and today's themes (content/homeThemes.ts).
+  const facts = await titleFacts(idx, catalogGen);
+  const fresh: HomeRow[] = [];
+  const added = take(justAdded(idx, facts, ok));
+  const newRow: HomeRow | null = added.length >= MIN_ROW ? { key: "new", kind: "new", title: "Just added", ids: commit(added) } : null;
+
+  // Trending: a chart, so watched titles stay; hidden and Not interested ones do not.
+  const chartOk = (r: number) => (want === 0 || idx.type[r] === want) && !hidden.has(idx.ids[r]) && !mine.has(idx.ids[r]);
+  const trendRows: HomeRow[] = [];
+  const online = await onlineTrending().catch(() => null);
+  if (online) {
+    const ranks = take(trendingRanks(facts, online, type, chartOk));
+    if (ranks.length >= MIN_ROW) trendRows.push({ key: `trending:${type}`, kind: "trending", title: "Trending this week", ids: commit(ranks) });
   }
+  if (!trendRows.length) {
+    // No TMDB key or no answer: the vote-based chart (recent titles, most voted first).
+    const ch = await charts();
+    for (const t of type === "all" ? (["movie", "series"] as const) : [type]) {
+      const ranks = take(ch.trending[t].map((id) => idx.rankOf.get(id)).filter((r): r is number => r !== undefined && chartOk(r)));
+      if (ranks.length >= MIN_ROW) trendRows.push({ key: `trending:${t}`, kind: "trending", title: type === "all" ? `Trending now · ${t === "movie" ? "Movies" : "Series"}` : "Trending now", ids: commit(ranks) });
+    }
+  }
+
+  const typeKey = type === "all" ? "all" : type;
+  const themes = dailyThemes({
+    idx,
+    facts,
+    ok,
+    seed: `${userId}:${profileId}:${dayNumber()}:${type}`,
+    genres: genreOrder,
+    langs: [...langW.entries()].sort((x, y) => y[1] - x[1]).map(([l]) => l),
+    catalogGenres: (idx.facets as any)[typeKey]?.genres?.map((g: any) => g.value) ?? [],
+    count: 4,
+    minRow: MIN_ROW,
+  }).map((t) => {
+    const ranks = take(t.ranks);
+    return ranks.length >= MIN_ROW ? ({ key: t.key, kind: "theme", title: t.title, ids: commit(ranks) } as HomeRow) : null;
+  }).filter((r): r is HomeRow => r !== null);
+  fresh.push(...themes);
+
+  // Order: what the viewer watched leads Home, then what is new, then today's themes between
+  // the other personal rows. The Movies and Series pages lead with trending and new.
+  const byKind = (k: HomeRow["kind"]) => rows.filter((r) => r.kind === k);
+  const [t1, t2, t3, t4] = themes;
+  const ordered = type === "all"
+    ? [...byKind("because"), ...byKind("picks"), newRow, ...trendRows, t1, ...byKind("person"), t2, ...byKind("popular"), t3, t4]
+    : [...trendRows, newRow, t1, ...byKind("because"), ...byKind("picks"), t2, ...byKind("person"), t3, ...byKind("popular"), t4];
+  rows.length = 0;
+  for (const r of ordered) if (r) rows.push(r);
 
   return { rows, genreOrder, builtAt: Date.now() };
 }
@@ -324,7 +363,8 @@ export function markHomeStale(): void {
  */
 export async function homeRows(userId: number, profileId: number, type: HomeType): Promise<HomeRows> {
   const key = `${userId}:${profileId}:${type}`;
-  const gen = `${viewerGeneration()}.${catalogGen}.${notInterestedGen()}`;
+  // The day and TMDB's trending are part of it: themes change at midnight, trending every 6 h.
+  const gen = `${viewerGeneration()}.${catalogGen}.${notInterestedGen()}.${dayNumber()}.${trendingStamp()}`;
   const have = cache.get(key);
   if (have && have.gen === gen) return have.value;
   let job = building.get(key);
