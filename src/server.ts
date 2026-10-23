@@ -65,7 +65,7 @@ import { onTitleWordsChanged, watchActiveProfile, applyActiveProfileWords } from
 import { overviewRoutes } from "./routes/admin/overview";
 import { migrateToProfiles, loadActiveProfileFromDB, encryptStoredCredentials } from "./config/server";
 import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres } from "./services/xtreamCache";
-import { enrichContentMeta, sweepStaleContent, recleanForWords, imdbRetryUnmatched } from "./content/metaEnrichment";
+import { enrichContentMeta, sweepStaleContent, recleanForWords, imdbRetryUnmatched, imdbCorrectMatches } from "./content/metaEnrichment";
 import { buildImdbIndex, imdbIndexReady } from "./content/imdbIndex";
 import { fetchAndCacheEpg } from "./content/epg";
 import { getEpgSnapshot } from "./content/epgServe";
@@ -135,6 +135,7 @@ const init = async () => {
     run: async () => (setting<boolean>("imdbMatching") ? buildImdbIndex() : "IMDb matching is off"),
   });
   registerJob({ name: "imdb-unmatched", label: "Try titles TMDB never matched against IMDb", everyMs: 6 * 60 * 60 * 1000, run: () => imdbRetryUnmatched() });
+  registerJob({ name: "imdb-verify", label: "Correct matches the portal's own people or year contradict (IMDb)", everyMs: 6 * 60 * 60 * 1000, run: () => imdbCorrectMatches() });
   onSettingChange((key) => { if (key === "imdbMatching" && setting<boolean>("imdbMatching") && !imdbIndexReady()) runJobNow("imdb-titles"); });
   // Missing at start-up: built after the start-up warm-ups, not on top of them.
   setTimeout(() => { if (setting<boolean>("imdbMatching") && !imdbIndexReady()) runJobNow("imdb-titles"); }, 10 * 60_000).unref?.();

@@ -13,7 +13,7 @@ import { xtreamCache, catchupScan } from "@/services/xtreamCache";
 import { readGenres } from "@/infra/storage";
 import { logger } from "@/infra/logger";
 import { fetchMovieMeta, fetchTVMeta, fetchMetaByTmdbId, TmdbMeta } from "@/content/tmdb";
-import { tmdbMetaViaImdb, matchImdb, imdbMatchingOn, imdbBuiltAt } from "@/content/imdbIndex";
+import { tmdbMetaViaImdb, matchImdb, imdbMatchingOn, imdbBuiltAt, creditsOf, peopleEvidence, portalPeopleHashes, imdbTitleYears, yearDecides, type PortalPeople } from "@/content/imdbIndex";
 import { themesForKeywordIds } from "@/content/themes";
 import { ContentMeta, ContentType, ContentMetaSource } from "@/models/ContentMeta";
 import { ContentGenre } from "@/models/ContentGenre";
@@ -118,6 +118,8 @@ async function resolveMeta(
   fallbackCountries: string[],
   fallbackPoster: string | null,
   fallbackOverview: string | null = null,
+  /** The portal's director and cast, as evidence for IMDb matching (content/imdbIndex.ts). */
+  people?: PortalPeople,
 ): Promise<Resolved> {
   let tmdb = await xtreamCache.get<TmdbMeta | { _not_found: true }>(cacheKey);
 
@@ -133,7 +135,7 @@ async function resolveMeta(
   if (!tmdb || isLegacyShape) {
     // IMDb first when it is on (content/imdbIndex.ts); otherwise, or when it finds nothing, the
     // TMDB search as before.
-    const fetched = (await tmdbMetaViaImdb(kind, name, year)) ?? (kind === "movie" ? await fetchMovieMeta(name, year) : await fetchTVMeta(name, year));
+    const fetched = (await tmdbMetaViaImdb(kind, name, year, people)) ?? (kind === "movie" ? await fetchMovieMeta(name, year) : await fetchTVMeta(name, year));
     tmdb = fetched || { _not_found: true };
     await xtreamCache.set(cacheKey, tmdb);
     await sleep(THROTTLE_MS);
@@ -364,6 +366,7 @@ async function enrichMovies(): Promise<void> {
           splitList(m.country),
           m.stream_icon || null,
           portalPlot(m),
+          { directors: m.director, cast: m.actors, imdbRating: m.rating_imdb },
         );
         await upsertContent(contentId, "movie", name, resolved, String(genre.id));
       } catch (e: any) {
@@ -409,6 +412,7 @@ async function enrichSeries(): Promise<void> {
           splitList(s.country),
           s.cover || null,
           portalPlot(s),
+          { directors: s.director, cast: s.cast || s.actors, imdbRating: s.rating_imdb },
         );
         await upsertContent(contentId, "series", name, resolved, String(genre.id));
       } catch (e: any) {
@@ -1096,6 +1100,86 @@ export function recleanForWords(words: string[]): void {
  * on; content/imdbIndex.ts): [limit] rows per run in id order from where the last run stopped,
  * from the start again after each new index. TMDB is asked only for the ones IMDb found.
  */
+/** A content row's item in the portal's cached category list (its director, cast, year...). */
+async function portalListItem(cache: Map<string, Map<string, any>>, row: { id: string; type: string; portalCategoryId?: string | null }): Promise<any | undefined> {
+  const key = row.type === "series" ? `series_list_${row.portalCategoryId}` : `vod_streams_${row.portalCategoryId}`;
+  let byId = cache.get(key);
+  if (!byId) {
+    const list = (await xtreamCache.get<any[]>(key)) ?? [];
+    byId = new Map(list.map((it) => [String(row.type === "series" ? it.series_id : it.stream_id), it]));
+    cache.set(key, byId);
+  }
+  return byId.get(String(row.id).replace(/^(movie|series)_/, ""));
+}
+
+/**
+ * Matches the portal's own people say are wrong (job "imdb-verify", when IMDb matching is on):
+ * a title whose IMDb match shares a director or cast member with what the portal lists, while
+ * the title it is matched to now does not (and IMDb has that title's people), is matched again
+ * through IMDb and logged. Measured on a 133k catalog, where the portal lists people and the two
+ * disagree: IMDb's pick agreed with the portal's people 1,181 times, the existing match 32 times
+ * (those are never touched). [limit] rows per run, from where the last run stopped.
+ */
+const IMDB_VERIFY_KEY = "imdb_verify_cursor";
+export async function imdbCorrectMatches(limit = 400): Promise<string> {
+  if (!imdbMatchingOn()) return "IMDb matching is off or not built yet";
+  const builtAt = await imdbBuiltAt();
+  const saved = (await SystemConfig.findByPk(IMDB_VERIFY_KEY))?.value as { builtAt?: number; after?: string } | undefined;
+  const after = saved?.builtAt === builtAt ? String(saved?.after ?? "") : "";
+  const rows = (await ContentMeta.findAll({
+    where: { tmdbId: { [Op.ne]: null }, imdbId: { [Op.like]: "tt%" }, id: { [Op.gt]: after }, portalCategoryId: { [Op.ne]: "local" } },
+    attributes: ["id", "type", "name", "imdbId", "poster", "portalCategoryId"],
+    order: [["id", "ASC"]],
+    limit,
+    raw: true,
+  })) as any[];
+  const lists = new Map<string, Map<string, any>>();
+  let checked = 0, corrected = 0;
+  for (const row of rows) {
+    const it = await portalListItem(lists, row).catch(() => undefined);
+    const people: PortalPeople = { directors: it?.director, cast: it?.actors || it?.cast, imdbRating: it?.rating_imdb };
+    const { directors, cast } = portalPeopleHashes(people);
+    const portalYear = parseInt(String(it?.year || it?.releaseDate || "").slice(0, 4), 10) || 0;
+    if (!directors.length && !cast.length && !portalYear) continue;
+    checked++;
+    const m = await matchImdb(row.name, row.type === "series" ? "series" : "movie", portalYear, people).catch(() => null);
+    if (!m || m.imdbId === row.imdbId) continue;
+    let why: string;
+    if (directors.length || cast.length) {
+      // The portal's people decide: they must be shared with IMDb's pick and not with the
+      // current title (whose people IMDb knows).
+      if (m.evidence !== "director" && m.evidence !== "cast") continue;
+      const now = peopleEvidence(directors, cast, (await creditsOf([parseInt(String(row.imdbId).slice(2), 10)])).values().next().value);
+      if (!now || now.score > 0) continue;
+      why = `${m.evidence} shared with the portal`;
+    } else {
+      // No people: the portal's year (see yearDecides).
+      const [now, pick] = await Promise.all([imdbTitleYears(String(row.imdbId)), imdbTitleYears(m.imdbId)]);
+      if (!yearDecides(row.type === "series" ? "series" : "movie", portalYear, titleYearOf(row.name), now, pick, m.votes)) continue;
+      why = `the portal's year ${portalYear}, not ${now!.year}`;
+    }
+    const kind = row.type === "movie" ? "movie" : "tv";
+    const portalId = String(row.id).replace(/^(movie|series)_/, "");
+    const cacheKey = kind === "movie" ? `tmdb_movie_${portalId}` : `tmdb_tv_${portalId}`;
+    try {
+      const fresh = await tmdbMetaViaImdb(kind, row.name, portalYear ? String(portalYear) : "", people);
+      if (!fresh || fresh.imdbId !== m.imdbId) continue; // TMDB must confirm the same IMDb title
+      await xtreamCache.set(cacheKey, fresh);
+      const resolved = await resolveMeta(kind, cacheKey, row.name, portalYear ? String(portalYear) : "", [], [], row.poster || null, null, people);
+      if (!resolved.tmdbId) continue;
+      await upsertContent(row.id, row.type, row.name, resolved, row.portalCategoryId || "");
+      corrected++;
+      logger.info(`[MetaEnrich] IMDb corrected "${row.name}": ${row.imdbId} -> ${m.imdbId} (${why})`);
+    } catch (e: any) {
+      logger.error(`[MetaEnrich] IMDb correction ${row.name}: ${e.message}`);
+    }
+  }
+  const last = rows.length ? String(rows[rows.length - 1].id) : after;
+  await SystemConfig.upsert({ key: IMDB_VERIFY_KEY, value: { builtAt, after: rows.length < limit ? "￿" : last } });
+  if (corrected) { await recomputeRepresentatives(); clearDiscoverCache(); }
+  return rows.length ? `${rows.length} matched titles looked at, ${checked} with people or a year from the portal, ${corrected} corrected` : "every matched title checked against this index";
+}
+
 const IMDB_CURSOR_KEY = "imdb_unmatched_cursor";
 export async function imdbRetryUnmatched(limit = 400): Promise<string> {
   if (!imdbMatchingOn()) return "IMDb matching is off or not built yet";
@@ -1110,8 +1194,11 @@ export async function imdbRetryUnmatched(limit = 400): Promise<string> {
     raw: true,
   })) as any[];
   let found = 0, matched = 0;
+  const lists = new Map<string, Map<string, any>>(); // category list -> portal id -> item
   for (const row of rows) {
-    const m = await matchImdb(row.name, row.type === "series" ? "series" : "movie", parseInt(String(row.year || ""), 10) || 0).catch(() => null);
+    const it = await portalListItem(lists, row).catch(() => undefined);
+    const people: PortalPeople = { directors: it?.director, cast: it?.actors || it?.cast, imdbRating: it?.rating_imdb };
+    const m = await matchImdb(row.name, row.type === "series" ? "series" : "movie", parseInt(String(row.year || ""), 10) || 0, people).catch(() => null);
     if (!m) continue;
     found++;
     const kind = row.type === "movie" ? "movie" : "tv";
@@ -1124,7 +1211,7 @@ export async function imdbRetryUnmatched(limit = 400): Promise<string> {
         ContentCountry.findAll({ where: { contentId: row.id }, attributes: ["value"], raw: true }),
       ]);
       const resolved = await resolveMeta(kind, cacheKey, row.name, row.year || "",
-        (genres as any[]).map((g) => g.value).filter((v) => v !== UNCATEGORIZED_GENRE), (countries as any[]).map((c) => c.value), row.poster || null);
+        (genres as any[]).map((g) => g.value).filter((v) => v !== UNCATEGORIZED_GENRE), (countries as any[]).map((c) => c.value), row.poster || null, null, people);
       if (resolved.tmdbId) { matched++; await upsertContent(row.id, row.type, row.name, resolved, row.portalCategoryId || ""); }
     } catch (e: any) {
       logger.error(`[MetaEnrich] IMDb retry ${row.name}: ${e.message}`);

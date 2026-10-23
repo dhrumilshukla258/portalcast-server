@@ -1,19 +1,44 @@
 # IMDb matching (optional)
 
-Setting **Match titles with IMDb first** (`imdbMatching`, Admin → Settings → Catalog), off by default. When on, the server downloads IMDb's free title files itself (datasets.imdbws.com; personal and non-commercial use) and matches portal titles against them before searching TMDB. Code: `src/content/imdbIndex.ts`; enrichment hook in `src/content/metaEnrichment.ts` (`resolveMeta`, `imdbRetryUnmatched`); jobs in `src/server.ts`.
+Setting **Match titles with IMDb first** (`imdbMatching`, Admin → Settings → Catalog), off by default. When on, the server downloads IMDb's free title files itself (datasets.imdbws.com; personal and non-commercial use) and matches portal titles against them before searching TMDB. Code: `src/content/imdbIndex.ts`; enrichment hook in `src/content/metaEnrichment.ts` (`resolveMeta`, `imdbRetryUnmatched`, `imdbCorrectMatches`); jobs in `src/server.ts`.
 
 ## Index (job `imdb-titles`, weekly; at once when the setting is turned on)
 
-A worker thread streams `title.ratings`, `title.basics` and `title.akas` (about 750 MB to download) through gunzip into `imdb.db` next to the database, then swaps it in. Kept: movies and series (no episodes, shorts or adult titles) with at least one vote or from the last two years, under every name they are known by (normalized: no accents, case, apostrophes or punctuation; "&" is "and"; a leading "the" optional). Measured: 649,133 titles, 2.05 million names, 135 MB, 174 s, the server process at 319 MB during the build. Missing at start-up with the setting on: built 10 minutes after start.
+A worker thread streams six IMDb files (about 1.9 GB to download: ratings, titles, alternative names, crew, principal cast, people) through gunzip into `imdb.db` next to the database, then swaps it in. Kept: movies and series (no episodes, shorts or adult titles) with at least one vote or from the last two years, under every name they are known by (normalized: no accents, case, apostrophes or punctuation; "&" is "and"; a leading "the" optional), with their year, votes (exact; the build holds them in 16 bits, in thousands above 32,767) and rating, and their people: directors and the first ten cast, as 32-bit hashes of their normalized names packed into one row per title (`credits`; names are compared, never kept). Measured: 649,133 titles, 2.05 million names, 5.8 million credits of 1.73 million people; 167 MB; 6-8 min; the server process at about 350 MB during the build. Missing at start-up with the setting on: built 10 minutes after start.
 
 ## Match
 
-The known title at the **start** of a portal name (or after a "Channel :" prefix), longest first, of the same type and year (within 1; for a series, within its run), where what is left is only this portal's tags (`titleClean.ts`, Admin → Title words), a year, or a season marker. A title's own name ranks above another country's name for it; an unknown title (no votes) only with the same year. Then TMDB's title for that IMDb id (`/find`) and its details: two calls, no search. Nothing matched, or TMDB does not know the IMDb title: the TMDB search as before.
+The known title at the **start** of a portal name (or after a "Channel :" prefix), longest first, of the same type and year (within 1; for a series, within its run), where what is left is only this portal's tags (`titleClean.ts`, Admin → Title words), a year, or a season marker. Scored: a title's own name above another country's name for it; the same year; popularity; and, when the portal sends them, its people and IMDb rating:
 
-Measured on a 133,185-name catalog (offline, against titles TMDB had already matched): an IMDb match for 93.2%, the same title as TMDB's for 94.4% of those; where the two disagreed, hand-checked samples had IMDb right about 3 times as often (TMDB's search tends to pick a famous longer title holding the words: "Little" -> Little Women). 1.1 ms per name.
+| Evidence | Score |
+| --- | --- |
+| a director shared / a different one | +6 / -3 |
+| each shared cast member (up to 3) / none of 3 or more listed | +2 / -2 |
+| the portal's IMDb rating equal (within 0.1) / far (over 1.5) | +3 / -1 |
+
+A candidate contradicted by both director and cast is dropped; a confirmed one may have no votes yet (a new film) or a stray year (a shared director). Then TMDB's title for that IMDb id (`/find`) and its details: two calls, no search. Nothing matched, or TMDB does not know the IMDb title: the TMDB search as before.
+
+Measured on a 133,185-name catalog (offline, against titles TMDB had already matched): an IMDb match for 93.3%, the same title as TMDB's for 94.4% of those (96.2% where the portal lists people). 1.1 ms per name. Where the two disagree, the portal's own data judges:
+
+| Judge | IMDb's pick | TMDB's search |
+| --- | --- | --- |
+| the portal's director and cast | 1,181 | 32 |
+| the portal's year (TMDB's pick 2+ years off) | 1,106 | 0 by construction; checked against the people: 307 confirmed, 20 contradicted |
+
+TMDB's search tends to take a famous longer title holding the words ("Little" -> Little Women, "Lion" -> The Lion King, "Peter" -> Peter Rabbit 2).
 
 ## Titles TMDB never matched (job `imdb-unmatched`, every 6 h)
 
-400 per run, in id order from where the last run stopped, from the start again after each new index; TMDB is asked only for the ones IMDb found. On the same catalog: 2,176 of 12,450 found (awards shows, specials, new films). Checked end to end with a stand-in TMDB: every IMDb hit cost one find and one details call, no searches, and was saved.
+400 per run, in id order from where the last run stopped, from the start again after each new index; TMDB is asked only for the ones IMDb found (with the portal's people from its category list). On the same catalog: about 2,100 of 12,400 found (awards shows, specials, new films).
 
-Not done (later): director and cast as evidence (the cast files are 1.1 GB more), a review list for titles where IMDb and TMDB disagree. Existing matches are never changed by this.
+## Matches the portal's own data contradicts (job `imdb-verify`, every 6 h)
+
+400 per run. A matched title is matched again through IMDb, and logged ("IMDb corrected ... (reason)"), only when TMDB confirms the same IMDb title and either:
+- the portal lists people: IMDb's pick shares a director or cast member with them, and the current title (whose people IMDb knows) shares none; or
+- the portal lists no people but a year: IMDb's pick fits it by its own year (a series also by a run that has ended) and has 20 votes or more, the current title is 3 years or more away (and, for a series, outside its run), and a year in the name does not disagree with the portal's (either can be the one that is off: an upload year, a re-release). Checked against the people where both exist: 262 confirmed, 4 contradicted (without the vote minimum 264 and 7; with only the 3-year gap 280 and 10).
+
+Titles where IMDb and TMDB both fit (the same name in the same year), or nothing decides, are left as they are.
+
+Checked end to end with a stand-in TMDB on the same catalog: every change cost one find and one details call, no searches; by hand, e.g. "Peter - Tamil 4K" from Peter Rabbit 2 to Peter (2026), "Bob Ross : The Joy of Painting" from a 2024 namesake to the 1983 series, "Intervention" from Canine Intervention to Intervention (2005).
+
+Not done: a review list in Admin for the titles nothing decides.
