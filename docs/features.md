@@ -113,6 +113,7 @@ Both `XtreamClient` and `StalkerAPI` use a circuit breaker. Auth errors (401/403
 |----------|---------|-------------|
 | `PORTAL_BACKGROUND_GAP_MS` | `1000` | Pause between background portal requests (guide download, catalog warm, catch-up), sent one at a time. A 429 pauses them (Retry-After, else 1 min doubling to 30 min) and widens the pause until the portal answers again. Play links never wait |
 | `EPG_FETCH_BATCH_DELAY_MS` | `500` | Extra pause after every 5 guide channels |
+| `EPG_EMPTY_RECHECK_HOURS` | `72` | A channel without a guide at two refreshes in a row is asked again only after this many hours (on one large portal 80% of the channels have none: about 8,000 fewer requests per refresh). Admin's Refresh guide asks every channel; `0` asks every channel every time |
 
 ---
 

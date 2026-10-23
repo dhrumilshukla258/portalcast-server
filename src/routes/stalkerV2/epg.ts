@@ -134,7 +134,8 @@ export const epgRoutes: ServerRoute[] = [
     method: "POST",
     path: "/api/v2/refresh-epg",
     handler: async (_request, h) => {
-      fetchAndCacheEpg().catch((e) => logger.error(`[refresh-epg] ${e}`));
+      // Asked by hand: every channel, including those known to have no guide.
+      fetchAndCacheEpg({ full: true }).catch((e) => logger.error(`[refresh-epg] ${e}`));
       return h.response({ success: true, message: "EPG refresh started in background." });
     },
   },
