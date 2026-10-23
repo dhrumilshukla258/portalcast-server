@@ -50,7 +50,7 @@ import { fillPeopleGenders } from "./content/peopleGender";
 import { buildPeopleIndex, markPeopleChanged } from "./content/peopleSearch";
 import { startCatalogSnapshot } from "./content/catalog/store";
 import { viewersReady } from "./content/viewers";
-import { markHomeStale } from "./content/home";
+import { markHomeStale, primeHomeFacts } from "./content/home";
 import { bumpAnswerInputs } from "./infra/answerVersion";
 import { onMediaInfoChange } from "./content/mediaInfo";
 import { onDiscoverCacheClear } from "./services/discoverCache";
@@ -509,6 +509,8 @@ const init = async () => {
   // People search (content/peopleSearch.ts): built in a worker thread after the startup
   // warm-ups, rebuilt when enrichment or the people tidy changes who is in the catalog.
   setTimeout(() => void buildPeopleIndex(), 30_000).unref?.();
+  // Home's title facts (content/home.ts): between the people index and the catalog snapshot.
+  setTimeout(primeHomeFacts, 45_000).unref?.();
   // Catalog snapshot (content/catalog/store.ts, setting catalogSnapshot, off by default): after
   // the startup warm-ups so the two builds never peak together.
   // On: started now, since the "All" lists wait for it (a saved file loads in about 0.5 s).

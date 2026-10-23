@@ -47,11 +47,12 @@ function yearOf(r: any): number {
   return y >= 1900 && y <= 2100 ? y : 0;
 }
 
+const PLAIN = /^[\x20-\x7e]*$/;
+
 /** A title name for matching: no accents, case, punctuation, year in brackets or leading "The". */
 export function nameKey(s: string): string {
-  return s
-    .normalize("NFKD")
-    .replace(/\p{M}/gu, "")
+  // Most names are plain ASCII, where taking accents off changes nothing (and costs the most).
+  return (PLAIN.test(s) ? s : s.normalize("NFKD").replace(/\p{M}/gu, ""))
     .toLowerCase()
     .replace(/\(\d{4}\)/g, " ")
     .replace(/&/g, " and ")
@@ -62,15 +63,30 @@ export function nameKey(s: string): string {
 
 const foldKey = (r: any) => (r.tmdbId ? `${r.type === "series" ? "series" : "movie"}:${r.tmdbId}` : `g:${r.groupKey || r.id}`);
 
-/** Facts for every title in the index; one database read per catalog change. */
+const PAGE = 4_000;
+const pause = () => new Promise<void>((r) => setImmediate(r));
+
+/** content_meta in pages of [PAGE] rows, in rowid (storage) order like the single read it
+ *  replaces and like catalog/builder.ts: memory stays flat and other requests run between pages
+ *  instead of waiting seconds for the whole catalog. */
+async function* metaPages(columns: string): AsyncGenerator<any[]> {
+  for (let after = -1; ;) {
+    const rows = (await sequelize.query(`SELECT rowid AS _rid, ${columns} FROM content_meta WHERE rowid > ? ORDER BY rowid LIMIT ${PAGE}`, {
+      replacements: [after],
+      type: QueryTypes.SELECT,
+    })) as any[];
+    if (!rows.length) return;
+    yield rows;
+    after = rows[rows.length - 1]._rid;
+    await pause();
+  }
+}
+
+/** Facts for every title in the index; one read of the catalog per catalog change. */
 export function titleFacts(idx: DiscoverIndex, catalogGen: number): Promise<TitleFacts> {
   const key = `${idx.builtAt}.${catalogGen}`;
   if (factsCache?.key === key) return factsCache.value;
   const value = (async () => {
-    const rows = (await sequelize.query(
-      "SELECT id, type, tmdbId, groupKey, year, premiered, imdbRating, imdbVotes, rating, ratingCount, createdAt, name, trimmedName, originalTitle, providerAddedAt FROM content_meta",
-      { type: QueryTypes.SELECT },
-    )) as any[];
     const n = idx.ids.length;
     const year = new Int16Array(n), rating = new Float32Array(n), votes = new Int32Array(n);
     const added = new Float64Array(n).fill(Infinity);
@@ -80,43 +96,49 @@ export function titleFacts(idx: DiscoverIndex, catalogGen: number): Promise<Titl
     // Versions of a title (separate groups, other languages) fold onto the card's rank: by TMDB
     // id, else by group key. A rating is often stored on another version than the card's.
     const rankOfFold = new Map<string, number>();
-    for (const r of rows) {
-      const rank = idx.rankOf.get(String(r.id));
-      if (rank !== undefined) rankOfFold.set(foldKey(r), rank);
-    }
-    let firstSeen = Infinity;
-    for (const r of rows) {
-      const t = Date.parse(String(r.createdAt ?? ""));
-      if (Number.isFinite(t) && t < firstSeen) firstSeen = t;
-      const rank = rankOfFold.get(foldKey(r));
-      if (rank === undefined) continue;
-      if (Number.isFinite(t) && t < added[rank]) added[rank] = t;
-      const pa = Number(r.providerAddedAt) * 1000;
-      if (pa > 0) {
-        if (!providerAdded[rank] || pa < providerAdded[rank]) providerAdded[rank] = pa;
-        if (pa > providerLatest[rank]) providerLatest[rank] = pa;
+    for await (const rows of metaPages("id, type, tmdbId, groupKey")) {
+      for (const r of rows) {
+        const rank = idx.rankOf.get(String(r.id));
+        if (rank !== undefined) rankOfFold.set(foldKey(r), rank);
       }
-      if (!year[rank]) year[rank] = yearOf(r);
-      const iv = Number(r.imdbVotes) || 0, ir = Number(r.imdbRating) || 0;
-      if (ir > 0 && iv > imdbVotes[rank]) { imdbVotes[rank] = iv; rating[rank] = ir; votes[rank] = Math.max(votes[rank], iv); }
-      const tv = Number(r.ratingCount) || 0, tr = Number(r.rating) || 0;
-      if (!imdbVotes[rank] && tr > 0 && tv > votes[rank]) { rating[rank] = tr; votes[rank] = tv; }
-      if (r.tmdbId) byTmdb.set(`${r.type === "series" ? "series" : "movie"}:${r.tmdbId}`, rank);
     }
     // Names, for charts that list titles by name (Netflix Top 10): the cleaned name and the
-    // original title, per type; a name shared by several titles goes to the best-known one.
-    const byName = new Map<string, number>();
-    for (const r of rows) {
-      const rank = rankOfFold.get(foldKey(r));
-      if (rank === undefined) continue;
-      const type = r.type === "series" ? "series" : "movie";
-      for (const n of [r.trimmedName, r.originalTitle, r.name]) {
-        const k = n ? nameKey(String(n)) : "";
-        if (!k) continue;
-        const key = `${type}|${k}`;
-        const have = byName.get(key);
-        if (have === undefined || votes[rank] > votes[have]) byName.set(key, rank);
+    // original title, per type; a name shared by several titles goes to the best-known one
+    // (once every vote is known, below).
+    const nameKeys: string[] = [], nameRanks: number[] = [];
+    let firstSeen = Infinity;
+    for await (const rows of metaPages("type, tmdbId, groupKey, id, year, premiered, imdbRating, imdbVotes, rating, ratingCount, createdAt, name, trimmedName, originalTitle, providerAddedAt")) {
+      for (const r of rows) {
+        const t = Date.parse(String(r.createdAt ?? ""));
+        if (Number.isFinite(t) && t < firstSeen) firstSeen = t;
+        const rank = rankOfFold.get(foldKey(r));
+        if (rank === undefined) continue;
+        if (Number.isFinite(t) && t < added[rank]) added[rank] = t;
+        const pa = Number(r.providerAddedAt) * 1000;
+        if (pa > 0) {
+          if (!providerAdded[rank] || pa < providerAdded[rank]) providerAdded[rank] = pa;
+          if (pa > providerLatest[rank]) providerLatest[rank] = pa;
+        }
+        if (!year[rank]) year[rank] = yearOf(r);
+        const iv = Number(r.imdbVotes) || 0, ir = Number(r.imdbRating) || 0;
+        if (ir > 0 && iv > imdbVotes[rank]) { imdbVotes[rank] = iv; rating[rank] = ir; votes[rank] = Math.max(votes[rank], iv); }
+        const tv = Number(r.ratingCount) || 0, tr = Number(r.rating) || 0;
+        if (!imdbVotes[rank] && tr > 0 && tv > votes[rank]) { rating[rank] = tr; votes[rank] = tv; }
+        const type = r.type === "series" ? "series" : "movie";
+        if (r.tmdbId) byTmdb.set(`${type}:${r.tmdbId}`, rank);
+        let last = "";
+        for (const name of [r.trimmedName, r.name, r.originalTitle]) {
+          if (!name || name === last) continue; // the cleaned name is often the name itself
+          last = name;
+          const k = nameKey(String(name));
+          if (k) { nameKeys.push(`${type}|${k}`); nameRanks.push(rank); }
+        }
       }
+    }
+    const byName = new Map<string, number>();
+    for (let i = 0; i < nameKeys.length; i++) {
+      const have = byName.get(nameKeys[i]);
+      if (have === undefined || votes[nameRanks[i]] > votes[have]) byName.set(nameKeys[i], nameRanks[i]);
     }
     return { year, rating, votes, added, providerAdded, providerLatest, byTmdb, byName, newSince: firstSeen + 3 * DAY };
   })();

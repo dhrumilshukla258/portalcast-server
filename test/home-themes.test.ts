@@ -1,7 +1,7 @@
 // Fresh Home rows (content/homeThemes.ts): Just added, trending this server has, daily themes.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { justAdded, newEpisodes, trendingRanks, dailyThemes, dayNumber, type TitleFacts } from "../src/content/homeThemes";
+import { justAdded, newEpisodes, trendingRanks, dailyThemes, dayNumber, nameKey, type TitleFacts } from "../src/content/homeThemes";
 import { providerSeconds } from "../src/content/providerDates";
 
 const DAY = 86_400_000;
@@ -59,6 +59,15 @@ test("Daily themes: same rows all day for a viewer, best rated first, only allow
     assert.deepEqual(ratings, [...ratings].sort((x, y) => y - x), t.title);
   }
   assert.equal(new Set(a.map((t) => t.key)).size, a.length, "no theme twice");
+});
+
+test("name keys: accents, case, punctuation, a year and a leading The do not matter", () => {
+  assert.equal(nameKey("The Office (2005)"), "office");
+  assert.equal(nameKey("Fast & Furious"), "fast and furious");
+  assert.equal(nameKey("Amélie"), nameKey("Amelie"));
+  assert.equal(nameKey("Pokémon: The Movie"), "pokemon the movie");
+  assert.equal(nameKey("Señor Ávila"), "senor avila");
+  assert.equal(nameKey("  THE   END!! "), "end");
 });
 
 test("the day number changes once a day", () => {

@@ -58,6 +58,26 @@ interface Watched { rep: string; type: "movie" | "series"; title: string; weight
 /** Decay: a title watched HALF_LIFE_DAYS ago counts half as much as one watched today. */
 const recency = (r: ProgressRow) => Math.pow(0.5, (Date.now() - new Date(r.updatedAt).getTime()) / (HALF_LIFE_DAYS * 86_400_000));
 
+/**
+ * A title and its versions (catalog/cards.ts titleWithGroup), remembered until the catalog
+ * changes: every Home build looks up the viewer's and every other viewer's watched titles, about
+ * 2 ms each from the database, and they rarely change. Bounded: cleared past MEMO_MAX ids.
+ */
+const MEMO_MAX = 20_000;
+let groupMemo: { key: string; map: Map<string, Promise<{ row: any; members: any[] } | null>> } = { key: "", map: new Map() };
+function groupOf(id: string, idx: DiscoverIndex): Promise<{ row: any; members: any[] } | null> {
+  const key = `${idx.builtAt}.${catalogGen}`;
+  if (groupMemo.key !== key || groupMemo.map.size >= MEMO_MAX) groupMemo = { key, map: new Map() };
+  let found = groupMemo.map.get(id);
+  if (!found) {
+    const memo = groupMemo;
+    found = titleWithGroup(id);
+    memo.map.set(id, found);
+    found.catch(() => memo.map.delete(id));
+  }
+  return found;
+}
+
 /** The viewer's watched titles (newest first), each as its representative card. */
 async function watchedTitles(rows: ProgressRow[], idx: DiscoverIndex): Promise<Watched[]> {
   const out: Watched[] = [];
@@ -65,7 +85,7 @@ async function watchedTitles(rows: ProgressRow[], idx: DiscoverIndex): Promise<W
   for (const r of rows) {
     if (!isWatched(r)) continue;
     for (const id of contentIdsOf(r)) {
-      const found = await titleWithGroup(id);
+      const found = await groupOf(id, idx);
       if (!found) continue;
       const members = found.members as any[];
       const rep = members.find((m) => idx.rankOf.has(m.id))?.id;
@@ -318,7 +338,7 @@ export async function buildHomeRows(userId: number, profileId: number, type: Hom
     for (const r of v.rows) {
       if (new Date(r.updatedAt).getTime() < since || !isWatched(r)) continue;
       for (const id of contentIdsOf(r)) {
-        const found = await titleWithGroup(id);
+        const found = await groupOf(id, idx);
         const rep = found ? (found.members as any[]).find((m) => idx.rankOf.has(m.id))?.id : undefined;
         if (rep) { mine.add(idx.rankOf.get(rep)!); break; }
       }
@@ -405,6 +425,14 @@ export function markHomeStale(): void {
   catalogGen++;
 }
 onProviderDatesChanged(markHomeStale);
+
+/** The title facts (content/homeThemes.ts) built in the background after start-up (server.ts),
+ *  so the first Home open after a restart does not wait seconds for them. Local reads only. */
+export function primeHomeFacts(): void {
+  getDiscoverIndex()
+    .then((idx) => titleFacts(idx, catalogGen))
+    .catch((e) => logger.warn(`[home] title facts warm-up failed (built on the first open): ${e?.message ?? e}`));
+}
 
 /**
  * The viewer's rows: current ones from the cache, else built now the first time, else the

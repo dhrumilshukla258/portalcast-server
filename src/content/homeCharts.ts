@@ -86,11 +86,11 @@ export async function loadNetflix(): Promise<NetflixWeek | null> {
   const lines = readline.createInterface({ input: res.data, crlfDelay: Infinity });
   const weeks = new Map<string, string[]>(); // country -> its weeks seen, newest first (file order)
   const out: NetflixWeek = new Map();
-  let header: string[] | null = null;
+  let col: Map<string, number> | null = null; // column name -> position, from the header
   for await (const line of lines) {
     const cols = line.split("\t");
-    if (!header) { header = cols; continue; }
-    const at = (name: string) => cols[header!.indexOf(name)] ?? "";
+    if (!col) { col = new Map(cols.map((name, i) => [name, i])); continue; }
+    const at = (name: string) => cols[col!.get(name) ?? -1] ?? "";
     const country = at("country_iso2").toUpperCase();
     const week = at("week");
     if (!country || !week) continue;
