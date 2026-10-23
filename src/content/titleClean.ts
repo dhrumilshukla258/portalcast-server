@@ -2,7 +2,7 @@
 // dub/language tags) before using a title for grouping (ContentMeta groupKey) or external
 // lookups (TMDB search) — one source of truth so both stay in sync.
 
-import { splitChannel } from "@/content/channelNames";
+import { splitChannel, setChannelEdits, CHANNELS } from "@/content/channelNames";
 
 // Portal-supplied names use inconsistent abbreviations/misspellings for the same language
 // ("ben", "bangla", "bengali" are all Bengali). Map every known variant to its canonical
@@ -70,11 +70,134 @@ const QUALITY_TAGS = [
   "Web\\s*Series", // format label, not content-distinguishing (same show listed with/without it)
 ];
 
-// Quality-only alternation (no language tokens) — used where a caller wants
-// just the resolution/format tags on their own, e.g. building a short variant
-// label ("Marathi 4K") instead of dumping the whole raw catalog name.
-const QUALITY_ALTERNATION = [...QUALITY_TAGS].sort((a, b) => b.length - a.length).join("|");
-const QUALITY_RE = new RegExp(`\\b(${QUALITY_ALTERNATION})\\b`, "gi");
+// The channel names taken off the front of a title (stripChannelPrefix below), one regex
+// fragment each. Families list the longer names first only for reading: the alternation is
+// sorted longest first when built.
+// The trailing \b (before the optional separator) is load-bearing — without
+// it, these alternatives matched as raw substrings, not whole words, so a
+// real title merely starting with the same letters as a channel name got
+// silently mutilated: "Maal - Tamil HD" -> "l" (via "Maa"), "Sunrise" -> "rise"
+// (via "Sun"), "Colorsplash" -> "plash" (via "Colors"), "Starship Troopers"
+// -> "ship troopers" (via "Star") — verified against real catalog data.
+// A ":" or "|" after the channel is required: without one "Star Wars : The Clone Wars"
+// lost "Star" and "Colors of Love" lost "Colors"; " - " is a film's language/year tag
+// ("Dangal - Telugu"), not a channel separator (found 2026-10-19/20).
+const family = (base: string, rest: string[]) => [base, ...rest.map((w) => `${base}\\s+${w}`)];
+const CHANNEL_PREFIXES = [
+  ...family("Colors", ["Kannada", "Tamil", "Gujarati", "Bangla", "Marathi", "Odia", "Punjabi", "Rishtey", "Super", "Infinity"]),
+  ...family("Zee", ["TV", "Telugu", "Tamil", "Kannada", "Marathi", "Bangla", "Punjabi", "Malayalam", "Cafe", "Cinema", "News", "Anmol", "Bollywood", "Classic", "Action", "World"]),
+  ...family("Star", ["Plus", "Vijay", "Jalsha", "Pravah", "Suvarna", "Maa", "Bharat", "Utsav", "Gold", "World", "Movies", "Sports"]),
+  ...family("Sony", ["TV", "SAB", "Liv", "Max", "Aath", "Rox", "Marathi"]),
+  ...family("Sun", ["TV", "Bangla", "Marathi", "Neo", "Life"]),
+  ...family("Gemini", ["TV", "Music", "Movies"]),
+  ...family("Maa", ["TV", "Gold", "Movies"]),
+  ...family("ETV", ["Telugu", "Plus", "Andhra"]),
+  "Life\\s+OK", "Asianet", "Vijay\\s*TV", "SAB\\s*TV", "Rishtey", "Big\\s+Magic", "Aaj\\s+Tak", "Republic\\s*TV", "NDTV",
+  "CNN", "BBC", "Discovery", "National\\s+Geographic", "Nat\\s+Geo", "HUM\\s*TV", "ARY\\s*Digital", "Har\\s*Pal\\s*Geo",
+  "MUN\\s*TV", "Dangal\\s*TV", "And\\s*TV", "MTV", "Express\\s*Tv", "Urdu\\s*Tv\\s*Show", "Urdu\\s*1",
+  ...family("Untold", ["UK"]),
+];
+
+/** A list entry as people write it: "Dual\\s*Audio" -> "dual audio", "Blu-?Ray" -> "blu-ray", "Dubb?" -> "dub". */
+const wordOf = (fragment: string) => fragment.replace(/\\s[*+]/g, " ").replace(/-\?/g, "-").replace(/b\?/g, "").toLowerCase();
+const escapeWord = (word: string) => word.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+const NEVER = "(?!x)x"; // an emptied list must match nothing, not everything
+
+/**
+ * One portal's changes to the default word lists (Admin, per profile; content/titleWords.ts).
+ * Words are compared lowercase, as people write them ("dual audio", "hum tv"). Null: defaults.
+ */
+export interface TitleWordEdits {
+  /** Spellings of a language: added (or given another language), or removed. */
+  languages?: { add?: { spelling: string; language: string }[]; remove?: string[] };
+  /** Quality and other tags. */
+  tags?: { add?: string[]; remove?: string[] };
+  /** Channel names in front of a title. */
+  channels?: { add?: string[]; remove?: string[] };
+}
+
+/** The patterns built from the lists (defaults, with one portal's changes). */
+function buildRules(edits: TitleWordEdits | null) {
+  const removedTags = new Set((edits?.tags?.remove ?? []).map((s) => s.trim().toLowerCase()));
+  const qualityTags = QUALITY_TAGS.filter((t) => !removedTags.has(wordOf(t)))
+    .concat((edits?.tags?.add ?? []).map(escapeWord).filter(Boolean));
+
+  const aliases = new Map<string, string>(); // spelling -> language
+  const removedSpellings = new Set((edits?.languages?.remove ?? []).map((s) => s.trim().toLowerCase()));
+  for (const [canonical, list] of Object.entries(LANGUAGE_ALIASES)) {
+    for (const alias of list) if (!removedSpellings.has(alias.toLowerCase())) aliases.set(alias.toLowerCase(), canonical);
+  }
+  for (const { spelling, language } of edits?.languages?.add ?? []) {
+    const s = spelling.trim().toLowerCase().replace(/\s+/g, " ");
+    if (s && language.trim()) aliases.set(s, language.trim());
+  }
+  // Spellings as regex fragments, matched as written (one space between words, as before).
+  const spellingRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const spellings = [...aliases.keys()];
+
+  const alt = (xs: string[]) => (xs.length ? [...xs].sort((a, b) => b.length - a.length).join("|") : NEVER);
+  // Quality-only alternation (no language tokens) — used where a caller wants
+  // just the resolution/format tags on their own, e.g. building a short variant
+  // label ("Marathi 4K") instead of dumping the whole raw catalog name.
+  const qualityAlternation = alt(qualityTags);
+  // Language-only alternation, built before the variant alternation below since it
+  // feeds languageSub — a combined "(language) Sub(bed|titled)?" unit,
+  // stripped together so grouping treats "Eng Sub" the same way it already
+  // treats "Hindi Dub", without ever stripping a bare, unqualified "Sub".
+  const languageAlternation = alt(spellings.map(spellingRe));
+  const languageSub = `(?:${languageAlternation})\\s+Sub(?:bed|titled)?`;
+  // Longest-first so overlapping alternatives (e.g. "gujarati" vs "guj") don't matter —
+  // \b boundaries already prevent partial-word matches either way, this just keeps regex
+  // alternation deterministic.
+  const variantAlternation = alt([...spellings.map(spellingRe), ...qualityTags, languageSub]);
+  // The neighbouring tag must be a real one (a full language name, a quality mark), not another
+  // short code: in "Kan Kan Men Bhagwan" neither "Kan" is a tag.
+  const neighbourTags = alt(spellings.filter((a) => a.length > 3).map(spellingRe).concat(qualityTags, [languageSub]));
+
+  const removedChannels = new Set((edits?.channels?.remove ?? []).map((s) => s.trim().toLowerCase().replace(/\s+/g, " ")));
+  const channelPrefixes = CHANNEL_PREFIXES.filter((f) => !removedChannels.has(wordOf(f)))
+    .concat((edits?.channels?.add ?? []).map(escapeWord).filter(Boolean));
+
+  return {
+    aliases,
+    qualityRe: new RegExp(`\\b(${qualityAlternation})\\b`, "gi"),
+    variantRe: new RegExp(`\\b(${variantAlternation})\\b`, "gi"),
+    // Short language codes ("ben", "mal", "mar", "pt", "en", "hin") are also ordinary words at the
+    // start or inside real titles: "Ben 10: Alien Force" became "10: Alien Force", "Bigga Than Ben"
+    // "Bigga Than", "PT Sir" "Sir" (80 titles on one catalog; owner, 2026-10-23). A short code is a
+    // tag only where something marks it as one: a separator before it ("Title - Ben", "Title (Tam)"),
+    // a closing bracket after it, or another tag next to it ("Title Mal HD"). Full language names and
+    // quality tags are taken wherever they are, as before.
+    shortCodes: new Set(spellings.filter((a) => a.length <= 3)),
+    tagBefore: new RegExp(`\\b(?:${neighbourTags})$`, "i"),
+    tagAfter: new RegExp(`^(?:${neighbourTags})\\b`, "i"),
+    channelPrefixRe: new RegExp(`^(${alt(channelPrefixes)})\\b\\s*([:|\\-])?\\s*`, "i"),
+    // Tells an "X Sub" tag apart from an "X Dub"/bare "X" tag — needs looking
+    // at the word(s) AROUND a language match, not just matching the language
+    // token in isolation the way variantRe does.
+    languageTokenRe: new RegExp(`\\b(${languageAlternation})\\b`, "i"),
+    subTagRe: new RegExp(`\\b(${languageAlternation})\\s+Sub(?:bed|titled)?\\b`, "i"),
+  };
+}
+
+let R = buildRules(null);
+
+/** Applies one portal's changes to the lists (null: the defaults); channelNames.ts too. */
+export function setTitleWordEdits(edits: TitleWordEdits | null): void {
+  R = buildRules(edits);
+  setChannelEdits(edits?.channels ?? null);
+}
+
+/** The default lists, as Admin shows them (words as people write them). */
+export function defaultTitleWords(): { languages: { language: string; spellings: string[] }[]; tags: string[]; channels: string[] } {
+  const channels = new Set(CHANNEL_PREFIXES.map(wordOf));
+  for (const [canonical, list] of Object.entries(CHANNELS)) { channels.add(canonical.toLowerCase()); for (const a of list) channels.add(a); }
+  return {
+    languages: Object.entries(LANGUAGE_ALIASES).map(([language, spellings]) => ({ language, spellings: [...spellings] })),
+    tags: QUALITY_TAGS.map(wordOf),
+    channels: [...channels].sort(),
+  };
+}
 
 // Returns the distinct quality/format tags found in `name`, in the order they
 // appear (e.g. "Pot Luck 4K CC" -> ["4K", "CC"]). Case/spelling as matched in
@@ -82,7 +205,7 @@ const QUALITY_RE = new RegExp(`\\b(${QUALITY_ALTERNATION})\\b`, "gi");
 export function extractQualityTags(name: string): string[] {
   const tags: string[] = [];
   const seen = new Set<string>();
-  name.replace(QUALITY_RE, (m) => {
+  name.replace(R.qualityRe, (m) => {
     const key = m.trim().toUpperCase();
     if (!seen.has(key)) {
       seen.add(key);
@@ -93,64 +216,18 @@ export function extractQualityTags(name: string): string[] {
   return tags;
 }
 
-const ALIAS_TO_CANONICAL = new Map<string, string>();
-for (const [canonical, aliases] of Object.entries(LANGUAGE_ALIASES)) {
-  for (const alias of aliases) ALIAS_TO_CANONICAL.set(alias.toLowerCase(), canonical);
-}
-
-// Language-only alternation, built before VARIANT_ALTERNATION below since it
-// feeds LANGUAGE_SUB_PATTERN — a combined "(language) Sub(bed|titled)?" unit,
-// stripped together so grouping treats "Eng Sub" the same way it already
-// treats "Hindi Dub", without ever stripping a bare, unqualified "Sub".
-const LANGUAGE_ALTERNATION = [...ALIAS_TO_CANONICAL.keys()].sort((a, b) => b.length - a.length).join("|");
-const LANGUAGE_SUB_PATTERN = `(?:${LANGUAGE_ALTERNATION})\\s+Sub(?:bed|titled)?`;
-
-// Longest-first so overlapping alternatives (e.g. "gujarati" vs "guj") don't matter —
-// \b boundaries already prevent partial-word matches either way, this just keeps regex
-// alternation deterministic.
-const VARIANT_ALTERNATION = [...ALIAS_TO_CANONICAL.keys(), ...QUALITY_TAGS, LANGUAGE_SUB_PATTERN]
-  .sort((a, b) => b.length - a.length)
-  .join("|");
-
-const VARIANT_RE = new RegExp(`\\b(${VARIANT_ALTERNATION})\\b`, "gi");
-
-// Short language codes ("ben", "mal", "mar", "pt", "en", "hin") are also ordinary words at the
-// start or inside real titles: "Ben 10: Alien Force" became "10: Alien Force", "Bigga Than Ben"
-// "Bigga Than", "PT Sir" "Sir" (80 titles on one catalog; owner, 2026-10-23). A short code is a
-// tag only where something marks it as one: a separator before it ("Title - Ben", "Title (Tam)"),
-// a closing bracket after it, or another tag next to it ("Title Mal HD"). Full language names and
-// quality tags are taken wherever they are, as before.
-const SHORT_CODES = new Set([...ALIAS_TO_CANONICAL.keys()].filter((a) => a.length <= 3));
-// The neighbouring tag must be a real one (a full language name, a quality mark), not another
-// short code: in "Kan Kan Men Bhagwan" neither "Kan" is a tag.
-const NEIGHBOUR_TAGS = [...ALIAS_TO_CANONICAL.keys()].filter((a) => a.length > 3).concat(QUALITY_TAGS, [LANGUAGE_SUB_PATTERN])
-  .sort((a, b) => b.length - a.length).join("|");
-const TAG_BEFORE_RE = new RegExp(`\\b(?:${NEIGHBOUR_TAGS})$`, "i");
-const TAG_AFTER_RE = new RegExp(`^(?:${NEIGHBOUR_TAGS})\\b`, "i");
-
 function stripVariantTags(name: string): string {
-  return name.replace(VARIANT_RE, (match: string, _tag: string, offset: number, all: string) => {
-    if (!SHORT_CODES.has(match.toLowerCase())) return "";
+  return name.replace(R.variantRe, (match: string, _tag: string, offset: number, all: string) => {
+    if (!R.shortCodes.has(match.toLowerCase())) return "";
     const before = all.slice(0, offset).replace(/\s+$/, "");
     const after = all.slice(offset + match.length).replace(/^\s+/, "");
     if (!before) return match; // the first word of a name is the title's
     // Written in capitals at the very end of a name that is not ("Rosa Morena PT"): a tag.
     const capsAtEnd = !after && match.length >= 2 && match === match.toUpperCase() && before !== before.toUpperCase();
-    const marked = capsAtEnd || /[-–(\[|:,\/]$/.test(before) || /^[)\]]/.test(after) || TAG_BEFORE_RE.test(before) || TAG_AFTER_RE.test(after);
+    const marked = capsAtEnd || /[-–(\[|:,\/]$/.test(before) || /^[)\]]/.test(after) || R.tagBefore.test(before) || R.tagAfter.test(after);
     return marked ? "" : match;
   });
 }
-
-// The trailing \b (before the optional separator) is load-bearing — without
-// it, these alternatives matched as raw substrings, not whole words, so a
-// real title merely starting with the same letters as a channel name got
-// silently mutilated: "Maal - Tamil HD" -> "l" (via "Maa"), "Sunrise" -> "rise"
-// (via "Sun"), "Colorsplash" -> "plash" (via "Colors"), "Starship Troopers"
-// -> "ship troopers" (via "Star") — verified against real catalog data.
-// A ":" or "|" after the channel is required: without one "Star Wars : The Clone Wars"
-// lost "Star" and "Colors of Love" lost "Colors"; " - " is a film's language/year tag
-// ("Dangal - Telugu"), not a channel separator (found 2026-10-19/20).
-const CHANNEL_PREFIX_RE = /^(Colors(?:\s+(?:Kannada|Tamil|Gujarati|Bangla|Marathi|Odia|Punjabi|Rishtey|Super|Infinity))?|Zee(?:\s+(?:TV|Telugu|Tamil|Kannada|Marathi|Bangla|Punjabi|Malayalam|Cafe|Cinema|News|Anmol|Bollywood|Classic|Action|World))?|Star(?:\s+(?:Plus|Vijay|Jalsha|Pravah|Suvarna|Maa|Bharat|Utsav|Gold|World|Movies|Sports))?|Sony(?:\s+(?:TV|SAB|Liv|Max|Aath|Rox|Marathi))?|Sun(?:\s+(?:TV|Bangla|Marathi|Neo|Life))?|Gemini(?:\s+(?:TV|Music|Movies))?|Maa(?:\s+(?:TV|Gold|Movies))?|ETV(?:\s+(?:Telugu|Plus|Andhra))?|Life\s+OK|Asianet|Vijay\s*TV|SAB\s*TV|Rishtey|Big\s+Magic|Aaj\s+Tak|Republic\s*TV|NDTV|CNN|BBC|Discovery|National\s+Geographic|Nat\s+Geo|HUM\s*TV|ARY\s*Digital|Har\s*Pal\s*Geo|MUN\s*TV|Dangal\s*TV|And\s*TV|MTV|Express\s*Tv|Urdu\s*Tv\s*Show|Urdu\s*1|Untold(?:\s+UK)?)\b\s*([:|\-])?\s*/i;
 
 // Strips known channel prefixes and quality/language/dub tags, preserving case and the
 // remaining title text as-is (for display or as a search query).
@@ -158,7 +235,7 @@ const CHANNEL_PREFIX_RE = /^(Colors(?:\s+(?:Kannada|Tamil|Gujarati|Bangla|Marath
 // "Dangal - Telugu" are titles); a full multi-word channel name ("Colors Marathi Swamini",
 // "Star Vijay SPB Oru Kaaviyam") is taken off with or without a separator.
 function stripChannelPrefix(name: string): string {
-  return name.replace(CHANNEL_PREFIX_RE, (match, prefix: string, sep?: string) =>
+  return name.replace(R.channelPrefixRe, (match, prefix: string, sep?: string) =>
     sep === ":" || sep === "|" || /\s/.test(String(prefix).trim()) ? "" : match);
 }
 
@@ -229,13 +306,6 @@ export function normalizeTitleKey(name: string): string {
   return collapsed || name.trim().toLowerCase();
 }
 
-// Reuses LANGUAGE_ALTERNATION (declared above, feeding LANGUAGE_SUB_PATTERN)
-// to tell an "X Sub" tag apart from an "X Dub"/bare "X" tag — needs looking
-// at the word(s) AROUND a language match, not just matching the language
-// token in isolation the way VARIANT_RE does.
-const LANGUAGE_TOKEN_RE = new RegExp(`\\b(${LANGUAGE_ALTERNATION})\\b`, "i");
-const SUB_TAG_RE = new RegExp(`\\b(${LANGUAGE_ALTERNATION})\\s+Sub(?:bed|titled)?\\b`, "i");
-
 // TMDB's originalLanguage on ContentMeta is stored as a raw ISO 639-1 code
 // (e.g. "pa", "hi") — display code, not a canonical language NAME the way
 // LANGUAGE_ALIASES above is keyed. Separate map since a name like "Punjabi"
@@ -271,8 +341,8 @@ export interface LanguageInfo {
 // Conflating these would mislabel, e.g., a Korean film with English
 // subtitles as if its audio track were English.
 export function extractLanguageInfo(name: string): LanguageInfo {
-  const subMatch = name.match(SUB_TAG_RE);
-  const subtitles = subMatch ? ALIAS_TO_CANONICAL.get(subMatch[1].toLowerCase()) ?? null : null;
+  const subMatch = name.match(R.subTagRe);
+  const subtitles = subMatch ? R.aliases.get(subMatch[1].toLowerCase()) ?? null : null;
 
   // Search for an audio-language token on whatever's left after removing the
   // matched "X Sub" span (if any) — otherwise "Eng Sub" would also match
@@ -291,8 +361,8 @@ export function extractLanguageInfo(name: string): LanguageInfo {
   const lastSeparator = Math.max(remaining.lastIndexOf("-"), remaining.lastIndexOf("("), remaining.lastIndexOf("["));
   const tagCluster = lastSeparator >= 0 ? remaining.slice(lastSeparator) : null;
 
-  const audioMatch = tagCluster?.match(LANGUAGE_TOKEN_RE);
-  const audio = audioMatch ? ALIAS_TO_CANONICAL.get(audioMatch[1].toLowerCase()) ?? null : null;
+  const audioMatch = tagCluster?.match(R.languageTokenRe);
+  const audio = audioMatch ? R.aliases.get(audioMatch[1].toLowerCase()) ?? null : null;
 
   return { audio, subtitles };
 }
@@ -309,6 +379,6 @@ export function extractLanguageInfo(name: string): LanguageInfo {
 // are short, curated strings, not free-text titles, so an unanchored search
 // is safe.
 export function extractLanguageFromCategoryName(categoryName: string): string | null {
-  const match = categoryName.match(LANGUAGE_TOKEN_RE);
-  return match ? ALIAS_TO_CANONICAL.get(match[1].toLowerCase()) ?? null : null;
+  const match = categoryName.match(R.languageTokenRe);
+  return match ? R.aliases.get(match[1].toLowerCase()) ?? null : null;
 }

@@ -1059,6 +1059,36 @@ async function regroupAll(alsoRename?: RegExp): Promise<void> {
 }
 
 /**
+ * A portal's word lists changed (Admin, content/titleWords.ts): titles holding one of [words]
+ * get their cleaned name and group recomputed, every other row only its group when it moved.
+ * One run at a time; words arriving meanwhile are merged into the next run.
+ */
+let recleanRunning = false;
+const recleanPending = new Set<string>();
+export function recleanForWords(words: string[]): void {
+  for (const w of words) if (w.trim()) recleanPending.add(w.trim().toLowerCase());
+  if (recleanRunning || !recleanPending.size) return;
+  recleanRunning = true;
+  void (async () => {
+    try {
+      while (recleanPending.size) {
+        const batch = [...recleanPending];
+        recleanPending.clear();
+        const escaped = batch.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/ /g, "\\s+"));
+        logger.info(`[MetaEnrich] title words changed (${batch.length}): re-cleaning`);
+        await regroupAll(new RegExp(`\\b(?:${escaped.join("|")})\\b`, "i"));
+        await recomputeRepresentatives();
+        clearDiscoverCache();
+      }
+    } catch (e: any) {
+      logger.error(`[MetaEnrich] re-clean after title word changes failed: ${e?.message ?? e}`);
+    } finally {
+      recleanRunning = false;
+    }
+  })();
+}
+
+/**
  * Generation 1: a second TMDB pass over titles that never matched, now that tmdbQueries()
  * also tries the name without a glued-on year, without a ": Season N to current" tail and
  * the part before a colon. Only rows where that produces a query the old search never

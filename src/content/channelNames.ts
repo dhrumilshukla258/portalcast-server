@@ -97,19 +97,46 @@ export const CHANNELS: Record<string, string[]> = {
  */
 export const PLATFORMS: ReadonlySet<string> = new Set(["Zee5", "SonyLIV", "JioHotstar", "Voot", "Aha", "Sun NXT", "Urdu TV"]);
 
-const ALIASES = Object.entries(CHANNELS)
-  .flatMap(([canonical, aliases]) => aliases.map((a) => ({ alias: a, canonical })))
-  .sort((a, b) => b.alias.length - a.alias.length); // longest first: "star vijay tamil" before "star vijay"
-
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * One portal's changes to the list (Admin, per profile; content/titleWords.ts): names added
+ * (badged as written) and spellings or channel names removed (lowercase). Null: the list as is.
+ */
+export interface ChannelEdits {
+  add?: string[];
+  remove?: string[];
+}
+
 // "<channel> : title" or "<channel> | title". The separator is required, so a title that merely
 // starts with a channel's words ("Colors of Love", "Sunrise") is untouched; " - " is NOT one:
 // that is how portals tag a film's language or year ("Dangal - Telugu", "Dangal - 2016",
 // "Colors - Mal", "Gemini - (ES)" are films, and read as channels they lost their names).
-const PREFIX_RE = new RegExp(`^\\s*(${ALIASES.map((a) => escape(a.alias).replace(/ /g, "\\s+")).join("|")})\\s*[:|]\\s*(.+)$`, "i");
+function buildPrefix(edits: ChannelEdits | null) {
+  const removed = new Set((edits?.remove ?? []).map((s) => s.trim().toLowerCase()));
+  const aliases = Object.entries(CHANNELS)
+    .filter(([canonical]) => !removed.has(canonical.toLowerCase()))
+    .flatMap(([canonical, list]) => list.filter((a) => !removed.has(a)).map((a) => ({ alias: a, canonical })));
+  for (const name of edits?.add ?? []) {
+    const alias = name.trim().toLowerCase().replace(/\s+/g, " ");
+    if (alias && !aliases.some((a) => a.alias === alias)) aliases.push({ alias, canonical: name.trim() });
+  }
+  aliases.sort((a, b) => b.alias.length - a.alias.length); // longest first: "star vijay tamil" before "star vijay"
+  const alternation = aliases.length ? aliases.map((a) => escape(a.alias).replace(/ /g, "\\s+")).join("|") : "(?!x)x";
+  return {
+    re: new RegExp(`^\\s*(${alternation})\\s*[:|]\\s*(.+)$`, "i"),
+    // Looked up with the matched text's spaces collapsed ("Play Entertainment  Tv").
+    canonical: new Map(aliases.map((a) => [a.alias, a.canonical])),
+  };
+}
+
+let prefix = buildPrefix(null);
 const ONLY_YEAR_RE = /^[\s(\[]*(?:19|20)\d{2}[\s)\]]*$/;
-// Looked up with the matched text's spaces collapsed ("Play Entertainment  Tv").
-const CANONICAL = new Map(ALIASES.map((a) => [a.alias, a.canonical]));
+
+/** Applies one portal's changes (null: the list as is). */
+export function setChannelEdits(edits: ChannelEdits | null): void {
+  prefix = buildPrefix(edits);
+}
 
 export interface ChannelSplit {
   channel: string | null;
@@ -118,8 +145,8 @@ export interface ChannelSplit {
 
 /** "Zee5 : Manemagalu" -> { channel: "Zee5", title: "Manemagalu" }; no channel -> title as given. */
 export function splitChannel(name: string): ChannelSplit {
-  const m = PREFIX_RE.exec(String(name || ""));
+  const m = prefix.re.exec(String(name || ""));
   if (!m || !m[2].trim() || ONLY_YEAR_RE.test(m[2])) return { channel: null, title: String(name || "") };
-  return { channel: CANONICAL.get(m[1].toLowerCase().replace(/\s+/g, " ")) ?? m[1], title: m[2].trim() };
+  return { channel: prefix.canonical.get(m[1].toLowerCase().replace(/\s+/g, " ")) ?? m[1], title: m[2].trim() };
 }
 

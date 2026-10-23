@@ -60,10 +60,12 @@ import { socketService } from "./services/SocketService";
 import { initDB, sequelize } from "./db";
 import { loadSettings, setting, onSettingChange } from "./config/settings";
 import { settingsRoutes } from "./routes/admin/settings";
+import { titleWordsRoutes } from "./routes/admin/titleWords";
+import { onTitleWordsChanged, watchActiveProfile, applyActiveProfileWords } from "./content/titleWords";
 import { overviewRoutes } from "./routes/admin/overview";
 import { migrateToProfiles, loadActiveProfileFromDB, encryptStoredCredentials } from "./config/server";
 import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres } from "./services/xtreamCache";
-import { enrichContentMeta, sweepStaleContent } from "./content/metaEnrichment";
+import { enrichContentMeta, sweepStaleContent, recleanForWords } from "./content/metaEnrichment";
 import { fetchAndCacheEpg } from "./content/epg";
 import { getEpgSnapshot } from "./content/epgServe";
 import { EpgCache } from "./models/EpgCache";
@@ -133,6 +135,11 @@ const init = async () => {
   // Explicitly initialize provider after loading the active profile from DB,
   // since serverManager initialized itself with default config at import time.
   serverManager.initProvider();
+  // The active portal's changes to the title word lists (content/titleWords.ts), before anything
+  // cleans a title; applied again when the active profile changes, re-cleaning what moved.
+  onTitleWordsChanged(recleanForWords);
+  watchActiveProfile();
+  await applyActiveProfileWords(true).catch((e) => logger.warn(`[title-words] not applied at start: ${e?.message ?? e}`));
 
   const server = Hapi.server({
     ...serverConfig,
@@ -168,6 +175,7 @@ const init = async () => {
   server.route(mediaInfoRoutes);
   server.route(securityRoutes);
   server.route(settingsRoutes);
+  server.route(titleWordsRoutes);
   server.route(overviewRoutes);
   server.route(titleImageRoutes);
   server.route(adminRoutes);
