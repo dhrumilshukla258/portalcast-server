@@ -200,8 +200,13 @@ async function upsertContent(contentId: string, type: ContentType, name: string,
   // without changing what gets written.
   await ContentMeta.sequelize!.transaction(async (transaction) => {
     // Custom artwork (content/customArt.ts) survives every refresh: kept aside, put back.
-    const before = await ContentMeta.findByPk(contentId, { attributes: ["poster", "backdrop", "backdropHd", "logo", "artLocked"], transaction });
+    const before = await ContentMeta.findByPk(contentId, { attributes: ["poster", "backdrop", "backdropHd", "logo", "artLocked", "tmdbId"], transaction });
     const lock = lockOf(before);
+    // Matched to a different title (or to none): what only the old title had goes first, so
+    // the new one never shows its ratings, trailer or runtime. The backfills fill them again.
+    if (before?.tmdbId && Number(before.tmdbId) !== Number(resolved.tmdbId ?? 0)) {
+      await ContentMeta.update(STALE_ON_REMATCH, { where: { id: contentId }, transaction });
+    }
     await ContentMeta.upsert({
       id: contentId,
       type,
@@ -246,6 +251,12 @@ async function upsertContent(contentId: string, type: ContentType, name: string,
     await replaceTags(ContentTheme, contentId, resolved.themes, { transaction });
   });
 }
+
+/** The columns that describe the matched title itself, cleared when the match changes. */
+const STALE_ON_REMATCH: Record<string, null> = Object.fromEntries([
+  "rating", "ratingCount", "imdbId", "imdbRating", "imdbVotes", "rtRating", "metascore", "omdbCheckedAt", "ratingsCheckedAt",
+  "tagline", "ageRating", "runtime", "studios", "collection", "originalTitle", "premiered", "writers", "detailsCheckedAt", "trailerKey", "logo",
+].map((k) => [k, null]));
 
 /**
  * Matches and stores one local-library title (content/library): the same TMDB matching and
@@ -1121,7 +1132,7 @@ async function portalListItem(cache: Map<string, Map<string, any>>, row: { id: s
  * (those are never touched). [limit] rows per run, from where the last run stopped.
  */
 const IMDB_VERIFY_KEY = "imdb_verify_cursor";
-export async function imdbCorrectMatches(limit = 400): Promise<string> {
+export async function imdbCorrectMatches(limit = 2000): Promise<string> {
   if (!imdbMatchingOn()) return "IMDb matching is off or not built yet";
   const builtAt = await imdbBuiltAt();
   const saved = (await SystemConfig.findByPk(IMDB_VERIFY_KEY))?.value as { builtAt?: number; after?: string } | undefined;

@@ -5,7 +5,8 @@
 // Build (job "imdb-titles", weekly while on): a worker thread streams title.ratings,
 // title.basics and title.akas from IMDb through gunzip into a separate SQLite file next to the
 // database (imdb.db: titles and every name each title is known by, normalized), then swaps it in.
-// Nothing is kept: type and votes per title sit in two typed arrays (~135 MB) during the build.
+// Nothing is kept: during the build, the type per title sits in one typed array (~50 MB) and
+// the votes and rating of the ~1.6 million rated titles in three more (~25 MB).
 // Movies and series only (no episodes, shorts or adult titles), with at least one vote or from
 // the last two years.
 //
@@ -65,15 +66,19 @@ function workerMain(): void {
   const thisYear = new Date().getFullYear();
 
   const get = (url: string, hops = 0): Promise<any> => new Promise((resolve, reject) => {
-    https.get(url, { headers: { "User-Agent": "PortalCast" } }, (res: any) => {
+    const req = https.get(url, { headers: { "User-Agent": "PortalCast" } }, (res: any) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && hops < 3) { res.resume(); resolve(get(res.headers.location, hops + 1)); return; }
       if (res.statusCode !== 200) { res.resume(); reject(new Error(`${url}: HTTP ${res.statusCode}`)); return; }
       resolve(res);
     }).on("error", reject);
+    // A download that stalls fails the build (the old index stays) instead of holding it forever.
+    req.setTimeout(120_000, () => req.destroy(new Error(`${url}: no data for 2 minutes`)));
   });
   const open = async (src: string) => (/^https:/.test(src) ? await get(src) : fs.createReadStream(src));
   async function* lines(src: string) {
-    const rl = readline.createInterface({ input: (await open(src)).pipe(zlib.createGunzip()), crlfDelay: Infinity });
+    const input = await open(src), gunzip = zlib.createGunzip();
+    input.on("error", (e: Error) => gunzip.destroy(e)); // ends the loop below with the error
+    const rl = readline.createInterface({ input: input.pipe(gunzip), crlfDelay: Infinity });
     let first = true;
     for await (const l of rl) { if (first) { first = false; continue; } yield l as string; }
   }
@@ -99,14 +104,28 @@ function workerMain(): void {
           async flush() { if (n) await run(`INSERT INTO ${table} VALUES ${Array(n).fill(one).join(",")}`, buf); buf = []; n = 0; },
         };
       };
-      const votes = new Uint16Array(50_000_000); // exact up to 32767, then in thousands (to ~32 million)
       const kind = new Uint8Array(50_000_000);
-      const rating = new Uint8Array(50_000_000); // average rating x 10
+      // Only rated titles have votes: their ids in order, for a binary search, with exact counts
+      // (no ceiling) and the average rating x 10.
+      const grow = <T extends Uint32Array | Float64Array | Uint8Array>(a: T): T => { const b = new (a.constructor as any)(a.length * 2); b.set(a); return b; };
+      let rIds = new Uint32Array(1 << 21), rVotes = new Float64Array(1 << 21), rRating = new Uint8Array(1 << 21), rN = 0, inOrder = true;
       for await (const l of lines(workerData.files.ratings)) {
         const a = l.indexOf("\t"), b = l.lastIndexOf("\t");
         const n = +l.slice(2, a);
-        if (n < votes.length) { const v = +l.slice(b + 1); votes[n] = v < 32768 ? v : Math.min(65535, 32768 + Math.round(v / 1000)); rating[n] = Math.round(+l.slice(a + 1, b) * 10); }
+        if (!(n > 0)) continue; // the header
+        if (rN === rIds.length) { rIds = grow(rIds); rVotes = grow(rVotes); rRating = grow(rRating); }
+        if (rN && n <= rIds[rN - 1]) inOrder = false;
+        rIds[rN] = n; rVotes[rN] = +l.slice(b + 1) || 0; rRating[rN] = Math.round(+l.slice(a + 1, b) * 10) || 0; rN++;
       }
+      if (!inOrder) { // IMDb sorts the file by id; should that change
+        const order = Array.from({ length: rN }, (_, i) => i).sort((x, y) => rIds[x] - rIds[y]);
+        rIds = Uint32Array.from(order, (i) => rIds[i]); rVotes = Float64Array.from(order, (i) => rVotes[i]); rRating = Uint8Array.from(order, (i) => rRating[i]);
+      }
+      const rated = (n: number): number => {
+        let lo = 0, hi = rN - 1;
+        while (lo <= hi) { const m = (lo + hi) >>> 1; if (rIds[m] === n) return m; if (rIds[m] < n) lo = m + 1; else hi = m - 1; }
+        return -1;
+      };
       parentPort.postMessage({ progress: "ratings read" });
 
       await run("BEGIN");
@@ -118,9 +137,10 @@ function workerMain(): void {
         if (!k || c[4] === "1") continue;
         const n = +c[0].slice(2);
         const year = c[5] === "\\N" ? 0 : +c[5];
-        if (n >= kind.length || (!votes[n] && year < thisYear - 1)) continue;
+        const r = rated(n), votes = r < 0 ? 0 : rVotes[r];
+        if (n >= kind.length || (!votes && year < thisYear - 1)) continue;
         kind[n] = k; kept++;
-        await titles.add(n, k, year, c[6] === "\\N" ? 0 : +c[6], votes[n] < 32768 ? votes[n] : (votes[n] - 32768) * 1000, rating[n]);
+        await titles.add(n, k, year, c[6] === "\\N" ? 0 : +c[6], votes, r < 0 ? 0 : rRating[r]);
         for (const t of new Set([key(c[2]), key(c[3])])) {
           if (!t) continue;
           await names.add(t, n, 1); rows++;

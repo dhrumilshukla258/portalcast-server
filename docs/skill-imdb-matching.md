@@ -4,7 +4,7 @@ Setting **Match titles with IMDb first** (`imdbMatching`, Admin → Settings →
 
 ## Index (job `imdb-titles`, weekly; at once when the setting is turned on)
 
-A worker thread streams six IMDb files (about 1.9 GB to download: ratings, titles, alternative names, crew, principal cast, people) through gunzip into `imdb.db` next to the database, then swaps it in. Kept: movies and series (no episodes, shorts or adult titles) with at least one vote or from the last two years, under every name they are known by (normalized: no accents, case, apostrophes or punctuation; "&" is "and"; a leading "the" optional), with their year, votes (exact; the build holds them in 16 bits, in thousands above 32,767) and rating, and their people: directors and the first ten cast, as 32-bit hashes of their normalized names packed into one row per title (`credits`; names are compared, never kept). Measured: 649,133 titles, 2.05 million names, 5.8 million credits of 1.73 million people; 167 MB; 6-8 min; the server process at about 350 MB during the build. Missing at start-up with the setting on: built 10 minutes after start.
+A worker thread streams six IMDb files (about 1.9 GB to download: ratings, titles, alternative names, crew, principal cast, people) through gunzip into `imdb.db` next to the database, then swaps it in. Kept: movies and series (no episodes, shorts or adult titles) with at least one vote or from the last two years, under every name they are known by (normalized: no accents, case, apostrophes or punctuation; "&" is "and"; a leading "the" optional), with their year, votes (exact, any size) and rating, and their people: directors and the first ten cast, as 32-bit hashes of their normalized names packed into one row per title (`credits`; names are compared, never kept). Measured: 649,133 titles, 2.05 million names, 5.8 million credits of 1.73 million people; 167 MB; 6-8 min; the server process at about 375 MB during the build. Missing at start-up with the setting on: built 10 minutes after start.
 
 ## Match
 
@@ -33,9 +33,11 @@ TMDB's search tends to take a famous longer title holding the words ("Little" ->
 
 ## Matches the portal's own data contradicts (job `imdb-verify`, every 6 h)
 
-400 per run. A matched title is matched again through IMDb, and logged ("IMDb corrected ... (reason)"), only when TMDB confirms the same IMDb title and either:
+2,000 per run (about 8 s; a 118,000-title catalog in about 15 days). A matched title is matched again through IMDb, and logged ("IMDb corrected ... (reason)"), only when TMDB confirms the same IMDb title and either:
 - the portal lists people: IMDb's pick shares a director or cast member with them, and the current title (whose people IMDb knows) shares none; or
 - the portal lists no people but a year: IMDb's pick fits it by its own year (a series also by a run that has ended) and has 20 votes or more, the current title is 3 years or more away (and, for a series, outside its run), and a year in the name does not disagree with the portal's (either can be the one that is off: an upload year, a re-release). Checked against the people where both exist: 262 confirmed, 4 contradicted (without the vote minimum 264 and 7; with only the 3-year gap 280 and 10).
+
+A title matched to a different TMDB title (here, the year fix, or "Fix match") loses what only the old one had: ratings, trailer, runtime, tagline, logo and the like are cleared and filled again for the new one by the usual backfills; artwork an admin chose stays.
 
 Titles where IMDb and TMDB both fit (the same name in the same year), or nothing decides, are left as they are.
 
