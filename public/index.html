@@ -27,30 +27,67 @@
       (ui/intro/IntroScreen.kt): the P appears, its two signal arcs draw outward, then the P
       slides left while "ortalcast" comes out from behind it into the logo, holds, and fades
       into the app. About 1.8 s, once per browser tab; a click, tap or key skips it. It lives
-      here, not in the bundle, so it plays while the app loads. Numbers from brand/build.sh.
+      here, not in the bundle, so it plays while the app loads.
+
+      Only CSS animations of transform and opacity on whole layers, which the browser runs on
+      its compositor: the motion stays smooth while the main thread parses the app (no script
+      per frame). The letters come out from between two strips of the page colour that slide
+      apart. Every layer is the logo's own box (viewBox 8 24 398 96, brand/build.sh), so a
+      translateX of 1% is 3.98 logo units, and the last frame is the logo:
+        P slide          167 units -> 0                  41.960% -> 0
+        left strip edge  213.9 - 189.0u (+3 overlap)     -45.502% -> -92.990% (its right edge; the
+                                                         overlap, under the P, closes the seam that
+                                                         pixel-snapped layers left at the start)
+        right strip edge 213.9 + 190.5u                   53.744% -> 101.608% (its left edge)
+      (the same window the TV draws: the P's right edge, widening to the whole word).
     -->
-    <div id="pc-intro" aria-hidden="true" style="position:fixed;inset:0;z-index:2147483647;background:#05070F;display:flex;align-items:center;justify-content:center">
-      <svg viewBox="8 24 398 96" style="width:clamp(240px,42vw,760px);height:auto;overflow:visible">
-        <defs>
-          <linearGradient id="pci-g" x1="16" y1="10" x2="88" y2="92" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#22D3EE"/><stop offset=".5" stop-color="#3B82F6"/><stop offset="1" stop-color="#7C5CFF"/></linearGradient>
-          <clipPath id="pci-clip"><rect id="pci-win" x="0" y="-20" width="0" height="120"/></clipPath>
-        </defs>
-        <g transform="translate(40 30) scale(1.1)">
-          <g id="pci-letters" transform="translate(-12 0)" clip-path="url(#pci-clip)" style="display:none" fill="none" stroke="#EAF2FF" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+    <style>
+      #pc-intro { position: fixed; inset: 0; z-index: 2147483647; background: #05070F; display: flex; align-items: center; justify-content: center; animation: pci-out 260ms linear 1580ms forwards; }
+      #pc-intro .box { position: relative; width: clamp(240px, 42vw, 760px); aspect-ratio: 398 / 96; }
+      #pc-intro .layer { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+      #pc-intro .strip { position: absolute; top: -10%; bottom: -10%; left: 0; width: 100%; background: #05070F; will-change: transform; }
+      #pc-intro .strip.l { animation: pci-sl 520ms cubic-bezier(.4, 0, .2, 1) 740ms both; }
+      #pc-intro .strip.r { animation: pci-sr 520ms cubic-bezier(.4, 0, .2, 1) 740ms both; }
+      #pc-intro .slide { position: absolute; inset: 0; will-change: transform; animation: pci-slide 520ms cubic-bezier(.4, 0, .2, 1) 740ms both; }
+      #pc-intro .zoom { position: absolute; inset: 0; transform-origin: 8.040% 52.083%; will-change: transform; animation: pci-zoom 420ms cubic-bezier(0, 0, .2, 1) both; }
+      #pc-intro .body { animation: pci-in 420ms cubic-bezier(0, 0, .2, 1) both; }
+      #pc-intro .a1 { animation: pci-arc 280ms cubic-bezier(0, 0, .2, 1) 300ms both; }
+      #pc-intro .a2 { animation: pci-arc 300ms cubic-bezier(0, 0, .2, 1) 440ms both; }
+      @keyframes pci-sl { from { transform: translateX(-45.502%); } to { transform: translateX(-92.990%); } }
+      @keyframes pci-sr { from { transform: translateX(53.744%); } to { transform: translateX(101.608%); } }
+      @keyframes pci-slide { from { transform: translateX(41.960%); } to { transform: none; } }
+      @keyframes pci-zoom { from { transform: scale(.85); } to { transform: none; } }
+      @keyframes pci-in { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes pci-arc { 0% { stroke-dashoffset: 1; visibility: hidden; } 1% { visibility: visible; } 100% { stroke-dashoffset: 0; visibility: visible; } }
+      @keyframes pci-out { to { opacity: 0; visibility: hidden; } }
+    </style>
+    <div id="pc-intro" aria-hidden="true">
+      <div class="box">
+        <svg class="layer" viewBox="8 24 398 96">
+          <g transform="translate(40 30) scale(1.1) translate(-12 0)" fill="none" stroke="#EAF2FF" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
             <path d="M45,40 a16,16 0 1,0 32,0 a16,16 0 1,0 -32,0 M90,56 V24 M90,38 A14,14 0 0,1 104,24 M121,8 V46 A10,10 0 0,0 131,56 H133 M113,24 H131 M146,40 a16,16 0 1,0 32,0 a16,16 0 1,0 -32,0 M178,24 V56 M191,4 V56 M232.26,29.72 A16,16 0 1,0 232.26,50.28 M245,40 a16,16 0 1,0 32,0 a16,16 0 1,0 -32,0 M277,24 V56 M308.66,28 A10,8 0 1,0 300,40 A10,8 0 1,1 291.34,52 M323,8 V46 A10,10 0 0,0 333,56 H335 M315,24 H333"/>
           </g>
-          <g id="pci-p" opacity="0" fill="none" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="46" cy="52" r="17" fill="#0B1226" stroke="none"/>
-            <path d="M24 52 V88" stroke="url(#pci-g)" stroke-width="12"/>
-            <path d="M66.67 44.48 A22 22 0 1 1 53.52 31.33" stroke="url(#pci-g)" stroke-width="12"/>
-            <path d="M41.5 44 L55.5 52 L41.5 60 Z" fill="#fff" stroke="#fff" stroke-width="4"/>
-          </g>
-          <g id="pci-arcs" fill="none" stroke-linecap="round">
-            <path id="pci-a1" d="M62.43 21.1 A35 35 0 0 1 76.9 35.57" stroke="url(#pci-g)" stroke-width="6.5" pathLength="1" stroke-dasharray="1 2" stroke-dashoffset="1" visibility="hidden"/>
-            <path id="pci-a2" d="M71.05 13.42 A46 46 0 0 1 84.58 26.95" stroke="url(#pci-g)" stroke-width="6.5" opacity=".55" pathLength="1" stroke-dasharray="1 2" stroke-dashoffset="1" visibility="hidden"/>
-          </g>
-        </g>
-      </svg>
+        </svg>
+        <div class="strip l"></div>
+        <div class="strip r"></div>
+        <div class="slide"><div class="zoom">
+          <svg class="layer body" viewBox="8 24 398 96">
+            <defs><linearGradient id="pci-g" x1="16" y1="10" x2="88" y2="92" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#22D3EE"/><stop offset=".5" stop-color="#3B82F6"/><stop offset="1" stop-color="#7C5CFF"/></linearGradient></defs>
+            <g transform="translate(40 30) scale(1.1) translate(0 40) scale(.84) translate(-46 -52)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="46" cy="52" r="17" fill="#0B1226" stroke="none"/>
+              <path d="M24 52 V88" stroke="url(#pci-g)" stroke-width="12"/>
+              <path d="M66.67 44.48 A22 22 0 1 1 53.52 31.33" stroke="url(#pci-g)" stroke-width="12"/>
+              <path d="M41.5 44 L55.5 52 L41.5 60 Z" fill="#fff" stroke="#fff" stroke-width="4"/>
+            </g>
+          </svg>
+          <svg class="layer" viewBox="8 24 398 96">
+            <g transform="translate(40 30) scale(1.1) translate(0 40) scale(.84) translate(-46 -52)" fill="none" stroke-linecap="round">
+              <path class="a1" d="M62.43 21.1 A35 35 0 0 1 76.9 35.57" stroke="url(#pci-g)" stroke-width="6.5" pathLength="1" stroke-dasharray="1 2"/>
+              <path class="a2" d="M71.05 13.42 A46 46 0 0 1 84.58 26.95" stroke="url(#pci-g)" stroke-width="6.5" opacity=".55" pathLength="1" stroke-dasharray="1 2"/>
+            </g>
+          </svg>
+        </div></div>
+      </div>
     </div>
     <script>
       (function () {
@@ -60,49 +97,22 @@
         var reduced = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
         // Not on a Cast receiver (it plays what the sender sends), not twice in a tab.
         if (seen || reduced || /CrKey/.test(navigator.userAgent)) { el.remove(); return; }
-        function bez(x1, y1, x2, y2) {
-          function c(u, a, b) { var v = 1 - u; return 3 * a * u * v * v + 3 * b * u * u * v + u * u * u; }
-          return function (t) { var lo = 0, hi = 1, u = t; for (var i = 0; i < 18; i++) { u = (lo + hi) / 2; if (c(u, x1, x2) < t) lo = u; else hi = u; } return c(u, y1, y2); };
-        }
-        var linOutSlowIn = bez(0, 0, 0.2, 1), fastOutSlowIn = bez(0.4, 0, 0.2, 1);
-        function at(now, start, dur, ease) { var t = (now - start) / dur; return t <= 0 ? 0 : t >= 1 ? 1 : ease ? ease(t) : t; }
-        var P = document.getElementById('pci-p'), A = document.getElementById('pci-arcs');
-        var a1 = document.getElementById('pci-a1'), a2 = document.getElementById('pci-a2');
-        var L = document.getElementById('pci-letters'), W = document.getElementById('pci-win');
-        var t0 = 0, done = false;
-        function finish() {
+        var done = false;
+        function end() {
           if (done) return; done = true;
           removeEventListener('keydown', skip, true); removeEventListener('pointerdown', skip, true);
-          el.style.transition = 'opacity .2s'; el.style.opacity = '0';
-          setTimeout(function () { el.remove(); }, 220);
+          el.remove();
         }
         // A key or click that skips the intro is not passed on to the app.
-        function skip(e) { e.stopPropagation(); e.preventDefault(); finish(); }
-        addEventListener('keydown', skip, true); addEventListener('pointerdown', skip, true);
-        function frame(now) {
-          if (done) return;
-          if (!t0) t0 = now;
-          var t = now - t0;
-          var p = at(t, 0, 420, linOutSlowIn), r1 = at(t, 300, 280, linOutSlowIn), r2 = at(t, 440, 300, linOutSlowIn);
-          var u = at(t, 740, 520, fastOutSlowIn), out = 1 - at(t, 1580, 260);
-          // The P is at x 32 of the 398-wide logo: it starts in the middle (199) and slides home.
-          var slide = (1 - u) * (199 - 32) / 1.1, s = 0.84 * (0.85 + 0.15 * p);
-          var g = 'translate(' + slide + ' 40) scale(' + s + ') translate(-46 -52)';
-          P.setAttribute('transform', g); P.setAttribute('opacity', p);
-          A.setAttribute('transform', 'translate(' + slide + ' 40) scale(' + s + ') translate(-46 -52)');
-          a1.setAttribute('visibility', r1 > 0 ? 'visible' : 'hidden'); a1.setAttribute('stroke-dashoffset', 1 - r1);
-          a2.setAttribute('visibility', r2 > 0 ? 'visible' : 'hidden'); a2.setAttribute('stroke-dashoffset', 1 - r2);
-          if (u > 0) {
-            // The letters show only right of the P's edge, a window that grows as the P moves
-            // left, so they come out from behind it; by the end it holds the whole word.
-            var from = (25.9 + slide * 1.1) / 1.1 + 12 - 10 - 20 * u;
-            L.style.display = ''; W.setAttribute('x', from); W.setAttribute('width', 345 * u);
-          }
-          el.style.opacity = out;
-          if (t >= 1840) { done = true; el.remove(); removeEventListener('keydown', skip, true); removeEventListener('pointerdown', skip, true); return; }
-          requestAnimationFrame(frame);
+        function skip(e) {
+          e.stopPropagation(); e.preventDefault();
+          el.style.animation = 'pci-out 200ms linear forwards';
+          setTimeout(end, 220);
         }
-        requestAnimationFrame(frame);
+        addEventListener('keydown', skip, true); addEventListener('pointerdown', skip, true);
+        // The fade's end removes it (it is already invisible if this runs late).
+        el.addEventListener('animationend', function (e) { if (e.target === el) end(); });
+        setTimeout(end, 2500);
       })();
     </script>
     <div id="root"></div>
