@@ -366,7 +366,10 @@ export class StalkerAPI implements IProvider {
           this.cache.del("auth_token");
 
           const response: any = await this.performHandshake();
-          logger.info(`Handshake response: ${JSON.stringify(response)}`);
+          // Never the answer itself: it carries the session token (and the "random" signing value).
+          logger.info(response?.js?.token
+            ? `Handshake: token received (…${String(response.js.token).slice(-4)})`
+            : `Handshake: no token in the answer${response?.text ? ` (${String(response.text).slice(0, 120)})` : ""}`);
 
           if (response?.js?.token) {
             const newToken = response.js.token;
