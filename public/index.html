@@ -29,6 +29,7 @@
       into the app. About 1.8 s, once per browser tab; a click, tap or key skips it. It lives
       here, not in the bundle, so it plays while the app loads.
 
+      Written for old browsers too (Tizen TVs, old phones): no inset, aspect-ratio or clamp().
       Only CSS animations of transform and opacity on whole layers, which the browser runs on
       its compositor: the motion stays smooth while the main thread parses the app (no script
       per frame). The letters come out from between two strips of the page colour that slide
@@ -42,22 +43,20 @@
       (the same window the TV draws: the P's right edge, widening to the whole word).
     -->
     <style>
-      #pc-intro { position: fixed; inset: 0; z-index: 2147483647; background: #05070F; display: flex; align-items: center; justify-content: center; animation: pci-out 260ms linear 1580ms forwards; }
-      #pc-intro .box { position: relative; width: clamp(240px, 42vw, 760px); aspect-ratio: 398 / 96; }
-      #pc-intro .layer { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+      #pc-intro { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 2147483647; background: #05070F; display: flex; align-items: center; justify-content: center; animation: pci-out 260ms linear 1580ms forwards; }
+      #pc-intro .box { position: relative; width: 42vw; min-width: 240px; max-width: 1600px; } /* 42% of any screen; 240px at least */
+      #pc-intro .box::before { content: ''; display: block; padding-top: 24.121%; } /* 96 / 398 of the box's own width */
+      #pc-intro .layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow: visible; }
       #pc-intro .strip { position: absolute; top: -10%; bottom: -10%; left: 0; width: 100%; background: #05070F; will-change: transform; }
       #pc-intro .strip.l { animation: pci-sl 520ms cubic-bezier(.4, 0, .2, 1) 740ms both; }
       #pc-intro .strip.r { animation: pci-sr 520ms cubic-bezier(.4, 0, .2, 1) 740ms both; }
-      #pc-intro .slide { position: absolute; inset: 0; will-change: transform; animation: pci-slide 520ms cubic-bezier(.4, 0, .2, 1) 740ms both; }
-      #pc-intro .zoom { position: absolute; inset: 0; transform-origin: 8.040% 52.083%; will-change: transform; animation: pci-zoom 420ms cubic-bezier(0, 0, .2, 1) both; }
+      #pc-intro .slide { position: absolute; top: 0; right: 0; bottom: 0; left: 0; will-change: transform; animation: pci-slide 520ms cubic-bezier(.4, 0, .2, 1) 740ms both; }
+      #pc-intro .zoom { position: absolute; top: 0; right: 0; bottom: 0; left: 0; transform-origin: 8.040% 52.083%; will-change: transform; animation: pci-zoom 420ms cubic-bezier(0, 0, .2, 1) both; }
       #pc-intro .body { will-change: opacity; animation: pci-in 420ms cubic-bezier(0, 0, .2, 1) both; }
       /* The arcs pulse out from the P's centre (scale + opacity, compositor-only), the inner one first. */
       #pc-intro .arc { transform-origin: 8.040% 52.083%; will-change: transform, opacity; }
       #pc-intro .a1 { animation: pci-arc 280ms cubic-bezier(0, 0, .2, 1) 300ms both; }
       #pc-intro .a2 { animation: pci-arc 300ms cubic-bezier(0, 0, .2, 1) 440ms both; }
-      /* Held at the first frame until it is on screen (the script adds .go after the first paint),
-         so a slow first render never skips the opening. */
-      #pc-intro:not(.go), #pc-intro:not(.go) * { animation-play-state: paused !important; }
       @keyframes pci-sl { from { transform: translateX(-45.502%); } to { transform: translateX(-92.990%); } }
       @keyframes pci-sr { from { transform: translateX(53.744%); } to { transform: translateX(101.608%); } }
       @keyframes pci-slide { from { transform: translateX(41.960%); } to { transform: none; } }
@@ -117,8 +116,6 @@
         addEventListener('keydown', skip, true); addEventListener('pointerdown', skip, true);
         // The fade's end removes it (it is already invisible if this runs late).
         el.addEventListener('animationend', function (e) { if (e.target === el) end(); });
-        // Start once the first frame is on screen (two frames: the first is the one being painted).
-        requestAnimationFrame(function () { requestAnimationFrame(function () { el.classList.add('go'); }); });
         setTimeout(end, 4000);
       })();
     </script>
