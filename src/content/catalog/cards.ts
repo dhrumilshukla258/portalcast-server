@@ -14,7 +14,7 @@ import { ContentGenre } from "@/models/ContentGenre";
 import { ContentCountry } from "@/models/ContentCountry";
 import { peopleOf, personCredits, unpackPhoto, type PersonRow, type PersonCredit } from "@/content/people";
 import type { CatalogSnapshot } from "./snapshot";
-import { catalogReady, catalogChanges, COPY_COLUMNS, type CatalogChanges } from "./store";
+import { catalogReady, catalogChanges, onCatalogSwap, COPY_COLUMNS, type CatalogChanges } from "./store";
 import { shadowCheck } from "./shadow";
 
 export interface TitleRows {
@@ -115,6 +115,7 @@ export async function titleRows(ids: string[]): Promise<TitleRows> {
 
 /** Current groupKey of each changed title (re-read when it changes again), per snapshot. */
 let groupState: { snap: CatalogSnapshot; groupOf: Map<string, { seq: number; groupKey: string | null }>; dirty: Set<string>; seq: number } | null = null;
+onCatalogSwap(() => { groupState = null; });
 
 /** Groups touched by a title change since the snapshot: its group then, and its group now. */
 async function dirtyGroups(src: { snap: CatalogSnapshot; changes: CatalogChanges }): Promise<Set<string>> {

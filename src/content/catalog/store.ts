@@ -56,13 +56,27 @@ export function catalogSnapshot(): CatalogSnapshot | null {
   return current;
 }
 
-let markReady: (snap: CatalogSnapshot | null) => void = () => undefined;
-const ready = new Promise<CatalogSnapshot | null>((resolve) => { markReady = resolve; });
+// Holds only whether start-up is done: a promise keeps its value for good, and holding the first
+// snapshot there kept its ~200 MB alive through every rebuild (and handed readers that old one).
+let markReady: () => void = () => undefined;
+const ready = new Promise<void>((resolve) => { markReady = resolve; });
 
-/** Resolves once start-up has a snapshot (from its file or a first build), or null when it is
- *  off or could not be built; readers wait on it instead of building the views it replaces. */
+/** Resolves once start-up has a snapshot (from its file or a first build) with the CURRENT one,
+ *  or null when it is off or could not be built; readers wait on it instead of building the
+ *  views it replaces. */
 export function catalogReady(): Promise<CatalogSnapshot | null> {
-  return ready;
+  return ready.then(() => current);
+}
+
+/** Readers that keep something made from a snapshot drop it here when a new one replaces it,
+ *  so the old one can be freed at once instead of when they are next used. */
+const swapListeners: (() => void)[] = [];
+export function onCatalogSwap(fn: () => void): void {
+  swapListeners.push(fn);
+}
+function swapped(): void {
+  changeState = null;
+  for (const fn of swapListeners) fn();
 }
 
 /** Keys written after the snapshot was built, per log table ("title", "tags", "person"...). */
@@ -163,6 +177,7 @@ export async function rebuildCatalogSnapshot(reason: string): Promise<void> {
     const builtAt = new Date().toISOString();
     const swapStart = performance.now();
     current = new CatalogSnapshot(out.version, builtAt, out.counts, out.sections);
+    swapped();
     listVersions = versions;
     if (knownChange === null || out.version > knownChange) knownChange = out.version;
     const swapMs = performance.now() - swapStart;
@@ -210,7 +225,7 @@ export async function startCatalogSnapshot(): Promise<void> {
     await setChangeCapture(sequelize, on);
     if (on) await loadOrBuild();
   } finally {
-    markReady(current);
+    markReady();
   }
   if (!on) return;
   // A file older than the database is served (lists are checked per request, see views.ts)
@@ -233,6 +248,7 @@ async function loadOrBuild(): Promise<void> {
       for (const key of snapshotListKeys(loaded)) versions.set(key, xtreamCacheKeyVersion(key));
       for (const key of await listChangesSince(sequelize, header.version)) versions.delete(key);
       current = loaded;
+      swapped();
       listVersions = versions;
       knownChange = Math.max(knownChange ?? 0, header.version, await latestChange(sequelize));
       lastBuildAt = Date.now();

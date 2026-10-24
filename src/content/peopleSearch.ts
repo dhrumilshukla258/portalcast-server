@@ -42,7 +42,7 @@ import { logger } from "@/infra/logger";
 import { editsOne, normalizeText } from "@/content/searchIndex";
 import { unpackPhoto, readGenders, readRoleCounts } from "@/content/people";
 import { setting } from "@/config/settings";
-import { catalogSnapshot, catalogReady } from "@/content/catalog/store";
+import { catalogSnapshot, catalogReady, onCatalogSwap } from "@/content/catalog/store";
 import type { CatalogSnapshot } from "@/content/catalog/snapshot";
 
 const KIND_CAST = 1, KIND_DIRECTOR = 2, KIND_CREATOR = 4, KIND_WRITER = 8;
@@ -532,6 +532,7 @@ const MAX_ANSWERS = 5000;
 
 /** The snapshot's index (made once per snapshot), or null when the snapshot is off or not ready. */
 let fromSnap: { snap: CatalogSnapshot; index: PeopleIndex } | null = null;
+onCatalogSwap(() => { fromSnap = null; });
 function snapshotIndex(): PeopleIndex | null {
   if (!setting<boolean>("catalogSnapshot")) return null;
   const snap = catalogSnapshot();
