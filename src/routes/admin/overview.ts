@@ -18,6 +18,7 @@ import { lastIntegrity } from "@/services/integrity";
 import { setting } from "@/config/settings";
 import { catalogSnapshot } from "@/content/catalog/store";
 import { shadowStatus } from "@/content/catalog/shadow";
+import { memoryNow } from "@/infra/memory";
 
 // Admin > Overview: everything the front page shows, in one small answer. The counts that
 // need the database are cached for 15 s (several open admin tabs polling cost one set of
@@ -84,7 +85,7 @@ export const overviewRoutes: ServerRoute[] = [
         const runningJobs = jobs.filter((j) => j.running).map((j) => j.label);
         const metrics = requestMetrics.snapshot();
         const health = iptvHealth();
-        const mem = process.memoryUsage();
+        const mem = memoryNow();
         const snap = setting<boolean>("catalogSnapshot") ? catalogSnapshot() : null;
         const shadow = shadowStatus();
         return {
@@ -92,7 +93,9 @@ export const overviewRoutes: ServerRoute[] = [
             iptv: health.iptv,
             iptvSince: health.since,
             uptimeSeconds: Math.round(process.uptime()),
-            memoryMb: Math.round(mem.rss / 1048576),
+            // In use (what a container limit counts), and where it is (infra/memory.ts).
+            memoryMb: mem.inUseMb,
+            memory: mem,
             // The in-memory catalog (content/catalog/), when on: its version and the shadow
             // check of its answers against the database (plan, Phase 1b rollout).
             catalog: snap ? { version: snap.version, sizeMb: Math.round(snap.bytes / 1048576), checked: shadow.checked, differed: shadow.differed } : undefined,

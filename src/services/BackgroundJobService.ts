@@ -1,3 +1,4 @@
+import { memoryNow } from "@/infra/memory";
 import { fetchAndCacheEpg } from "@/content/epg";
 import { getEpgSnapshot } from "@/content/epgServe";
 import { serverManager } from "@/serverManager";
@@ -31,8 +32,8 @@ class BackgroundJobService {
   private async runJobs() {
     // Where the memory is: resident, the JS heap (used of reserved), and buffers outside it
     // (the in-memory catalog is one).
-    const m = process.memoryUsage(), mb = (n: number) => Math.round(n / 1048576);
-    logger.info(`[BackgroundJobService] Checking jobs... memory: resident ${mb(m.rss)} MB, JS heap ${mb(m.heapUsed)} of ${mb(m.heapTotal)} MB, buffers ${mb(m.arrayBuffers)} MB, other native ${mb(m.external - m.arrayBuffers)} MB`);
+    const m = memoryNow();
+    logger.info(`[BackgroundJobService] Checking jobs... memory: in use ${m.inUseMb} MB (resident ${m.residentMb}), JS heap ${m.heapUsedMb} of ${m.heapTotalMb} MB, buffers ${m.buffersMb} MB, other native ${m.nativeMb} MB`);
     try {
       await this.checkAndUpdateEpg();
     } catch (err) {
