@@ -195,7 +195,8 @@ const MAX_INDEXES = 64;
 function fingerprint(items: Searchable[]): string {
   let h = 2166136261 >>> 0;
   for (const it of items) {
-    const id = String(it.stream_id ?? it.series_id ?? it.id ?? it.name ?? "");
+    // The name too: renamed titles keep their ids, and the index matches on names.
+    const id = `${String(it.stream_id ?? it.series_id ?? it.id ?? "")}\u0001${String(it.name ?? "")}`;
     for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619) >>> 0;
     h = Math.imul(h ^ 0x2c, 16777619) >>> 0;
   }
