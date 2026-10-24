@@ -27,11 +27,11 @@ Measured on a 133,185-name catalog (offline, against titles TMDB had already mat
 
 TMDB's search tends to take a famous longer title holding the words ("Little" -> Little Women, "Lion" -> The Lion King, "Peter" -> Peter Rabbit 2).
 
-## Titles TMDB never matched (job `imdb-unmatched`, every 6 h)
+## Titles TMDB never matched (job `imdb-unmatched`, every 6 h and right after each new index)
 
 400 per run, in id order from where the last run stopped, from the start again after each new index; TMDB is asked only for the ones IMDb found (with the portal's people from its category list). On the same catalog: about 2,100 of 12,400 found (awards shows, specials, new films).
 
-## Matches the portal's own data contradicts (job `imdb-verify`, every 6 h)
+## Matches the portal's own data contradicts (job `imdb-verify`, every 6 h and right after each new index)
 
 2,000 per run (about 8 s; a 118,000-title catalog in about 15 days). A matched title is matched again through IMDb, and logged ("IMDb corrected ... (reason)"), only when TMDB confirms the same IMDb title and either:
 - the portal lists people: IMDb's pick shares a director or cast member with them, and the current title (whose people IMDb knows) shares none; or

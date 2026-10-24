@@ -133,7 +133,15 @@ const init = async () => {
   // missing at start-up); titles TMDB never matched are tried against it a few hundred at a time.
   registerJob({
     name: "imdb-titles", label: "Download IMDb titles and build the match index (when IMDb matching is on)", everyMs: 7 * 24 * 60 * 60 * 1000,
-    run: async () => (setting<boolean>("imdbMatching") ? buildImdbIndex() : "IMDb matching is off"),
+    run: async () => {
+      if (!setting<boolean>("imdbMatching")) return "IMDb matching is off";
+      const built = await buildImdbIndex();
+      logger.info(`[imdb] index built: ${built}`);
+      // A new index: both passes run now (queued after this job), not up to 6 h later.
+      runJobNow("imdb-unmatched");
+      runJobNow("imdb-verify");
+      return built;
+    },
   });
   registerJob({ name: "imdb-unmatched", label: "Try titles TMDB never matched against IMDb", everyMs: 6 * 60 * 60 * 1000, run: () => imdbRetryUnmatched() });
   registerJob({ name: "imdb-verify", label: "Correct matches the portal's own people or year contradict (IMDb)", everyMs: 6 * 60 * 60 * 1000, run: () => imdbCorrectMatches() });
