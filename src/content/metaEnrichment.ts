@@ -13,7 +13,7 @@ import { xtreamCache, catchupScan } from "@/services/xtreamCache";
 import { readGenres } from "@/infra/storage";
 import { logger } from "@/infra/logger";
 import { fetchMovieMeta, fetchTVMeta, fetchMetaByTmdbId, TmdbMeta } from "@/content/tmdb";
-import { tmdbMetaViaImdb, matchImdb, imdbMatchingOn, imdbBuiltAt, creditsOf, peopleEvidence, portalPeopleHashes, imdbTitleYears, yearDecides, type PortalPeople } from "@/content/imdbIndex";
+import { tmdbMetaViaImdb, matchImdb, imdbMatchingOn, imdbBuiltAt, creditsOf, peopleEvidence, portalPeopleHashes, imdbTitleYears, yearDecides, nameFits, type PortalPeople } from "@/content/imdbIndex";
 import { themesForKeywordIds } from "@/content/themes";
 import { ContentMeta, ContentType, ContentMetaSource } from "@/models/ContentMeta";
 import { ContentGenre } from "@/models/ContentGenre";
@@ -1207,10 +1207,17 @@ export async function imdbCorrectMatches(limit = 2000): Promise<string> {
       if (!now || now.score > 0) continue;
       why = `${m.evidence} shared with the portal`;
     } else {
-      // No people: the portal's year (see yearDecides).
+      // No people: the portal's year (see yearDecides), else the name. IMDb's pick is the
+      // title by its own name and the current one by none of its names, not even a longer
+      // one starting with it ("The Moon" matched to Killers of the Flower Moon, "Run" to
+      // Chicken Run). Checked against the people where both exist: 419 confirmed, 9
+      // contradicted; about 1,300 corrections on a 133k catalog.
       const [now, pick] = await Promise.all([imdbTitleYears(String(row.imdbId)), imdbTitleYears(m.imdbId)]);
-      if (!yearDecides(row.type === "series" ? "series" : "movie", portalYear, titleYearOf(row.name), now, pick, m.votes)) continue;
-      why = `the portal's year ${portalYear}, not ${now!.year}`;
+      if (yearDecides(row.type === "series" ? "series" : "movie", portalYear, titleYearOf(row.name), now, pick, m.votes)) {
+        why = `the portal's year ${portalYear}, not ${now!.year}`;
+      } else if (m.ownName && m.votes >= 20 && (await nameFits(row.name, String(row.imdbId))) === false) {
+        why = "the name, which the current title does not have";
+      } else continue;
     }
     const kind = row.type === "movie" ? "movie" : "tv";
     const portalId = String(row.id).replace(/^(movie|series)_/, "");

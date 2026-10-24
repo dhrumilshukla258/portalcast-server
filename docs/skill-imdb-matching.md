@@ -33,9 +33,10 @@ TMDB's search tends to take a famous longer title holding the words ("Little" ->
 
 ## Matches the portal's own data contradicts (job `imdb-verify`, every 6 h and right after each new index)
 
-2,000 per run (about 8 s; a 118,000-title catalog in about 15 days). A matched title is matched again through IMDb, and logged ("IMDb corrected ... (reason)"), only when TMDB confirms the same IMDb title and either:
+2,000 per run (about 8 s; a 118,000-title catalog in about 15 days). A matched title is matched again through IMDb, and logged ("IMDb corrected ... (reason)"), only when TMDB confirms the same IMDb title and one of these holds:
 - the portal lists people: IMDb's pick shares a director or cast member with them, and the current title (whose people IMDb knows) shares none; or
-- the portal lists no people but a year: IMDb's pick fits it by its own year (a series also by a run that has ended) and has 20 votes or more, the current title is 3 years or more away (and, for a series, outside its run), and a year in the name does not disagree with the portal's (either can be the one that is off: an upload year, a re-release). Checked against the people where both exist: 262 confirmed, 4 contradicted (without the vote minimum 264 and 7; with only the 3-year gap 280 and 10).
+- the portal lists no people but a year: IMDb's pick fits it by its own year (a series also by a run that has ended) and has 20 votes or more, the current title is 3 years or more away (and, for a series, outside its run), and a year in the name does not disagree with the portal's (either can be the one that is off: an upload year, a re-release). Checked against the people where both exist: 262 confirmed, 4 contradicted (without the vote minimum 264 and 7; with only the 3-year gap 280 and 10); or
+- the portal lists no people and the year does not decide: IMDb's pick is the title by its own name (20 votes or more), and the current title has no name the portal's could be, not even a longer one starting with it (`nameFits`; portals shorten "Meet, Marry, Murder Hosted by ..."). It catches "The Moon" (three dubs) on Killers of the Flower Moon, "Run" on Chicken Run, "Mother" on Mother's Day. Checked against the people where both exist: 419 confirmed, 9 contradicted (without the longer-name allowance 623 and 18); about 1,300 corrections on the 133k catalog.
 
 A title matched to a different TMDB title (here, the year fix, or "Fix match") loses what only the old one had: ratings, trailer, runtime, tagline, logo and the like are cleared and filled again for the new one by the usual backfills; artwork an admin chose stays.
 
@@ -43,7 +44,7 @@ Titles where IMDb and TMDB both fit (the same name in the same year), or nothing
 
 ## Fix match (any portal title, IMDb matching on or off)
 
-An admin's **Fix match** on a title's page (next to Edit images) searches TMDB by name, or takes a pasted IMDb id or link, TMDB link or TMDB id, and matches the title to the one picked (`fixPortalMatch`, `routes/admin/titleMatch.ts`). The choice is kept in `content_meta.tmdbIdLocked`: neither this job nor the year fix touches the title again. "Forget my choice" matches it automatically, as when it was new. Local library titles have their own Fix match (Admin → Libraries).
+An admin's **Fix match** on a title's page (next to Edit images) searches TMDB by name, or takes a pasted IMDb id or link, TMDB link or TMDB id, and matches the title to the one picked (`fixPortalMatch`, `routes/admin/titleMatch.ts`), with every version of it: the rows of its group, shown as one card (three dubs of one film are fixed at once). The choice is kept in `content_meta.tmdbIdLocked`: neither this job nor the year fix touches the title again. "Forget my choice" matches it automatically, as when it was new. Local library titles have their own Fix match (Admin → Libraries).
 
 Checked end to end with a stand-in TMDB on the same catalog: every change cost one find and one details call, no searches; by hand, e.g. "Peter - Tamil 4K" from Peter Rabbit 2 to Peter (2026), "Bob Ross : The Joy of Painting" from a 2024 namesake to the 1983 series, "Intervention" from Canine Intervention to Intervention (2005).
 

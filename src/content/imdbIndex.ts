@@ -136,11 +136,12 @@ function workerMain(): void {
         const k = MOVIE.has(c[1]) ? 1 : SERIES.has(c[1]) ? 2 : 0;
         if (!k || c[4] === "1") continue;
         const n = +c[0].slice(2);
-        const year = c[5] === "\\N" ? 0 : +c[5];
+        // Anything not a year is unknown (0): a NaN went in as NULL and failed the whole build.
+        const year = +c[5] || 0;
         const r = rated(n), votes = r < 0 ? 0 : rVotes[r];
-        if (n >= kind.length || (!votes && year < thisYear - 1)) continue;
+        if (!(n > 0) || n >= kind.length || (!votes && year < thisYear - 1)) continue;
         kind[n] = k; kept++;
-        await titles.add(n, k, year, c[6] === "\\N" ? 0 : +c[6], votes, r < 0 ? 0 : rRating[r]);
+        await titles.add(n, k, year, +c[6] || 0, votes, r < 0 ? 0 : rRating[r]);
         for (const t of new Set([key(c[2]), key(c[3])])) {
           if (!t) continue;
           await names.add(t, n, 1); rows++;
@@ -389,6 +390,38 @@ export function peopleEvidence(portalDirectors: number[], portalCast: number[], 
  * The IMDb title at the start of a portal name, or null. [kind] the portal's type, [year] the
  * portal's year (0 unknown), [people] the portal's director and cast when it sends them.
  */
+/**
+ * Whether IMDb title [imdbId] can be what portal name [name] is, by its names alone: one of the
+ * names it is known by is at the start of the name (or after a "Channel :"), with only this
+ * portal's tags, a year or a season marker after it, as matchImdb reads names. Null when the
+ * index does not know the title (then nothing can be said).
+ */
+export async function nameFits(name: string, imdbId: string): Promise<boolean | null> {
+  if (!imdbIndexReady() || !/^tt\d+$/.test(imdbId)) return null;
+  const id = parseInt(imdbId.slice(2), 10);
+  // Indexed by name, not by title: asked as "is it among the titles these names could be".
+  const [known] = await all("SELECT 1 AS x FROM titles WHERE id = ?", [id]).catch(() => []);
+  if (!known) return null;
+  const parts = [String(name || "")];
+  const m = /^[^:|]{2,40}[:|]\s*(.+)$/.exec(parts[0]);
+  if (m) parts.push(m[1]);
+  for (const part of parts) {
+    const words = [...part.matchAll(WORD)].map((w) => ({ key: imdbKey(w[0]), end: w.index! + w[0].length })).filter((w) => w.key);
+    if (!words.length) continue;
+    const prefixes = words.map((_, i) => words.slice(0, i + 1).map((w) => w.key).join(" "));
+    const hits = new Set((await all(`SELECT key FROM names WHERE key IN (${prefixes.map(() => "?").join(",")}) AND id = ?`, [...prefixes, id]).catch(() => [])).map((r: any) => r.key as string));
+    for (let n = words.length; n >= 1; n--) {
+      if (!onlyTagsLeft(part.slice(words[n - 1].end))) continue;
+      if (hits.has(prefixes[n - 1])) return true;
+      // A longer name of it that starts with the portal's title is a fit too: portals shorten
+      // ("Meet, Marry, Murder" for "... Hosted by Michelle Trachtenberg").
+      const [longer] = await all("SELECT 1 AS x FROM names WHERE key > ? AND key < ? AND id = ? LIMIT 1", [`${prefixes[n - 1]} `, `${prefixes[n - 1]} ￿`, id]).catch(() => []);
+      if (longer) return true;
+    }
+  }
+  return false;
+}
+
 export async function matchImdb(name: string, kind: "movie" | "series", year: number, people?: PortalPeople): Promise<ImdbMatch | null> {
   if (!imdbIndexReady()) return null;
   const parts = [String(name || "")];
