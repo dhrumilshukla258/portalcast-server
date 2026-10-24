@@ -1,12 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="14 8 482 106"><title>PortalCast</title><defs><linearGradient id="pc-g" x1="16" y1="10" x2="88" y2="92" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#22D3EE"/><stop offset=".5" stop-color="#3B82F6"/><stop offset="1" stop-color="#7C5CFF"/></linearGradient></defs><g transform="translate(0 4)"><g fill="none" stroke-linecap="round" stroke-linejoin="round">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="8 24 398 96"><title>PortalCast</title><defs><linearGradient id="pc-g" x1="16" y1="10" x2="88" y2="92" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#22D3EE"/><stop offset=".5" stop-color="#3B82F6"/><stop offset="1" stop-color="#7C5CFF"/></linearGradient></defs><g transform="translate(40 30) scale(1.1)"><g transform="translate(0 40) scale(.84) translate(-46 -52)"><g fill="none" stroke-linecap="round" stroke-linejoin="round">
   <circle cx="46" cy="52" r="17" fill="#0B1226" stroke="none"/>
   <path d="M24 52 V88" stroke="url(#pc-g)" stroke-width="12"/>
   <path d="M66.67 44.48 A22 22 0 1 1 53.52 31.33" stroke="url(#pc-g)" stroke-width="12"/>
   <path d="M62.43 21.1 A35 35 0 0 1 76.9 35.57" stroke="url(#pc-g)" stroke-width="6.5"/>
   <path d="M71.05 13.42 A46 46 0 0 1 84.58 26.95" stroke="url(#pc-g)" stroke-width="6.5" opacity=".55"/>
   <path d="M41.5 44 L55.5 52 L41.5 60 Z" fill="#fff" stroke="#fff" stroke-width="4"/>
-</g></g><g transform="translate(118 22) scale(1.1)"><g fill="none" stroke="#EAF2FF" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
-  <path d="M0 24 V76"/><circle cx="16" cy="40" r="16"/>
+</g></g><g transform="translate(-12 0)"><g fill="none" stroke="#EAF2FF" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+  
   <circle cx="61" cy="40" r="16"/>
   <path d="M90 56 V24 M90 38 A14 14 0 0 1 104 24"/>
   <path d="M121 8 V46 A10 10 0 0 0 131 56 H133 M113 24 H131"/>
@@ -16,4 +16,4 @@
   <circle cx="261" cy="40" r="16"/><path d="M277 24 V56"/>
   <path d="M308.66 28 A10 8 0 1 0 300 40 A10 8 0 1 1 291.34 52"/>
   <path d="M323 8 V46 A10 10 0 0 0 333 56 H335 M315 24 H333"/>
-</g></g></svg>
+</g></g></g></svg>
