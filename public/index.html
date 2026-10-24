@@ -1,7 +1,55 @@
 <!doctype html>
 <html lang="en">
   <head>
+    <script>if (!(window.Iterator && Iterator.prototype && Iterator.prototype.toArray && Set.prototype.union && window.structuredClone && Array.prototype.findLast)) document.write('<script type="module" crossorigin src="./assets/polyfills-D-gzt-Oh.js"><\/script>');</script>
+
     <meta charset="UTF-8" />
+    <script>
+      // Older browsers (vite.config.ts SUPPORTED) get classes that switch on the CSS fallbacks in
+      // postcss/legacy-fallbacks.mjs; modern browsers get none and the same CSS as before.
+      (function (d) {
+        var k = [];
+        function css(p, v) { try { return !!(window.CSS && CSS.supports(p, v)); } catch (e) { return false; } }
+        try { document.querySelector(':where(a)'); } catch (e) { k.push('no-where'); }
+        if (!css('aspect-ratio', '1')) k.push('no-aspect');
+        if (!css('translate', '1px')) k.push('no-translate');
+        if (k.length) d.className += (d.className ? ' ' : '') + k.join(' ');
+        // aspect-ratio: the aspect-* elements get a height from their width (a CSS box cannot
+        // do it in a flex container), at most once a frame while the page changes or resizes.
+        if (k.indexOf('no-aspect') >= 0) {
+          var R = /(?:^|\s)aspect-(?:(video)|(square)|(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)|\[(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)\])(?=\s|$)/;
+          var queued = false;
+          var fit = function () {
+            queued = false;
+            var els = document.querySelectorAll('[class*="aspect-"]');
+            for (var i = 0; i < els.length; i++) {
+              var m = R.exec(els[i].getAttribute('class') || '');
+              if (!m) continue;
+              var r = m[1] ? 16 / 9 : m[2] ? 1 : m[3] ? m[3] / m[4] : m[5] / m[6];
+              var w = els[i].offsetWidth;
+              if (w && r) { var hpx = Math.round(w / r) + 'px'; if (els[i].style.height !== hpx) els[i].style.height = hpx; }
+            }
+          };
+          var queue = function () { if (!queued) { queued = true; requestAnimationFrame(fit); } };
+          addEventListener('resize', queue);
+          document.addEventListener('DOMContentLoaded', function () {
+            queue();
+            new MutationObserver(queue).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+          });
+        }
+        // gap in flexbox has no CSS test: measured on a hidden two-row flex column.
+        document.addEventListener('DOMContentLoaded', function () {
+          var f = document.createElement('div');
+          f.style.cssText = 'display:flex;flex-direction:column;row-gap:1px;position:absolute;visibility:hidden';
+          f.appendChild(document.createElement('div')); f.appendChild(document.createElement('div'));
+          document.body.appendChild(f);
+          if (f.scrollHeight !== 1) d.className += ' no-flexgap';
+          f.parentNode.removeChild(f);
+          // @property: a registered variable has its starting value with nothing setting it.
+          if (!getComputedStyle(d).getPropertyValue('--tw-translate-x').trim()) d.className += ' no-atprop';
+        });
+      })(document.documentElement);
+    </script>
     <link rel="icon" type="image/svg+xml" href="./portalcast-icon.svg" />
     <link rel="icon" href="./favicon.ico" sizes="any" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -17,8 +65,8 @@
       href="https://fonts.googleapis.com/icon?family=Material+Icons"
       rel="stylesheet"
     />
-    <script type="module" crossorigin src="./assets/index-5W6KAPwF.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-ClclrK0F.css">
+    <script type="module" crossorigin src="./assets/index-ERbhxBOm.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-C_uBiBcN.css">
   <link rel="manifest" href="./manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>
 
   <body>
