@@ -1,5 +1,5 @@
 import { httpClient } from "@/streaming/httpClient";
-import { initialConfig } from "@/config/server";
+import { initialConfig, directLinks } from "@/config/server";
 import { serverManager } from "@/serverManager";
 import NodeCache from "node-cache";
 import { AxiosResponse } from "axios";
@@ -71,7 +71,7 @@ export class LiveStreamService {
       throw new Error("Stream Not Found");
     }
 
-    const headers = initialConfig.providerType === "xtream"
+    const headers = directLinks()
       ? { "User-Agent": "VLC/3.0.16 LibVLC/3.0.16" }
       : {};
 
@@ -127,7 +127,7 @@ export class LiveStreamService {
       }
 
       const fetchPlaylist = async (url: string, isSubpath: boolean = false) => {
-        const headers = initialConfig.providerType === "xtream"
+        const headers = directLinks()
           ? { "User-Agent": "VLC/3.0.16 LibVLC/3.0.16" }
           : {};
         const res = await trackedGet(url, { headers });
@@ -186,7 +186,7 @@ export class LiveStreamService {
             .then((res) => res.js.cmd);
           if (!newMasterUrl) return { error: "Stream Not Found", code: 404 };
 
-          const headers = initialConfig.providerType === "xtream"
+          const headers = directLinks()
             ? { "User-Agent": "VLC/3.0.16 LibVLC/3.0.16" }
             : {};
           const refreshedRes = await trackedGet(newMasterUrl, { headers });

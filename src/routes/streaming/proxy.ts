@@ -3,7 +3,7 @@ import { recordFromRequest } from "@/services/SecurityEvents";
 import { httpClient } from "@/streaming/httpClient";
 import http from "http";
 import https, { RequestOptions } from "https";
-import { initialConfig } from "@/config/server";
+import { initialConfig, directLinks } from "@/config/server";
 import { logger } from "@/infra/logger";
 import { streamTracker } from "@/services/StreamTracker";
 import { mintStreamToken, streamTokenFromRequest, inheritTokenMeta, type StreamTokenMeta } from "@/services/StreamTokens";
@@ -192,7 +192,7 @@ export const proxy: ServerRoute[] = [
         }
 
         const headers: Record<string, string> = {};
-        if (initialConfig.providerType === "xtream") {
+        if (directLinks()) {
           headers["User-Agent"] = "VLC/3.0.16 LibVLC/3.0.16";
         }
         if (referer) headers["Referer"] = referer;

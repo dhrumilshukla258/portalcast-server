@@ -11,6 +11,8 @@ import {
 } from "@/types/domain";
 
 export interface IProvider {
+  /** The guide is answered from memory (M3U's XMLTV): the guide fetch needs no pacing. */
+  readonly localGuide?: boolean;
   getToken(refreshToken: boolean): Promise<string | null>;
   clearCache(): void;
   getExpiry(): Promise<string | null>;

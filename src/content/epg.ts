@@ -160,7 +160,7 @@ async function fetchAndCacheEpgNow(options: { full?: boolean } = {}): Promise<Ep
       logger.info(`EPG fetch: ${done}/${toFetch.length} channels (${Math.round((Date.now() - startedAt) / 60000)} min)`);
     }
     
-    if (BATCH_DELAY_MS() > 0 && i + CONCURRENCY_LIMIT < toFetch.length) {
+    if (BATCH_DELAY_MS() > 0 && !serverManager.getProvider().localGuide && i + CONCURRENCY_LIMIT < toFetch.length) {
       await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS()));
     }
   }

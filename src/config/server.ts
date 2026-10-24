@@ -73,6 +73,12 @@ export const appConfig: AppConfig = { ...AppConfigDefault };
 // SubDL) are settings too: read them with setting("tmdbToken") etc. (config/settings.ts).
 export const seriesFlag = (): string => setting<string>("seriesFlag");
 
+/** Providers whose links play directly (Xtream, M3U): relayed by the server, sent with a
+ *  player's User-Agent; a Stalker portal hands out links through its own API instead. */
+export function directLinks(): boolean {
+  return initialConfig.providerType === "xtream" || initialConfig.providerType === "m3u";
+}
+
 export function getInitialConfig() {
   return initialConfig;
 }

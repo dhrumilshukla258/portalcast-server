@@ -2,6 +2,7 @@ import { Server } from "@hapi/hapi";
 import { IProvider } from "@/providers/Provider";
 import { stalkerApi } from "@/providers/stalker";
 import { XtreamClient } from "@/providers/xtream-client";
+import { M3uProvider } from "@/providers/m3u/provider";
 import { initialConfig, loadActiveProfileFromDB } from "@/config/server";
 import { logger } from "@/infra/logger";
 
@@ -24,7 +25,10 @@ class ServerManager {
     stalkerApi.stopWatchdog();
     stalkerApi.clearCache();
 
-    if (initialConfig.providerType === "xtream") {
+    if (initialConfig.providerType === "m3u") {
+      this.provider = new M3uProvider();
+      logger.info("Initialized M3U playlist Provider");
+    } else if (initialConfig.providerType === "xtream") {
       this.provider = new XtreamClient();
       logger.info("Initialized Xtream Codes Provider");
     } else {

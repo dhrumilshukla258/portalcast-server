@@ -1,7 +1,7 @@
 import { ServerRoute } from "@hapi/hapi";
 import http from "http";
 import https from "https";
-import { initialConfig } from "@/config/server";
+import { initialConfig, directLinks } from "@/config/server";
 import { logger } from "@/infra/logger";
 import { streamTokenFromRequest } from "@/services/StreamTokens";
 import { streamTracker } from "@/services/StreamTracker";
@@ -26,7 +26,7 @@ export const portalProxy: ServerRoute[] = [
           Accept: "*/*",
           Connection: "keep-alive",
         };
-        if (initialConfig.providerType === "xtream") {
+        if (directLinks()) {
           headers["User-Agent"] = "VLC/3.0.16 LibVLC/3.0.16";
         }
 

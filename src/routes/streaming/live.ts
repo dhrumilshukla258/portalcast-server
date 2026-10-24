@@ -7,7 +7,7 @@ import { ServerRoute } from "@hapi/hapi";
 import { http, https } from "follow-redirects";
 import { RequestOptions } from "https";
 import NodeCache from "node-cache";
-import { initialConfig } from "@/config/server";
+import { initialConfig, directLinks } from "@/config/server";
 import { ReqRefDefaults, ResponseToolkit } from "@hapi/hapi/lib/types";
 import { stalkerApi } from "@/providers/stalker";
 import { logger } from "@/infra/logger";
@@ -339,7 +339,7 @@ async function serveLivePlaylist(request: any, h: any, entry: NonNullable<Return
   const userLabel = entry.userLabel;
   const meta: StreamTokenMeta = inheritTokenMeta(entry);
   streamTracker.touch("live", request.info.remoteAddress, cmd, userLabel, meta);
-  if (id && initialConfig.providerType !== "xtream") {
+  if (id && !directLinks()) {
     stalkerApi.setActiveChannel(id);
   }
 
@@ -354,7 +354,7 @@ async function serveLivePlaylist(request: any, h: any, entry: NonNullable<Return
   // proxy=0 used to get one by default).
   const forceProxy = (proxyParam === "1" && !isSmartTv) || !ALLOW_DIRECT_STREAMS();
 
-  if (initialConfig.providerType === "xtream") {
+  if (directLinks()) {
     const useProxy = forceProxy || (initialConfig.proxy && proxyParam !== "0");
     if (useProxy) {
       const { liveStreamService } = await import("@/services/LiveStreamService");
@@ -421,7 +421,7 @@ async function servePlayerSegment(request: any, h: any) {
     const segmentUser = entry.userLabel;
     const segmentMeta: StreamTokenMeta = inheritTokenMeta(entry);
 
-    if (initialConfig.providerType === "xtream") {
+    if (directLinks()) {
       // resourceId is `${cmd}<_>${seq}` (see LiveStreamService.populateCache) —
       // strip the sequence suffix so repeated segment fetches for the same
       // channel bucket into the same session as the cmd-keyed playlist touch.

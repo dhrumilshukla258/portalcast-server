@@ -37,7 +37,8 @@ export const configRoutes: ServerRoute[] = [
     handler: async () => ({
       // Stable per-provider key for client preferences. Was `<type>_<hostname>`, which
       // told every signed-in user the upstream portal's address; now a hash of it.
-      providerKey: `${initialConfig.providerType || "stalker"}_${crypto.createHash("sha256").update(`${initialConfig.hostname || "default_host"}:${initialConfig.port || ""}`).digest("hex").slice(0, 16)}`,
+      // M3U: the playlist link instead of the (unused) hostname.
+      providerKey: `${initialConfig.providerType || "stalker"}_${crypto.createHash("sha256").update(initialConfig.providerType === "m3u" ? String(initialConfig.m3uUrl || "") : `${initialConfig.hostname || "default_host"}:${initialConfig.port || ""}`).digest("hex").slice(0, 16)}`,
     }),
   },
   {

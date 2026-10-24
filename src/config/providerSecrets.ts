@@ -13,7 +13,8 @@
 import { encryptSecret, decryptSecret } from "@/auth/crypto";
 import type { Config } from "@/types/domain";
 
-const ENCRYPTED_FIELDS = ["password", "username", "mac", "deviceId1", "deviceId2", "serialNumber"] as const;
+// m3uUrl / xmltvUrl: M3U links usually carry the account's username and password.
+const ENCRYPTED_FIELDS = ["password", "username", "mac", "deviceId1", "deviceId2", "serialNumber", "m3uUrl", "xmltvUrl"] as const;
 const PREFIX = "enc:";
 export const PASSWORD_PLACEHOLDER = "********";
 

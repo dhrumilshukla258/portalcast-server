@@ -24,7 +24,11 @@ export interface Config extends BaseConfig {
   tokens: string[];
   proxy: boolean;
   playCensored: boolean;
-  providerType?: 'stalker' | 'xtream';
+  providerType?: 'stalker' | 'xtream' | 'm3u';
+  /** M3U profiles: the playlist link (often holds the account's username and password). */
+  m3uUrl?: string;
+  /** M3U profiles: an XMLTV guide link; else the playlist's own url-tvg. */
+  xmltvUrl?: string;
   username?: string;
   password?: string;
   https?: boolean;

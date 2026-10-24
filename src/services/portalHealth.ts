@@ -29,6 +29,10 @@ let fails = 0;
 let timer: NodeJS.Timeout | null = null;
 
 function portalBase(): string | null {
+  // M3U: the playlist's server.
+  if ((initialConfig as any).providerType === "m3u") {
+    try { const u = new URL(String((initialConfig as any).m3uUrl || "")); return `${u.protocol}//${u.host}/`; } catch { return null; }
+  }
   const host = String((initialConfig as any).hostname || "").trim();
   if (!host || host === "portal.example.com") return null;
   if (/^https?:\/\//i.test(host)) return host;
