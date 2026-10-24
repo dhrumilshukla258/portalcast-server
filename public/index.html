@@ -50,15 +50,20 @@
       #pc-intro .strip.r { animation: pci-sr 520ms cubic-bezier(.4, 0, .2, 1) 740ms both; }
       #pc-intro .slide { position: absolute; inset: 0; will-change: transform; animation: pci-slide 520ms cubic-bezier(.4, 0, .2, 1) 740ms both; }
       #pc-intro .zoom { position: absolute; inset: 0; transform-origin: 8.040% 52.083%; will-change: transform; animation: pci-zoom 420ms cubic-bezier(0, 0, .2, 1) both; }
-      #pc-intro .body { animation: pci-in 420ms cubic-bezier(0, 0, .2, 1) both; }
+      #pc-intro .body { will-change: opacity; animation: pci-in 420ms cubic-bezier(0, 0, .2, 1) both; }
+      /* The arcs pulse out from the P's centre (scale + opacity, compositor-only), the inner one first. */
+      #pc-intro .arc { transform-origin: 8.040% 52.083%; will-change: transform, opacity; }
       #pc-intro .a1 { animation: pci-arc 280ms cubic-bezier(0, 0, .2, 1) 300ms both; }
       #pc-intro .a2 { animation: pci-arc 300ms cubic-bezier(0, 0, .2, 1) 440ms both; }
+      /* Held at the first frame until it is on screen (the script adds .go after the first paint),
+         so a slow first render never skips the opening. */
+      #pc-intro:not(.go), #pc-intro:not(.go) * { animation-play-state: paused !important; }
       @keyframes pci-sl { from { transform: translateX(-45.502%); } to { transform: translateX(-92.990%); } }
       @keyframes pci-sr { from { transform: translateX(53.744%); } to { transform: translateX(101.608%); } }
       @keyframes pci-slide { from { transform: translateX(41.960%); } to { transform: none; } }
       @keyframes pci-zoom { from { transform: scale(.85); } to { transform: none; } }
       @keyframes pci-in { from { opacity: 0; } to { opacity: 1; } }
-      @keyframes pci-arc { 0% { stroke-dashoffset: 1; visibility: hidden; } 1% { visibility: visible; } 100% { stroke-dashoffset: 0; visibility: visible; } }
+      @keyframes pci-arc { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: none; } }
       @keyframes pci-out { to { opacity: 0; visibility: hidden; } }
     </style>
     <div id="pc-intro" aria-hidden="true">
@@ -80,11 +85,11 @@
               <path d="M41.5 44 L55.5 52 L41.5 60 Z" fill="#fff" stroke="#fff" stroke-width="4"/>
             </g>
           </svg>
-          <svg class="layer" viewBox="8 24 398 96">
-            <g transform="translate(40 30) scale(1.1) translate(0 40) scale(.84) translate(-46 -52)" fill="none" stroke-linecap="round">
-              <path class="a1" d="M62.43 21.1 A35 35 0 0 1 76.9 35.57" stroke="url(#pci-g)" stroke-width="6.5" pathLength="1" stroke-dasharray="1 2"/>
-              <path class="a2" d="M71.05 13.42 A46 46 0 0 1 84.58 26.95" stroke="url(#pci-g)" stroke-width="6.5" opacity=".55" pathLength="1" stroke-dasharray="1 2"/>
-            </g>
+          <svg class="layer arc a1" viewBox="8 24 398 96">
+            <path transform="translate(40 30) scale(1.1) translate(0 40) scale(.84) translate(-46 -52)" d="M62.43 21.1 A35 35 0 0 1 76.9 35.57" fill="none" stroke="url(#pci-g)" stroke-width="6.5" stroke-linecap="round"/>
+          </svg>
+          <svg class="layer arc a2" viewBox="8 24 398 96">
+            <path transform="translate(40 30) scale(1.1) translate(0 40) scale(.84) translate(-46 -52)" d="M71.05 13.42 A46 46 0 0 1 84.58 26.95" fill="none" stroke="url(#pci-g)" stroke-width="6.5" stroke-linecap="round" opacity=".55"/>
           </svg>
         </div></div>
       </div>
@@ -112,7 +117,9 @@
         addEventListener('keydown', skip, true); addEventListener('pointerdown', skip, true);
         // The fade's end removes it (it is already invisible if this runs late).
         el.addEventListener('animationend', function (e) { if (e.target === el) end(); });
-        setTimeout(end, 2500);
+        // Start once the first frame is on screen (two frames: the first is the one being painted).
+        requestAnimationFrame(function () { requestAnimationFrame(function () { el.classList.add('go'); }); });
+        setTimeout(end, 4000);
       })();
     </script>
     <div id="root"></div>
