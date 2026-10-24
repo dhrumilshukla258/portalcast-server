@@ -34,7 +34,7 @@ test("Fix match: the chosen title is kept and locked; null matches automatically
   await saveSetting("tmdbToken", "stand-in");
   await ContentMeta.upsert({ id: "movie_9001", type: "movie", name: "Lion", portalCategoryId: "77", tmdbId: 8587, source: "tmdb", year: "1994", enrichedAt: new Date() } as any);
 
-  assert.deepEqual(await fixPortalMatch("movie_9001", 334543), { tmdbId: 334543, locked: true });
+  assert.deepEqual(await fixPortalMatch("movie_9001", 334543), { tmdbId: 334543, locked: true, versions: 1 });
   let row: any = await ContentMeta.findByPk("movie_9001", { raw: true });
   assert.equal(Number(row.tmdbId), 334543);
   assert.equal(Number(row.tmdbIdLocked), 334543);
@@ -45,7 +45,7 @@ test("Fix match: the chosen title is kept and locked; null matches automatically
   row = await ContentMeta.findByPk("movie_9001", { raw: true });
   assert.equal(Number(row.tmdbId), 334543, "a failed choice changes nothing");
 
-  assert.deepEqual(await fixPortalMatch("movie_9001", null), { tmdbId: 8587, locked: false });
+  assert.deepEqual(await fixPortalMatch("movie_9001", null), { tmdbId: 8587, locked: false, versions: 1 });
   row = await ContentMeta.findByPk("movie_9001", { raw: true });
   assert.equal(row.tmdbIdLocked, null);
 
@@ -62,4 +62,22 @@ test("a pasted IMDb id, IMDb or TMDB link, or TMDB id names the title", () => {
   assert.deepEqual(idInQuery("1917"), { tmdbId: 1917 }, "also searched as a name");
   assert.equal(idInQuery("Lion"), null);
   assert.equal(idInQuery("Blade Runner 2049"), null);
+});
+
+test("Fix match takes every version of the title with it, and nothing else", async () => {
+  // Three dubs of one film, all matched to the wrong title, as the apps show them under one card.
+  const wrong = "movie:the moon:tmdb8587";
+  for (const [id, name] of [["movie_9101", "The Moon - Tamil HD"], ["movie_9102", "The Moon - Telugu HD"], ["movie_9103", "The Moon - Eng Dub"]] as const)
+    await ContentMeta.upsert({ id, type: "movie", name, portalCategoryId: "77", tmdbId: 8587, source: "tmdb", year: "2023", groupKey: wrong, enrichedAt: new Date() } as any);
+  await ContentMeta.upsert({ id: "movie_9104", type: "movie", name: "The Lion King", portalCategoryId: "77", tmdbId: 8587, source: "tmdb", year: "1994", groupKey: "movie:the lion king:tmdb8587", enrichedAt: new Date() } as any);
+
+  assert.deepEqual(await fixPortalMatch("movie_9102", 334543), { tmdbId: 334543, locked: true, versions: 3 });
+  for (const id of ["movie_9101", "movie_9102", "movie_9103"]) {
+    const r: any = await ContentMeta.findByPk(id, { raw: true });
+    assert.equal(Number(r.tmdbId), 334543, id);
+    assert.equal(Number(r.tmdbIdLocked), 334543, id);
+  }
+  const other: any = await ContentMeta.findByPk("movie_9104", { raw: true });
+  assert.equal(Number(other.tmdbId), 8587, "another title on the same wrong match is not touched");
+  assert.equal(other.tmdbIdLocked, null);
 });

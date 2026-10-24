@@ -1126,35 +1126,44 @@ async function portalListItem(cache: Map<string, Map<string, any>>, row: { id: s
 /**
  * Admin "Fix match" for a portal title: matched to [tmdbId] now and locked (tmdbIdLocked), so
  * no job matches it again; null forgets the choice and matches it automatically, as when it
- * was new. null when there is no such portal title; throws when TMDB does not know the id.
+ * was new. Every version of the title goes with it (the rows of its group, as the apps show them
+ * under one card: "The Moon" Tamil, Telugu and Hindi dub were all matched to Killers of the
+ * Flower Moon, owner 2026-10-23). null when there is no such portal title; throws when TMDB does
+ * not know the id.
  */
-export async function fixPortalMatch(contentId: string, tmdbId: number | null): Promise<{ tmdbId: number | null; locked: boolean } | null> {
-  const row = (await ContentMeta.findByPk(contentId, { attributes: ["id", "type", "name", "poster", "portalCategoryId"], raw: true })) as any;
+export async function fixPortalMatch(contentId: string, tmdbId: number | null): Promise<{ tmdbId: number | null; locked: boolean; versions: number } | null> {
+  const attributes = ["id", "type", "name", "poster", "portalCategoryId", "groupKey"];
+  const row = (await ContentMeta.findByPk(contentId, { attributes, raw: true })) as any;
   if (!row || row.portalCategoryId === LOCAL_CATEGORY) return null;
+  const versions = row.groupKey
+    ? ((await ContentMeta.findAll({ where: { groupKey: row.groupKey, type: row.type, portalCategoryId: { [Op.ne]: LOCAL_CATEGORY } }, attributes, raw: true })) as any[])
+    : [row];
   const kind = row.type === "movie" ? "movie" : "tv";
-  const portalId = String(row.id).replace(/^(movie|series)_/, "");
-  const cacheKey = kind === "movie" ? `tmdb_movie_${portalId}` : `tmdb_tv_${portalId}`;
-  if (tmdbId) {
-    const meta = await fetchMetaByTmdbId(kind, tmdbId);
-    if (!meta) throw new Error(`TMDB has no ${kind === "movie" ? "movie" : "series"} ${tmdbId}`);
-    await xtreamCache.set(cacheKey, meta);
-  } else {
-    await xtreamCache.delete(cacheKey);
+  const meta = tmdbId ? await fetchMetaByTmdbId(kind, tmdbId) : null;
+  if (tmdbId && !meta) throw new Error(`TMDB has no ${kind === "movie" ? "movie" : "series"} ${tmdbId}`);
+  const lists = new Map<string, Map<string, any>>();
+  let matched: number | null = null;
+  for (const v of versions) {
+    const portalId = String(v.id).replace(/^(movie|series)_/, "");
+    const cacheKey = kind === "movie" ? `tmdb_movie_${portalId}` : `tmdb_tv_${portalId}`;
+    if (meta) await xtreamCache.set(cacheKey, meta);
+    else await xtreamCache.delete(cacheKey);
+    const it = await portalListItem(lists, v).catch(() => undefined);
+    const resolved = await resolveMeta(
+      kind, cacheKey, v.name, extractYear(it?.year || it?.releaseDate || it?.added || ""),
+      splitList(it?.genres_str ?? it?.genre), splitList(it?.country),
+      it?.stream_icon || it?.cover || v.poster || null, portalPlot(it),
+      { directors: it?.director, cast: it?.actors || it?.cast, imdbRating: it?.rating_imdb },
+    );
+    await withBusyRetry(`[MetaEnrich] fix match ${v.name}`, async () => {
+      await upsertContent(v.id, v.type, v.name, resolved, v.portalCategoryId || "");
+      await ContentMeta.update({ tmdbIdLocked: tmdbId ?? null }, { where: { id: v.id } });
+    });
+    if (v.id === row.id) matched = resolved.tmdbId ?? null;
   }
-  const it = await portalListItem(new Map(), row).catch(() => undefined);
-  const resolved = await resolveMeta(
-    kind, cacheKey, row.name, extractYear(it?.year || it?.releaseDate || it?.added || ""),
-    splitList(it?.genres_str ?? it?.genre), splitList(it?.country),
-    it?.stream_icon || it?.cover || row.poster || null, portalPlot(it),
-    { directors: it?.director, cast: it?.actors || it?.cast, imdbRating: it?.rating_imdb },
-  );
-  await withBusyRetry(`[MetaEnrich] fix match ${row.name}`, async () => {
-    await upsertContent(row.id, row.type, row.name, resolved, row.portalCategoryId || "");
-    await ContentMeta.update({ tmdbIdLocked: tmdbId ?? null }, { where: { id: row.id } });
-  });
   await withBusyRetry("[MetaEnrich] updating Discover", () => recomputeRepresentatives());
   clearDiscoverCache();
-  return { tmdbId: resolved.tmdbId ?? null, locked: !!tmdbId };
+  return { tmdbId: matched, locked: !!tmdbId, versions: versions.length };
 }
 
 /**
