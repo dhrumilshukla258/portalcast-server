@@ -368,12 +368,15 @@ export const discoverRoutes: ServerRoute[] = [
       // /discover/variants). Multiple genres AND together, as do genre+country+theme.
       // Hidden titles (admin or broken-stream auto-hide) are skipped at query time.
       const tags: BrowseQuery["tags"] = genreValues.map((value) => ({ kind: "genre" as const, value }));
+      // "Not these genres" (comma-separated): a title with any of them is left out.
+      const exclude: BrowseQuery["tags"] = (q.notGenre ? String(q.notGenre).split(",") : [])
+        .map((v: string) => v.trim()).filter(Boolean).sort().map((value: string) => ({ kind: "genre" as const, value }));
       if (q.country) tags.push({ kind: "country", value: String(q.country) });
       if (q.theme) tags.push({ kind: "theme", value: String(q.theme) });
       if (q.network) tags.push({ kind: "network", value: String(q.network) });
       const [idx, hidden] = await Promise.all([getDiscoverIndex(), getHiddenContentKeySet()]);
       const { ids, total } = browseIndex(idx, {
-        type, language: q.language ? String(q.language) : undefined, tags, hidden, page, pageSize: PAGE_SIZE,
+        type, language: q.language ? String(q.language) : undefined, tags, exclude, hidden, page, pageSize: PAGE_SIZE,
       });
 
       // The page's rows and tags: from the catalog snapshot when it is on (titles changed since

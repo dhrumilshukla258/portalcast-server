@@ -197,6 +197,8 @@ export interface BrowseQuery {
   type?: string;
   language?: string;
   tags: { kind: TagKind; value: string }[];
+  /** Titles carrying any of these are left out ("not Horror"). */
+  exclude?: { kind: TagKind; value: string }[];
   hidden: Set<string>;
   page: number;
   pageSize: number;
@@ -213,8 +215,16 @@ export function browse(idx: DiscoverIndex, q: BrowseQuery): { ids: string[]; tot
   }
   const hiddenRanks = new Set<number>();
   for (const id of q.hidden) { const r = idx.rankOf.get(id); if (r !== undefined) hiddenRanks.add(r); }
+  // Excluded tags: a binary search in each one's (ascending) postings per candidate.
+  const excluded: Int32Array[] = [];
+  for (const t of q.exclude ?? []) { const arr = idx.postings[t.kind].get(t.value); if (arr && arr.length) excluded.push(arr); }
+  const isExcluded = (r: number) => {
+    for (const arr of excluded) { const p = lowerBound(arr, r, 0); if (p < arr.length && arr[p] === r) return true; }
+    return false;
+  };
   const keep = (r: number) =>
-    (want === -1 || idx.type[r] === want) && (wantLang === -2 || idx.lang[r] === wantLang) && !hiddenRanks.has(r);
+    (want === -1 || idx.type[r] === want) && (wantLang === -2 || idx.lang[r] === wantLang) && !hiddenRanks.has(r) &&
+    (excluded.length === 0 || !isExcluded(r));
 
   const start = (q.page - 1) * q.pageSize;
   const end = start + q.pageSize;
@@ -226,7 +236,7 @@ export function browse(idx: DiscoverIndex, q: BrowseQuery): { ids: string[]; tot
     const n = idx.ids.length;
     if (want === -1 && wantLang === -2) {
       // Unfiltered feed: the count is arithmetic, the page is a slice (skipping hidden).
-      if (hiddenRanks.size === 0) return { ids: idx.ids.slice(start, Math.min(end, n)), total: n };
+      if (hiddenRanks.size === 0 && excluded.length === 0) return { ids: idx.ids.slice(start, Math.min(end, n)), total: n };
     }
     for (let r = 0; r < n; r++) if (keep(r)) take(r);
     return { ids: out, total };
