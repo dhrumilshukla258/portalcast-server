@@ -29,8 +29,10 @@ class BackgroundJobService {
   }
 
   private async runJobs() {
-    const memory = process.memoryUsage().heapUsed / 1024 / 1024;
-    logger.info(`[BackgroundJobService] Checking jobs... Current RAM: ${Math.round(memory)}MB`);
+    // Where the memory is: resident, the JS heap (used of reserved), and buffers outside it
+    // (the in-memory catalog is one).
+    const m = process.memoryUsage(), mb = (n: number) => Math.round(n / 1048576);
+    logger.info(`[BackgroundJobService] Checking jobs... memory: resident ${mb(m.rss)} MB, JS heap ${mb(m.heapUsed)} of ${mb(m.heapTotal)} MB, buffers ${mb(m.arrayBuffers)} MB, other native ${mb(m.external - m.arrayBuffers)} MB`);
     try {
       await this.checkAndUpdateEpg();
     } catch (err) {
