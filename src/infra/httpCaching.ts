@@ -22,6 +22,8 @@ import { authCheck } from "@/auth/jwt";
 
 const YEAR = 365 * 24 * 60 * 60;
 const HOME_PATH = "/api/v2/home";
+/** Answers that depend on who is asking, beyond the catalog: versioned by X-Home-Version. */
+const PERSONAL_PATHS = /^\/api\/v2\/(home|discover\/(rows|recommendations))$/;
 
 /** Path pattern -> seconds an app may reuse the answer without asking. */
 const RULES: [RegExp, number][] = [
@@ -66,7 +68,10 @@ export function registerHttpCaching(server: Server): void {
     // Asked for at the current version: the answer cannot change at this address.
     const q = (request.query ?? {}) as Record<string, unknown>;
     const asked = q.v;
-    const current = request.path === HOME_PATH ? homeVersion : version;
+    // Personal answers (Home, and the rows and recommendations made from the viewer's history)
+    // are kept by the Home version, which moves with that history; the catalog version does not,
+    // and a recommendation kept by it stayed until the catalog next changed.
+    const current = PERSONAL_PATHS.test(request.path) ? homeVersion : version;
     // Never a title's own answer (seasons, episodes, files): it carries play links.
     const opensTitle = (q.movieId !== undefined && String(q.movieId) !== "0") || q.seasonId !== undefined || q.episodeId !== undefined;
     const pinned = request.method === "get" && r?.statusCode === 200 && !!current && asked === current && !opensTitle;
