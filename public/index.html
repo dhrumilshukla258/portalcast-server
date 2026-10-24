@@ -150,6 +150,11 @@
         // Not on a Cast receiver (it plays what the sender sends), not twice in a tab.
         if (seen || reduced || /CrKey/.test(navigator.userAgent)) { el.remove(); return; }
         var done = false;
+        // The intro's tone (public/intro-tone.wav, portalcast-tv-android tools/gen_intro_tone.py).
+        // Browsers allow sound before a click only on sites the viewer often plays media on (and
+        // smart-TV browsers): elsewhere play() is refused and the intro is silent.
+        var tone = null;
+        try { tone = new Audio('/intro-tone.wav'); var pr = tone.play(); if (pr && pr.catch) pr.catch(function () {}); } catch (e) {}
         function end() {
           if (done) return; done = true;
           removeEventListener('keydown', skip, true); removeEventListener('pointerdown', skip, true);
@@ -158,6 +163,7 @@
         // A key or click that skips the intro is not passed on to the app.
         function skip(e) {
           e.stopPropagation(); e.preventDefault();
+          if (tone) { try { tone.pause(); } catch (x) {} }
           el.style.animation = 'pci-out 200ms linear forwards';
           setTimeout(end, 220);
         }
