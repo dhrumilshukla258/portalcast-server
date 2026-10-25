@@ -94,7 +94,10 @@
     <style>
       #pc-intro { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 2147483647; background: #05070F; display: flex; align-items: center; justify-content: center; }
       #pc-intro .box { position: relative; width: 42vw; min-width: 240px; max-width: 1600px; } /* 42% of any screen; 240px at least */
-      #pc-intro .box::before { content: ''; display: block; padding-top: 24.121%; } /* 96 / 398 of the box's own width */
+      /* 96 / 398 of the box's own width. !important: the app's CSS resets every ::before's padding
+         with more weight than this page's own styles (its layers are flattened for old browsers),
+         which made the box 0 px high and the whole intro invisible. */
+      #pc-intro .box::before { content: ''; display: block; padding-top: 24.121% !important; }
       #pc-intro .layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow: visible; }
       #pc-intro .strip { position: absolute; top: -10%; bottom: -10%; left: 0; width: 100%; background: #05070F; will-change: transform; }
       #pc-intro .strip.l { animation: pci-sl 520ms cubic-bezier(.4, 0, .2, 1) 740ms both; }
