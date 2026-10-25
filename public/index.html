@@ -65,7 +65,7 @@
       href="https://fonts.googleapis.com/icon?family=Material+Icons"
       rel="stylesheet"
     />
-    <script type="module" crossorigin src="./assets/index-vrBqciw4.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/index-E8zj_o7t.js"><script>window.__pcStartApp = function () { if (window.__pcAppStarted) return; window.__pcAppStarted = 1; var s = document.createElement('script'); s.type = 'module'; s.crossOrigin = ''; s.src = './assets/index-E8zj_o7t.js'; document.head.appendChild(s); };</script>
     <link rel="stylesheet" crossorigin href="./assets/index-H_fSpoxD.css">
   <link rel="manifest" href="./manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>
 
@@ -92,7 +92,7 @@
       (the same window the TV draws: the P's right edge, widening to the whole word).
     -->
     <style>
-      #pc-intro { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 2147483647; background: #05070F; display: flex; align-items: center; justify-content: center; animation: pci-out 260ms linear 1580ms forwards; }
+      #pc-intro { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 2147483647; background: #05070F; display: flex; align-items: center; justify-content: center; }
       #pc-intro .box { position: relative; width: 42vw; min-width: 240px; max-width: 1600px; } /* 42% of any screen; 240px at least */
       #pc-intro .box::before { content: ''; display: block; padding-top: 24.121%; } /* 96 / 398 of the box's own width */
       #pc-intro .layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow: visible; }
@@ -148,37 +148,53 @@
         // The app draws its first screen once the logo has stopped moving (src/main.tsx waits
         // for this): building and painting it on the main thread while the P slid made the
         // slide jump to its end (owner, 2026-10-24: "P comes then I just see Portalcast").
+        var t0 = performance.now();
         var open;
         window.__pcIntroGate = new Promise(function (r) { open = r; });
         var reduced = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+        // The app's code (vite.config.ts app-after-intro-frame). Never before DOMContentLoaded:
+        // the polyfills (old browsers) run before it and must come first. In development (no
+        // build step) __pcStartApp is absent and the app loads itself.
+        var go = function () { if (window.__pcStartApp) window.__pcStartApp(); };
+        var startApp = function () { if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', go); else go(); };
         // Not on a Cast receiver (it plays what the sender sends); not with reduced motion.
-        if (reduced || /CrKey/.test(navigator.userAgent)) { el.remove(); open(); return; }
-        // The slide ends at 1.26 s: the app draws during the hold and the fade.
-        setTimeout(open, 1300);
-        var done = false;
+        if (reduced || /CrKey/.test(navigator.userAgent)) { el.remove(); open(); startApp(); return; }
+        // The logo moves for 1.26 s with the main thread free; the app's code starts after it.
+        // Starting it at once held the main thread ~0.85 s exactly while the P appeared and slid,
+        // so the intro showed only its end (owner, 2026-10-24: "webui shows no animation").
+        // The finished logo then holds until the app has drawn its first screen, and fades.
+        if (document.hidden) { open(); startApp(); } // a background tab draws no frames
+        setTimeout(function () { open(); startApp(); }, 1300);
+        var done = false, fading = false;
         // The intro's tone (public/intro-tone.wav, portalcast-tv-android tools/gen_intro_tone.py).
         // Browsers allow sound before a click only on sites the viewer often plays media on (and
         // smart-TV browsers): elsewhere play() is refused and the intro is silent.
         var tone = null;
         try { tone = new Audio('/intro-tone.wav'); var pr = tone.play(); if (pr && pr.catch) pr.catch(function () {}); } catch (e) {}
         function end() {
-          open();
+          open(); startApp();
           if (done) return; done = true;
           removeEventListener('keydown', skip, true); removeEventListener('pointerdown', skip, true);
           el.remove();
         }
-        // A key or click that skips the intro is not passed on to the app.
+        function fade(ms) {
+          if (fading) return; fading = true;
+          el.style.animation = 'pci-out ' + ms + 'ms linear forwards';
+          setTimeout(end, ms + 40);
+        }
+        // src/main.tsx calls this once the app's first screen is drawn: not before 1.58 s (the
+        // logo's hold), then the 0.26 s fade.
+        window.__pcIntroDone = function () {
+          setTimeout(function () { fade(260); }, Math.max(0, 1580 - (performance.now() - t0)));
+        };
+        // A key or click skips the intro (and is not passed on to the app).
         function skip(e) {
           e.stopPropagation(); e.preventDefault();
-          open();
           if (tone) { try { tone.pause(); } catch (x) {} }
-          el.style.animation = 'pci-out 200ms linear forwards';
-          setTimeout(end, 220);
+          open(); startApp(); fade(200);
         }
         addEventListener('keydown', skip, true); addEventListener('pointerdown', skip, true);
-        // The fade's end removes it (it is already invisible if this runs late).
-        el.addEventListener('animationend', function (e) { if (e.target === el) end(); });
-        setTimeout(end, 4000);
+        setTimeout(function () { fade(260); }, 8000); // never longer, whatever the app does
       })();
     </script>
     <div id="root"></div>
