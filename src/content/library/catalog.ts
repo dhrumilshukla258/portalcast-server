@@ -207,6 +207,20 @@ export async function localTitleFiles(titleId: string) {
  * A play link for a local file: a stream token naming the file id, never its path. The webui
  * (`client=web`) gets the HLS browser fallback when the file needs it (content/library/remux.ts).
  */
+/**
+ * One local movie file asked for as a movie ("movies?movieId=LF<id>"): that file, as its title's
+ * file list shows it. Apps that had already resolved a title to its file asked again with the
+ * file's id, and got the first title of My Library instead (owner 2026-10-25: every local movie
+ * started the same wrong one, so none played).
+ */
+export async function localFileAsTitle(fileId: string) {
+  const f = await MediaFile.findByPk(Number(String(fileId).slice(2)));
+  if (!f || f.missingSince) return { success: true, page: 1, pageAtaTime: 1, total_items: 0, actual_length: 14, total_loaded: 0, data: [], errors: false, isPortal: false };
+  const all = await localTitleFiles(`L${f.itemId}`);
+  const data = all.data.filter((d: any) => d.id === `LF${f.id}`);
+  return { ...all, total_items: data.length, total_loaded: data.length, data };
+}
+
 export async function localPlayLink(fileId: string, userLabel: string, title?: string, client?: string): Promise<string | null> {
   const id = Number(String(fileId).slice(2));
   const file = await MediaFile.findByPk(id);

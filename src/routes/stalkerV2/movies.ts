@@ -3,7 +3,7 @@ import { allPage, allCategoryOf, allItem } from "@/content/catalog/all";
 import { withArtUrls } from "@/content/library/art";
 import { withVersionLabels } from "@/content/versionLabel";
 import { localEpisodeFile } from "@/content/library/catalog";
-import { isLocalTitleId, isLocalFileId, localMovieCategory, localMoviesPage, localTitleFiles, localPlayLink } from "@/content/library/catalog";
+import { isLocalTitleId, isLocalFileId, localMovieCategory, localMoviesPage, localTitleFiles, localPlayLink, localFileAsTitle } from "@/content/library/catalog";
 import { LOCAL_CATEGORY } from "@/content/metaEnrichment";
 import { unsealCmd } from "@/infra/sealedCmd";
 import { ServerRoute } from "@hapi/hapi";
@@ -159,6 +159,12 @@ export const movieRoutes: ServerRoute[] = [
           const resp = isLocalFileId(episodeId)
             ? await localEpisodeFile(String(movieId), String(episodeId))
             : await localTitleFiles(String(movieId));
+          const origin = getPublicOrigin(request);
+          return { ...resp, data: resp.data.map((d: any) => withArtUrls(d, origin)) };
+        }
+        // A local file's id where a title's is expected: that file (never My Library's first title).
+        if (isLocalFileId(movieId)) {
+          const resp = await localFileAsTitle(String(movieId));
           const origin = getPublicOrigin(request);
           return { ...resp, data: resp.data.map((d: any) => withArtUrls(d, origin)) };
         }
