@@ -65,7 +65,7 @@
       href="https://fonts.googleapis.com/icon?family=Material+Icons"
       rel="stylesheet"
     />
-    <script type="module" crossorigin src="./assets/index-Bsdryg_-.js"></script>
+    <script type="module" crossorigin src="./assets/index-vrBqciw4.js"></script>
     <link rel="stylesheet" crossorigin href="./assets/index-H_fSpoxD.css">
   <link rel="manifest" href="./manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>
 
@@ -74,7 +74,8 @@
       The cold-start intro (owner, 2026-10-24, "like Netflix's N"), as in the TV app
       (ui/intro/IntroScreen.kt): the P appears, its two signal arcs draw outward, then the P
       slides left while "ortalcast" comes out from behind it into the logo, holds, and fades
-      into the app. About 1.8 s, once per browser tab; a click, tap or key skips it. It lives
+      into the app. About 1.8 s, every time the app is opened or reloaded (owner, 2026-10-24); a
+      click, tap or key skips it. It lives
       here, not in the bundle, so it plays while the app loads.
 
       Written for old browsers too (Tizen TVs, old phones): no inset, aspect-ratio or clamp().
@@ -144,11 +145,16 @@
     <script>
       (function () {
         var el = document.getElementById('pc-intro');
-        var seen = false;
-        try { seen = sessionStorage.getItem('pc-intro') === '1'; sessionStorage.setItem('pc-intro', '1'); } catch (e) {}
+        // The app draws its first screen once the logo has stopped moving (src/main.tsx waits
+        // for this): building and painting it on the main thread while the P slid made the
+        // slide jump to its end (owner, 2026-10-24: "P comes then I just see Portalcast").
+        var open;
+        window.__pcIntroGate = new Promise(function (r) { open = r; });
         var reduced = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
-        // Not on a Cast receiver (it plays what the sender sends), not twice in a tab.
-        if (seen || reduced || /CrKey/.test(navigator.userAgent)) { el.remove(); return; }
+        // Not on a Cast receiver (it plays what the sender sends); not with reduced motion.
+        if (reduced || /CrKey/.test(navigator.userAgent)) { el.remove(); open(); return; }
+        // The slide ends at 1.26 s: the app draws during the hold and the fade.
+        setTimeout(open, 1300);
         var done = false;
         // The intro's tone (public/intro-tone.wav, portalcast-tv-android tools/gen_intro_tone.py).
         // Browsers allow sound before a click only on sites the viewer often plays media on (and
@@ -156,6 +162,7 @@
         var tone = null;
         try { tone = new Audio('/intro-tone.wav'); var pr = tone.play(); if (pr && pr.catch) pr.catch(function () {}); } catch (e) {}
         function end() {
+          open();
           if (done) return; done = true;
           removeEventListener('keydown', skip, true); removeEventListener('pointerdown', skip, true);
           el.remove();
@@ -163,6 +170,7 @@
         // A key or click that skips the intro is not passed on to the app.
         function skip(e) {
           e.stopPropagation(); e.preventDefault();
+          open();
           if (tone) { try { tone.pause(); } catch (x) {} }
           el.style.animation = 'pci-out 200ms linear forwards';
           setTimeout(end, 220);
