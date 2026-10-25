@@ -169,9 +169,15 @@ export function stripUpstreamFields(item: any, origin?: string): any {
   return rest;
 }
 
-export async function enrichArtworkFromTmdb(items: any[], kind: "movie" | "series", origin?: string): Promise<any[]> {
-  const enriched = await enrichArtworkFromTmdbRaw(items, kind, origin);
-  const withGroup = await withGroupData(enriched, kind);
+/**
+ * `ownerId`: whose stored details the items get. Omitted: each item's own (catalog lists). A
+ * title's id: all of them get that title's (a movie's files: on Stalker a file has its own id,
+ * and keying by it gave the file another title's rating, IMDb id and art, owner 2026-10-25:
+ * The Matrix showing a 4.8 film's IMDb). null: none (an episode's files have no row of their own).
+ */
+export async function enrichArtworkFromTmdb(items: any[], kind: "movie" | "series", origin?: string, ownerId?: string | number | null): Promise<any[]> {
+  const enriched = await enrichArtworkFromTmdbRaw(items, kind, origin, ownerId);
+  const withGroup = await withGroupData(enriched, kind, ownerId);
   return withGroup.map((it) => withTitleKey(stripUpstreamFields(it, origin)));
 }
 
@@ -187,10 +193,18 @@ function contentIdOf(item: any, kind: "movie" | "series"): string | null {
  * stays when it has some; empty description / cast / director are filled. A lookup failure
  * leaves the items as they were.
  */
-async function withGroupData(items: any[], kind: "movie" | "series"): Promise<any[]> {
+/** The content id whose stored details an item gets (enrichArtworkFromTmdb's `ownerId`). */
+function ownerContentId(item: any, kind: "movie" | "series", ownerId: string | number | null | undefined): string | null {
+  if (ownerId === null) return null;
+  if (ownerId !== undefined && String(ownerId) !== "" && String(ownerId) !== "0") return `${kind}_${ownerId}`;
+  return contentIdOf(item, kind);
+}
+
+async function withGroupData(items: any[], kind: "movie" | "series", ownerId?: string | number | null): Promise<any[]> {
+  if (ownerId === null) return items;
   let data: Map<string, Record<string, any>>;
   try {
-    data = await groupDataFor(items.map((it) => contentIdOf(it, kind)).filter((x): x is string => !!x));
+    data = await groupDataFor(items.map((it) => ownerContentId(it, kind, ownerId)).filter((x): x is string => !!x));
   } catch (e: any) {
     logger.warn(`[catalog] group data lookup failed: ${e?.message ?? e}`);
     return items;
@@ -198,7 +212,7 @@ async function withGroupData(items: any[], kind: "movie" | "series"): Promise<an
   if (data.size === 0) return items;
   const blank = (v: any) => v == null || v === "" || v === "-" || v === "No description available";
   return items.map((it) => {
-    const id = contentIdOf(it, kind);
+    const id = ownerContentId(it, kind, ownerId);
     const g = id ? data.get(id) : undefined;
     if (!g) return it;
     return {
@@ -230,7 +244,7 @@ function withTitleKey(item: any): any {
   return { ...item, title_key: normalizeTitleKey(name), clean_name: noYear || cleaned };
 }
 
-async function enrichArtworkFromTmdbRaw(items: any[], kind: "movie" | "series", origin?: string): Promise<any[]> {
+async function enrichArtworkFromTmdbRaw(items: any[], kind: "movie" | "series", origin?: string, ownerId?: string | number | null): Promise<any[]> {
   // Local-library titles carry their own art (folder images, else their matched TMDB art).
   const local = items.filter((it) => it?.is_local);
   if (local.length === items.length) return items.map((it) => withArtUrls(it, origin));
@@ -239,6 +253,8 @@ async function enrichArtworkFromTmdbRaw(items: any[], kind: "movie" | "series", 
   // which could even pick different artwork than Discover for the same title.
   const prefix = kind === "movie" ? "movie_" : "series_";
   const ids = items.map((item: any) => {
+    if (ownerId === null) return undefined;
+    if (ownerId !== undefined && String(ownerId) !== "" && String(ownerId) !== "0") return `${prefix}${ownerId}`;
     const itemId = item.id ?? item.stream_id ?? item.series_id;
     return itemId ? `${prefix}${itemId}` : undefined;
   });
@@ -335,7 +351,8 @@ export const DETAIL_CACHE_MS = 24 * 60 * 60 * 1000;
 
 export function detailCacheKey(type: "movie" | "series", q: { movieId?: any; seasonId?: any; episodeId?: any; page?: any; search?: any }): string | null {
   if (!Number(q.movieId) || q.search || Number(q.episodeId) > 0) return null;
-  return `${type}-detail:${q.movieId}:${q.seasonId || 0}:${q.page || 1}`;
+  // v2 (2026-10-25): answers cached before then gave a movie's files another title's details.
+  return `${type}-detail-v2:${q.movieId}:${q.seasonId || 0}:${q.page || 1}`;
 }
 
 /** A stored detail answer, its image addresses moved to `origin` when it was built for another. */

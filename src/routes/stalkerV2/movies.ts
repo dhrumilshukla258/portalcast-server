@@ -431,7 +431,12 @@ export const movieRoutes: ServerRoute[] = [
           total_items: actualTotalItems,
           actual_length: itemsPerApiPage,
           total_loaded: firstPageData.length,
-          data: await enrichArtworkFromTmdb(overriddenMovieData, "movie", getPublicOrigin(request)),
+          // A title's files (movieId): that title's details, not each file id's (shared.ts);
+          // an episode's files (seasonId / episodeId): none.
+          data: await enrichArtworkFromTmdb(
+            overriddenMovieData, "movie", getPublicOrigin(request),
+            Number(movieId) === 0 ? undefined : [seasonId, episodeId].some((v) => v != null && String(v) !== "" && String(v) !== "0") ? null : String(movieId),
+          ),
           errors: false,
           isPortal: initialConfig.providerType === "stalker",
         };
