@@ -10,15 +10,42 @@ Related: [[skill-stalker-provider]], [[skill-xtream-provider]], [[skill-database
 
 Multiple portal configurations stored in `ConfigProfile`. Only one is active at a time.
 
+### Each profile's ids in their own range (2026-10-25)
+Two portals both have a category 12 or a movie 5001, and most stores are keyed by those numbers
+(category lists `vod_streams_<id>`/`series_list_<id>`, `content_meta` `movie_<id>`, tags,
+`episode_index`, TMDB matches, content manager edits, the catalog snapshot). So that two or three
+profiles never share them, every profile but the first sees its portal's ids moved:
+
+- `config/profileSlots.ts`: `system_config.profile_id_slots` = `{ profileId: slot }`. The first
+  profile to be active takes slot 0 (the portal's own ids: a one-profile server and the data
+  every server already has never change); each other profile takes the next slot the first time
+  it is activated (`switchProfile` asks before switching, so a profile that cannot get one is not
+  made active). Slots are never given twice; 32 in all. When a profile takes a slot other than 0,
+  its `Channel`, `Genre`, `EpgCache`, `ContentCache` rows and `epg_empty_<id>` are dropped (they
+  held the portal's ids) and fetched again, as an edited profile's are.
+- `providers/profileIds.ts`: `scopeProvider(provider, slot)` (applied in `serverManager.initProvider`)
+  moves `id`, `category_id`, `tv_genre_id` of every answer to `slot * 2^48 + id` and moves
+  `category`, `movieId`, `seasonId`, `episodeId`, link `id`/`series` and the guide's channel id back.
+  Only plain numbers move ("*", 0, `12345:2` pass as they are); an id outside the profile's range
+  goes in as it is. Everything else (tokens, `cache`, Stalker helpers used by downloads) is the
+  provider's own. 2^48 holds every portal id (M3U ids are 48-bit); ids stay safe integers, which
+  both apps (the TV app reads ids as text) and SQLite keep exactly.
+- `stalkerApi.setActiveChannel` (live.ts) is the one direct call with an id; it gets `portalId()`.
+- Values about the portal itself rather than its ids use `profileKey(key)` (`key@<slot>`, as is
+  in slot 0): `portal_series_source` (series as their own section, or inside VOD).
+- After a switch the catalog snapshot is rebuilt (`rebuildCatalogSoon`), as it holds the active
+  profile's categories.
+
 ### What's profile-scoped
+- Everything keyed by portal ids, through the ranges above
 - `Channel` and `Genre` DB rows — each row has a `profileId` foreign key
 - `EpgCache` — per-profile EPG data
 - `UserProgress` — progress is tied to the active profile at time of update
 
 ### What's global (not profile-scoped)
-- `GenreOverride` and `ContentOverride` — content manager changes apply to all profiles
-- `XtreamCache` — shared across profiles (keyed by category/stream ID, not profile)
-- `User` and auth data
+- `User` and auth data, settings, subtitle accounts
+- TMDB data keyed by TMDB ids (people, credits by `movie:<tmdbId>`) and channel logos by channel
+  name: the same for every portal
 
 ### Profile switching
 1. `POST /api/profiles/{id}/activate`

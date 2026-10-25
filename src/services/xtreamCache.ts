@@ -8,6 +8,7 @@ import { logger } from "@/infra/logger";
 import { initialConfig, seriesFlag } from "@/config/server";
 import { serverManager } from "@/serverManager";
 import { readGenres, upsertGenre, deleteGenre } from "@/infra/storage";
+import { activeSlot, profileKey } from "@/config/profileSlots";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -250,7 +251,7 @@ export const xtreamCache = {
 // VOD/series request. Memoize it for a short window so bursts of requests share one DB read,
 // while still picking up a change (e.g. provider switch) within a few seconds.
 const SERIES_SOURCE_TTL_MS = 10 * 60_000; // writers call invalidateSeriesSourceCache()
-let seriesSourceCache: { value: boolean; expiresAt: number } | undefined;
+let seriesSourceCache: { value: boolean; expiresAt: number; slot: number } | undefined;
 
 /** Call after writing portal_series_source, so a warm started right after sees the new value. */
 export function invalidateSeriesSourceCache(): void {
@@ -258,12 +259,13 @@ export function invalidateSeriesSourceCache(): void {
 }
 
 export async function isNativeSeriesSource(): Promise<boolean> {
-  if (seriesSourceCache && seriesSourceCache.expiresAt > Date.now()) {
+  const slot = activeSlot(); // each profile's portal has its own mode
+  if (seriesSourceCache && seriesSourceCache.expiresAt > Date.now() && seriesSourceCache.slot === slot) {
     return seriesSourceCache.value;
   }
-  const sourceRow = await XtreamCache.findOne({ where: { key: "portal_series_source" } });
+  const sourceRow = await XtreamCache.findOne({ where: { key: profileKey("portal_series_source", slot) } });
   const value = sourceRow ? JSON.parse(await decodeCacheValue(sourceRow.value)) === "native" : false;
-  seriesSourceCache = { value, expiresAt: Date.now() + SERIES_SOURCE_TTL_MS };
+  seriesSourceCache = { value, expiresAt: Date.now() + SERIES_SOURCE_TTL_MS, slot };
   return value;
 }
 

@@ -5,6 +5,7 @@ import { AppConfig, Config } from "@/types/domain";
 import { ConfigProfile } from "@/models/ConfigProfile";
 import { Token } from "@/models/Token";
 import { logger } from "@/infra/logger";
+import { slotFor, setActiveSlot } from "@/config/profileSlots";
 
 function buildTlsConfig() {
   const cert = process.env.TLS_CERT_PATH;
@@ -139,6 +140,10 @@ export async function loadActiveProfileFromDB() {
     });
     if (activeProfile) {
       Object.assign(initialConfig, activeProfile.config);
+      setActiveSlot(await slotFor(activeProfile.id).catch((err) => {
+        logger.error({ err }, `Profile "${activeProfile.name}" has no id range; using the portal's own ids`);
+        return 0;
+      }));
 
       logger.info(`✅ Loaded active profile: "${activeProfile.name}"`);
 
@@ -148,6 +153,7 @@ export async function loadActiveProfileFromDB() {
     } else {
       logger.warn("⚠️ No active profile found. Using defaults.");
       Object.assign(initialConfig, ConfigDefault);
+      setActiveSlot(0);
     }
   } catch (err) {
     logger.error({ err }, "Error loading active profile from DB");
@@ -160,6 +166,8 @@ export async function switchProfile(profileId: number) {
     if (!profile) throw new Error(`Profile ${profileId} not found`);
     if (!profile.isEnabled)
       throw new Error(`Profile "${profile.name}" is disabled.`);
+    // Before the switch, so a profile that cannot get an id range is not made active.
+    await slotFor(profile.id);
 
     await ConfigProfile.update({ isActive: false }, { where: {} });
 

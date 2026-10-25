@@ -15,6 +15,8 @@ import { streamTracker } from "@/services/StreamTracker";
 import { mintOrReuseStreamToken, streamTokenFromRequest, resolveStreamTokenFor, inheritTokenMeta, type StreamTokenMeta } from "@/services/StreamTokens";
 import { recordFailure, recordSuccess } from "@/services/StreamFailures";
 import { segmentKey, primeSegment, readSegment, type CachedSegment } from "@/services/segmentCache";
+import { portalId } from "@/providers/profileIds";
+import { activeSlot } from "@/config/profileSlots";
 
 const sequenceRegex = /#EXT-X-MEDIA-SEQUENCE:(\d+)/;
 
@@ -340,7 +342,7 @@ async function serveLivePlaylist(request: any, h: any, entry: NonNullable<Return
   const meta: StreamTokenMeta = inheritTokenMeta(entry);
   streamTracker.touch("live", request.info.remoteAddress, cmd, userLabel, meta);
   if (id && !directLinks()) {
-    stalkerApi.setActiveChannel(id);
+    stalkerApi.setActiveChannel(portalId(id, activeSlot()));
   }
 
   // proxy=1 forces proxying for browsers (they can't follow redirects to the

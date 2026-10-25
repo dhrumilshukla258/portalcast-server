@@ -211,6 +211,8 @@ export const profileRoutes: ServerRoute[] = [
         logger.info("Switching profile. Reloading config without restart...");
         await serverManager.reloadConfig();
         stalkerApi.clearCache();
+        // The catalog snapshot holds the active profile's categories.
+        void import("@/content/catalog/store").then((m) => m.rebuildCatalogSoon("profile switch")).catch(() => undefined);
 
         const hash = crypto.createHash("md5").update(JSON.stringify(profile.config)).digest("hex");
         socketService.broadcastConfigChange(hash);

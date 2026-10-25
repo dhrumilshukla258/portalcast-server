@@ -37,6 +37,8 @@ const MIN_REBUILD_MS = 10 * 60_000;
 
 let current: CatalogSnapshot | null = null;
 let building = false;
+/** A rebuild asked for while one ran (the active profile changed meanwhile). */
+let again: string | null = null;
 let lastBuildAt = 0;
 let pendingSince = 0;
 let pollTimer: NodeJS.Timeout | null = null;
@@ -203,7 +205,18 @@ export async function rebuildCatalogSnapshot(reason: string): Promise<void> {
     logger.warn(`[catalog] snapshot build failed (${reason}); keeping the previous one: ${e?.message ?? e}`);
   } finally {
     building = false;
+    if (again) { const r = again; again = null; void rebuildCatalogSnapshot(r); }
   }
+}
+
+/**
+ * Rebuilds now, or right after the build that is running: for a change no table shows, such as
+ * the active profile (the snapshot holds the active profile's categories).
+ */
+export function rebuildCatalogSoon(reason: string): void {
+  if (!setting<boolean>("catalogSnapshot") || !current) return;
+  if (building) { again = reason; return; }
+  void rebuildCatalogSnapshot(reason);
 }
 
 async function poll(): Promise<void> {

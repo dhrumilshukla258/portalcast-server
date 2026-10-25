@@ -5,6 +5,8 @@ import { XtreamClient } from "@/providers/xtream-client";
 import { M3uProvider } from "@/providers/m3u/provider";
 import { initialConfig, loadActiveProfileFromDB } from "@/config/server";
 import { logger } from "@/infra/logger";
+import { scopeProvider } from "@/providers/profileIds";
+import { activeSlot } from "@/config/profileSlots";
 
 class ServerManager {
   private static instance: ServerManager;
@@ -36,6 +38,8 @@ class ServerManager {
       stalkerApi.loadTokenFromDB();
       logger.info("Initialized Stalker Provider");
     }
+    // A profile other than the first sees its portal's ids in its own range (providers/profileIds.ts).
+    this.provider = scopeProvider(this.provider, activeSlot());
   }
 
   getProvider(): IProvider {
