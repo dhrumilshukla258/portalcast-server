@@ -16,7 +16,8 @@ COPY . .
 RUN --mount=type=secret,id=opensubtitles_key,required=false \
     PORTALCAST_OPENSUBTITLES_KEY="$(cat /run/secrets/opensubtitles_key 2>/dev/null || true)" npm run build
 
-RUN npm prune --omit=dev
+# Only what sqlite3 loads: every other dependency is bundled into dist/server.js.
+RUN node packaging/runtime-modules.mjs /app/runtime_modules
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -27,8 +28,9 @@ RUN apk add --no-cache tzdata ffmpeg
 
 WORKDIR /app
 
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/node_modules ./node_modules
+# The server only (its 15 MB source map is for debugging builds, not for running).
+COPY --from=builder /app/dist/server.js ./dist/server.js
+COPY --from=builder /app/runtime_modules ./node_modules
 COPY --from=builder /app/public ./public
 COPY package.json ./
 

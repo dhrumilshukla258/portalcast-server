@@ -52,7 +52,7 @@ jobs:
           echo "PORTALCAST_VERSION=$V" >> "$GITHUB_ENV"
           echo "NODE_VERSION=$(node -p process.version)" >> "$GITHUB_ENV"
 
-      - name: Install, build, prune
+      - name: Install and build
         env:
           # src/content/builtInKeys.ts; empty when the repository has no such secret.
           PORTALCAST_OPENSUBTITLES_KEY: ${{ secrets.OPENSUBTITLES_APP_KEY }}
@@ -62,7 +62,6 @@ jobs:
           # Raspberry Pi OS have older): build it here instead, so it runs on glibc >= 2.35.
           if [[ "$RUNNER_OS" == "Linux" ]]; then npm rebuild sqlite3 --build-from-source; fi
           npm run build
-          npm prune --omit=dev
 
       - name: Fetch Node.js runtime (${{ env.NODE_VERSION }}, ${{ matrix.node }})
         run: |

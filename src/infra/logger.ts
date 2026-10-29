@@ -1,4 +1,5 @@
 import pino from "pino";
+import pretty from "pino-pretty";
 
 let broadcastLogFn:
   | ((level: string, message: string, timestamp: string) => void)
@@ -10,17 +11,17 @@ export const setLogBroadcaster = (
   broadcastLogFn = fn;
 };
 
-const pinoLogger = pino({
-  level: process.env.LOG_LEVEL || "info",
-  transport: {
-    target: "pino-pretty",
-    options: {
-      colorize: true,
-      translateTime: "SYS:standard",
-      ignore: "pid,hostname",
-    },
-  },
-});
+// Pretty lines written in this thread, not a transport worker: a worker loads pino-pretty
+// from node_modules by name, and the packaged server bundles its dependencies into one file
+// (tsup.config.ts) instead of shipping thousands of node_modules files.
+const pinoLogger = pino(
+  { level: process.env.LOG_LEVEL || "info" },
+  pretty({
+    colorize: true,
+    translateTime: "SYS:standard",
+    ignore: "pid,hostname",
+  }),
+);
 
 const logToSocket = (level: string, args: any[]) => {
   try {

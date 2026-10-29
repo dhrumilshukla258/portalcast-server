@@ -19,6 +19,9 @@ class SocketService {
 
   public init(httpServer: Server) {
     this.io = new SocketIOServer(httpServer, {
+      // The apps bring their own socket.io client; the packaged server has no copy of it to serve
+      // (dependencies are bundled into dist/server.js, tsup.config.ts).
+      serveClient: false,
       cors: {
         origin: setting<string[]>("allowedOrigins").length ? setting<string[]>("allowedOrigins") : false,
         methods: ["GET", "POST"],
