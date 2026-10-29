@@ -8,7 +8,8 @@
 //
 // It:
 //   - finds or creates the config file (KEY=VALUE lines) and the data directory;
-//     on first run generates JWT_SECRET and an admin password and writes FIRST-RUN.txt
+//     on first run generates JWT_SECRET and writes FIRST-RUN.txt (the admin account is created
+//     in the browser on the first visit: routes/account/setup.ts)
 //   - runs `node dist/server.js` with cwd=app (the server serves ./public from cwd) and
 //     UV_THREADPOOL_SIZE set before the process starts (libuv reads it once at startup)
 //   - restarts the server if it crashes, with backoff; forwards SIGINT/SIGTERM
@@ -116,7 +117,6 @@ function ensureConfig() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   if (fs.existsSync(CONFIG_FILE)) return false;
   fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
-  const adminPassword = crypto.randomBytes(12).toString("base64url");
   const body = [
     "# PortalCast Server configuration. Restart the server after editing.",
     "# Full list of settings: https://github.com/dhrumilshukla258/portalcast-server/blob/main/.env.example",
@@ -125,9 +125,10 @@ function ensureConfig() {
     "NODE_ENV=production",
     `JWT_SECRET=${crypto.randomBytes(32).toString("hex")}`,
     "",
-    "# Admin sign-in (email + password on the login page). Change both.",
-    "ADMIN_EMAIL=admin@localhost",
-    `ADMIN_PASSWORD=${adminPassword}`,
+    "# The admin account is created in the browser on the first visit (like Jellyfin's setup).",
+    "# Optional recovery sign-in that always works: set both and restart.",
+    "# ADMIN_EMAIL=",
+    "# ADMIN_PASSWORD=",
     "",
     "# Optional",
     "# TMDB_API_READ_TOKEN=      (posters, backdrops, genres for Discover)",
@@ -140,11 +141,12 @@ function ensureConfig() {
   const note = [
     "PortalCast Server — first run",
     "",
-    "Open http://localhost:3000 and sign in with:",
-    "  email:    admin@localhost",
-    `  password: ${adminPassword}`,
+    "Open http://localhost:3000 now and create your admin account there.",
+    "The first person to open the page creates it, so do it right after installing.",
+    "Then Admin > Overview walks you through the rest: your IPTV provider, Jellyfin,",
+    "artwork (TMDB), subtitles, users and the apps.",
     "",
-    `Change them in ${CONFIG_FILE} and restart the server.`,
+    `Settings file: ${CONFIG_FILE}`,
     "",
   ].join(os.EOL);
   fs.writeFileSync(path.join(path.dirname(CONFIG_FILE), "FIRST-RUN.txt"), note, { mode: 0o600 });

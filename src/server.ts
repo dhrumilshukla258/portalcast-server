@@ -14,6 +14,7 @@ import { libraryAdminRoutes } from "./routes/library/admin";
 import { localStreamRoutes } from "./routes/library/stream";
 import { scanLibraries } from "./content/library/scanner";
 import { setupRoutes, needsSetup } from "./routes/account/setup";
+import { setupGuideRoutes } from "./routes/admin/setupGuide";
 import { registerJob, startJobs, runJobNow } from "./services/jobs";
 import { prefillCardPosters } from "./content/posterPrefill";
 import { runIntegrityCheck } from "./services/integrity";
@@ -204,6 +205,7 @@ const init = async () => {
   server.route(adminRoutes);
   server.route(authRoutes);
   server.route(setupRoutes);
+  server.route(setupGuideRoutes);
   server.route(libraryAdminRoutes);
   server.route(localStreamRoutes);
   server.route(userRoutes);

@@ -59,7 +59,7 @@ Name: "{commonappdata}\PortalCast\logs"
 Name: "{group}\PortalCast Server"; Filename: "{app}\PortalCast Server.exe"
 Name: "{group}\Open PortalCast in the browser"; Filename: "http://localhost:3000"
 Name: "{group}\PortalCast settings"; Filename: "{commonappdata}\PortalCast\portalcast.env"
-Name: "{group}\First-run sign-in details"; Filename: "{commonappdata}\PortalCast\FIRST-RUN.txt"
+Name: "{group}\Getting started"; Filename: "{commonappdata}\PortalCast\FIRST-RUN.txt"
 Name: "{group}\Uninstall PortalCast Server"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\PortalCast Server"; Filename: "{app}\PortalCast Server.exe"; Tasks: desktopicon
 
@@ -70,7 +70,8 @@ Root: HKLM; Subkey: "Software\PortalCast"; ValueType: string; ValueName: "Servic
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "PortalCast Server"; Flags: uninsdeletevalue dontcreatekey
 
 [Run]
-; First-run config (random JWT secret + admin password) in C:\ProgramData\PortalCast.
+; First-run config (random JWT secret) in C:\ProgramData\PortalCast; the admin account is
+; created in the browser on the first visit.
 Filename: "{app}\node\node.exe"; Parameters: """{app}\launcher.js"" --init-config"; Flags: runhidden waituntilterminated
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""PortalCast Server"""; Flags: runhidden waituntilterminated
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""PortalCast Server"" dir=in action=allow protocol=TCP localport=3000"; Flags: runhidden waituntilterminated
@@ -84,7 +85,7 @@ Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\PortalCast"" /grant
 Filename: "{app}\PortalCast Server.exe"; Parameters: "--autostart-on"; Description: "Start PortalCast Server"; Flags: postinstall nowait skipifsilent runasoriginaluser; Tasks: autostart and not service
 Filename: "{app}\PortalCast Server.exe"; Parameters: "--autostart-off"; Description: "Start PortalCast Server"; Flags: postinstall nowait skipifsilent runasoriginaluser; Tasks: not autostart and not service
 Filename: "{app}\PortalCast Server.exe"; Description: "Show the server's log"; Flags: postinstall nowait skipifsilent runasoriginaluser unchecked; Tasks: service
-Filename: "{commonappdata}\PortalCast\FIRST-RUN.txt"; Description: "Show the admin sign-in details"; Flags: postinstall shellexec skipifsilent unchecked
+Filename: "{commonappdata}\PortalCast\FIRST-RUN.txt"; Description: "Show getting started"; Flags: postinstall shellexec skipifsilent unchecked
 
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM ""PortalCast Server.exe"""; Flags: runhidden; RunOnceId: "KillApp"

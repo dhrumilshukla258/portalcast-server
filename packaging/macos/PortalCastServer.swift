@@ -136,7 +136,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             button("Stop", #selector(stop)),
             button("Restart", #selector(restart)),
             button("Settings", #selector(openSettings)),
-            button("Sign-in details", #selector(openFirstRun)),
+            button("Getting started", #selector(openFirstRun)),
             button("Logs folder", #selector(openLogs)),
         ])
         buttons.spacing = 8

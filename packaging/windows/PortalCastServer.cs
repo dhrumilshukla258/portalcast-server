@@ -312,7 +312,7 @@ namespace PortalCast
             buttons.Controls.Add(stopBtn);
             buttons.Controls.Add(MakeButton("Restart", delegate { StopServer(); StartServer(); }, false));
             buttons.Controls.Add(MakeButton("Settings", delegate { OpenFile(Paths.Config); }, false));
-            buttons.Controls.Add(MakeButton("Sign-in details", delegate { OpenFile(Paths.FirstRun); }, false));
+            buttons.Controls.Add(MakeButton("Getting started", delegate { OpenFile(Paths.FirstRun); }, false));
             buttons.Controls.Add(MakeButton("Logs folder", delegate { OpenFolder(Paths.Logs); }, false));
             autostart.Text = "Start with Windows";
             autostart.AutoSize = true;
