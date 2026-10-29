@@ -10,7 +10,8 @@ priority: optional
 maintainer: PortalCast <noreply@github.com>
 description: |
   PortalCast Server: IPTV portal gateway with a web UI and TV app backend.
-  Runs as the systemd service "portalcast" on port 3000.
+  Runs as the systemd service "portalcast" on port 3000; the "portalcast" command starts,
+  stops and shows its log (portalcast status | start | stop | restart | logs -f | open).
 homepage: https://github.com/dhrumilshukla258/portalcast-server
 license: MIT
 recommends:
@@ -21,6 +22,10 @@ contents:
     type: tree
   - src: packaging/linux/portalcast.service
     dst: /lib/systemd/system/portalcast.service
+  - src: packaging/linux/portalcast
+    dst: /usr/bin/portalcast
+    file_info:
+      mode: 0755
 scripts:
   postinstall: packaging/linux/postinstall.sh
   preremove: packaging/linux/preremove.sh

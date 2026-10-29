@@ -12,11 +12,17 @@
 //   - runs `node dist/server.js` with cwd=app (the server serves ./public from cwd) and
 //     UV_THREADPOOL_SIZE set before the process starts (libuv reads it once at startup)
 //   - restarts the server if it crashes, with backoff; forwards SIGINT/SIGTERM
+//   - with --log-file, also writes everything to that file (the Windows app and the
+//     background service show it; it is cut at 10 MB, the previous part kept as <file>.1)
 //
 // Usage:
 //   launcher.js                       run (foreground; used by systemd / the startup task)
 //   launcher.js --init-config         only create config + data dir, print their paths
 //   options: --config <file> --data <dir>   (env PORTALCAST_CONFIG / PORTALCAST_DATA also work)
+//            --log-file <file>              (env PORTALCAST_LOG_FILE)
+//            --stop-on-stdin-end            stop when stdin closes: how the Windows app stops the
+//                                           server cleanly (Windows has no SIGTERM), and the
+//                                           server never outlives the app
 
 "use strict";
 const fs = require("fs");
@@ -53,6 +59,43 @@ function defaultDirs() {
 const defaults = defaultDirs();
 const CONFIG_FILE = path.resolve(arg("--config") || process.env.PORTALCAST_CONFIG || defaults.config);
 const DATA_DIR = path.resolve(arg("--data") || process.env.PORTALCAST_DATA || defaults.data);
+const LOG_FILE = arg("--log-file") || process.env.PORTALCAST_LOG_FILE || null;
+const LOG_LIMIT = 10 * 1024 * 1024;
+
+// Appends to LOG_FILE; past LOG_LIMIT the file becomes <file>.1 and a new one starts.
+// A log that cannot be written never stops the server.
+function logWriter(file) {
+  let fd = null, size = 0;
+  const open = () => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fd = fs.openSync(file, "a");
+    size = fs.fstatSync(fd).size;
+  };
+  try { open(); } catch (e) { console.error(`[launcher] cannot write the log ${file}: ${e.message}`); return null; }
+  return (chunk) => {
+    try {
+      if (size > LOG_LIMIT) {
+        fs.closeSync(fd);
+        try { fs.renameSync(file, `${file}.1`); } catch {}
+        open();
+      }
+      fs.writeSync(fd, chunk);
+      size += Buffer.byteLength(chunk);
+    } catch {}
+  };
+}
+const writeLog = LOG_FILE ? logWriter(path.resolve(LOG_FILE)) : null;
+// Local time, as the server's own lines are (the log is read by people, in the app's window).
+const stamp = () => {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+};
+function say(line, err = false) {
+  const text = `${line}\n`;
+  (err ? process.stderr : process.stdout).write(text);
+  if (writeLog) writeLog(`${stamp()} ${text}`);
+}
 
 function parseEnv(text) {
   const out = {};
@@ -124,8 +167,8 @@ const env = {
   SQLITE_DB_PATH: path.join(DATA_DIR, "database.db"),
   ...fileEnv,
 };
-if (created) console.log(`[launcher] First run: sign-in details written to ${path.join(path.dirname(CONFIG_FILE), "FIRST-RUN.txt")}`);
-console.log(`[launcher] config ${CONFIG_FILE} | data ${DATA_DIR} | http://localhost:${env.PORT || 3000}`);
+if (created) say(`[launcher] First run: sign-in details written to ${path.join(path.dirname(CONFIG_FILE), "FIRST-RUN.txt")}`);
+say(`[launcher] config ${CONFIG_FILE} | data ${DATA_DIR} | http://localhost:${env.PORT || 3000}`);
 
 let child = null;
 let stopping = false;
@@ -134,25 +177,37 @@ let startedAt = 0;
 
 function start() {
   startedAt = Date.now();
-  child = spawn(NODE_BIN, [path.join(APP_DIR, "dist", "server.js")], { cwd: APP_DIR, env, stdio: "inherit" });
+  child = spawn(NODE_BIN, [path.join(APP_DIR, "dist", "server.js")], { cwd: APP_DIR, env, stdio: writeLog ? ["ignore", "pipe", "pipe"] : "inherit", windowsHide: true });
+  if (writeLog) {
+    // The server's own lines carry their time already.
+    child.stdout.on("data", (d) => { process.stdout.write(d); writeLog(d); });
+    child.stderr.on("data", (d) => { process.stderr.write(d); writeLog(d); });
+  }
   child.on("exit", (code, signal) => {
     child = null;
     if (stopping) return process.exit(code ?? 0);
     // A run that lasted a while resets the backoff; quick crash loops back off up to 60 s.
     failures = Date.now() - startedAt > 60_000 ? 1 : failures + 1;
     const delay = Math.min(60_000, 1000 * 2 ** (failures - 1));
-    console.error(`[launcher] server exited (${signal || code}); restarting in ${Math.round(delay / 1000)} s`);
+    say(`[launcher] server exited (${signal || code}); restarting in ${Math.round(delay / 1000)} s`, true);
     setTimeout(start, delay);
   });
 }
 
-for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
-  process.on(sig, () => {
-    stopping = true;
-    if (child) child.kill("SIGTERM");
-    else process.exit(0);
-    setTimeout(() => process.exit(0), 10_000).unref();
-  });
+function stop(why) {
+  if (stopping) return;
+  stopping = true;
+  say(`[launcher] stopping (${why})`);
+  if (child) child.kill("SIGTERM");
+  else process.exit(0);
+  setTimeout(() => process.exit(0), 10_000).unref();
+}
+
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, () => stop(sig));
+if (process.argv.includes("--stop-on-stdin-end")) {
+  process.stdin.on("end", () => stop("the app closed"));
+  process.stdin.on("error", () => stop("the app closed"));
+  process.stdin.resume();
 }
 
 start();

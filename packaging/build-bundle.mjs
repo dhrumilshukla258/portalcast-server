@@ -50,7 +50,9 @@ const version = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
 fs.writeFileSync(path.join(out, "README.txt"), [
   `PortalCast Server ${process.env.PORTALCAST_VERSION || version}`,
   "",
-  "Start:   node/bin/node launcher.js      (Windows: node\\node.exe launcher.js)",
+  "Start:   Windows: \"PortalCast Server.exe\" (a window with the log and Start/Stop; in the tray when closed)",
+  "         macOS: the PortalCast Server app.  Linux (.deb): portalcast start | stop | status | logs -f",
+  "         By hand: node/bin/node launcher.js  (Windows: node\\node.exe launcher.js)",
   "Open:    http://localhost:3000",
   "",
   "First run creates the config file and FIRST-RUN.txt with the admin sign-in.",

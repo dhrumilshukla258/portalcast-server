@@ -1,0 +1,40 @@
+#!/bin/sh
+# portalcast: start, stop and watch the PortalCast Server service (installed with the .deb).
+#   portalcast status | start | stop | restart | logs [-f] | open | config | signin
+set -e
+SERVICE=portalcast
+CONFIG=/etc/portalcast/portalcast.env
+PORT=$(sed -n 's/^PORT=//p' "$CONFIG" 2>/dev/null | tr -d '"'"'" | head -n1)
+PORT=${PORT:-3000}
+URL="http://localhost:$PORT"
+
+as_root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
+
+case "${1:-status}" in
+  start|stop|restart)
+    as_root systemctl "$1" "$SERVICE"
+    [ "$1" = stop ] || echo "PortalCast Server: $URL"
+    ;;
+  status)
+    systemctl --no-pager status "$SERVICE" | head -n 5 || true
+    if curl -fs "$URL/api/health" >/dev/null 2>&1; then echo "Answering at $URL"; else echo "Not answering at $URL"; fi
+    ;;
+  logs)
+    shift
+    as_root journalctl -u "$SERVICE" --no-pager -n 200 "$@"
+    ;;
+  open)
+    (xdg-open "$URL" >/dev/null 2>&1 &) || echo "$URL"
+    ;;
+  config)
+    as_root "${EDITOR:-nano}" "$CONFIG"
+    echo "Restart to apply: portalcast restart"
+    ;;
+  signin)
+    as_root cat /etc/portalcast/FIRST-RUN.txt
+    ;;
+  *)
+    echo "usage: portalcast status | start | stop | restart | logs [-f] | open | config | signin"
+    exit 2
+    ;;
+esac
