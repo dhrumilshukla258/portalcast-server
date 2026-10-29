@@ -53,6 +53,9 @@ jobs:
           echo "NODE_VERSION=$(node -p process.version)" >> "$GITHUB_ENV"
 
       - name: Install, build, prune
+        env:
+          # src/content/builtInKeys.ts; empty when the repository has no such secret.
+          PORTALCAST_OPENSUBTITLES_KEY: ${{ secrets.OPENSUBTITLES_APP_KEY }}
         run: |
           npm ci
           # sqlite3's prebuilt Linux binary needs glibc 2.38 (the runner, Debian 12 and

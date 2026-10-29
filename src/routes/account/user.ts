@@ -1,3 +1,4 @@
+import { serverOpenSubtitlesKey } from "@/content/subtitleKeys";
 import { cleanLeagueChoice } from "@/content/sports";
 import { withProgressMirrors } from "@/content/progressMirror";
 import { uploadsDir } from "@/infra/paths";
@@ -438,7 +439,7 @@ export const userRoutes: ServerRoute[] = [
         username: user.openSubtitlesUsername || null,
         // Keys are never returned, only whether they are set (own) or provided by the server.
         hasOwnApiKey: Boolean(user.openSubtitlesApiKeyEnc),
-        serverHasApiKey: Boolean(setting<string>("openSubtitlesKey")),
+        serverHasApiKey: Boolean(serverOpenSubtitlesKey()),
         subdl: { hasOwnApiKey: Boolean(user.subdlApiKeyEnc), serverHasApiKey: Boolean(setting<string>("subdlKey")) },
       };
     },
@@ -462,7 +463,7 @@ export const userRoutes: ServerRoute[] = [
 
       const user = await User.findByPk(userPayload.userId);
       if (!user) return h.response({ error: "User not found" }).code(404);
-      const keyToUse = ownKey || (user.openSubtitlesApiKeyEnc ? (await subtitleKeysFor(user.id)).openSubtitles : setting<string>("openSubtitlesKey"));
+      const keyToUse = ownKey || (user.openSubtitlesApiKeyEnc ? (await subtitleKeysFor(user.id)).openSubtitles : serverOpenSubtitlesKey());
 
       if (username && password) {
         // Verify the credentials actually work before storing them — an

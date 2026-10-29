@@ -6,6 +6,12 @@ import { setting } from "@/config/settings";
 import { User } from "@/models/User";
 import { decryptSecret } from "@/auth/crypto";
 import { logger } from "@/infra/logger";
+import { BUILT_IN_OPENSUBTITLES_KEY } from "@/content/builtInKeys";
+
+/** The server's OpenSubtitles key: Admin › Settings (or env), else the one built into official builds. */
+export function serverOpenSubtitlesKey(): string {
+  return setting<string>("openSubtitlesKey") || BUILT_IN_OPENSUBTITLES_KEY;
+}
 
 export interface SubtitleKeys {
   openSubtitles: string;
@@ -37,7 +43,7 @@ export async function subtitleKeysFor(userId?: number): Promise<SubtitleKeys> {
       cache.set(userId, { at: Date.now(), keys: own });
     }
   }
-  return { openSubtitles: own.openSubtitles || setting<string>("openSubtitlesKey"), subdl: own.subdl || setting<string>("subdlKey") };
+  return { openSubtitles: own.openSubtitles || serverOpenSubtitlesKey(), subdl: own.subdl || setting<string>("subdlKey") };
 }
 
 export function forgetSubtitleKeys(userId: number): void {

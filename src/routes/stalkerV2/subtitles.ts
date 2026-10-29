@@ -36,6 +36,7 @@ import { fetchMovieMeta, fetchTVMeta } from "@/content/tmdb";
 import { searchSubtitles, resolveSubtitleDownloadUrl, type SubtitleResult } from "@/content/opensubtitles";
 import { searchSubdl, downloadSubdlText, isValidSubdlPath } from "@/content/subdl";
 import { subtitleKeysFor } from "@/content/subtitleKeys";
+import { searchGestdown, downloadGestdownText, isValidGestdownId } from "@/content/gestdown";
 import {
   streamUserLabel,
   CACHE_DURATION_MS,
@@ -52,8 +53,8 @@ const searchCache = new Map<string, { at: number; results: unknown[] }>();
 
 export const subtitleRoutes: ServerRoute[] = [
   {
-    // Searches every configured source in parallel (OpenSubtitles, SubDL) and merges:
-    // OpenSubtitles first by popularity, then SubDL. Each result carries `downloadId`.
+    // Searches every source in parallel (OpenSubtitles, SubDL, and Gestdown for episodes) and
+    // merges: OpenSubtitles first by popularity, then SubDL, then Gestdown. Each result carries `downloadId`.
     method: "GET",
     path: "/api/v2/subtitles/search",
     handler: async (request, h) => {
@@ -80,8 +81,8 @@ export const subtitleRoutes: ServerRoute[] = [
         };
         const caller = authCheck(request);
         const keys = await subtitleKeysFor(caller ? caller.userId : undefined);
-        const [os, subdl] = await Promise.all([searchSubtitles(params, keys.openSubtitles), searchSubdl(params, keys.subdl)]);
-        const results: SubtitleResult[] = [...os, ...subdl];
+        const [os, subdl, gd] = await Promise.all([searchSubtitles(params, keys.openSubtitles), searchSubdl(params, keys.subdl), searchGestdown(params)]);
+        const results: SubtitleResult[] = [...os, ...subdl, ...gd];
         if (results.length > 0) {
           searchCache.set(key, { at: Date.now(), results });
           if (searchCache.size > 500) searchCache.delete(searchCache.keys().next().value as string);
@@ -95,7 +96,7 @@ export const subtitleRoutes: ServerRoute[] = [
   },
 
   {
-    // ?id=os:<fileId> | subdl:/subtitle/<x>.zip   (older clients: ?fileId=<n>)
+    // ?id=os:<fileId> | subdl:/subtitle/<x>.zip | gd:<id>   (older clients: ?fileId=<n>)
     method: "GET",
     path: "/api/v2/subtitles/download",
     handler: async (request, h) => {
@@ -104,7 +105,8 @@ export const subtitleRoutes: ServerRoute[] = [
         const id = q.id ?? (q.fileId ? `os:${q.fileId}` : "");
         const osMatch = /^os:(\d{1,12})$/.exec(id);
         const subdlPath = id.startsWith("subdl:") ? id.slice("subdl:".length) : null;
-        if (!osMatch && !(subdlPath && isValidSubdlPath(subdlPath))) {
+        const gestdownId = id.startsWith("gd:") ? id.slice(3) : null;
+        if (!osMatch && !(subdlPath && isValidSubdlPath(subdlPath)) && !(gestdownId && isValidGestdownId(gestdownId))) {
           return h.response({ error: "Missing or invalid subtitle id" }).code(400);
         }
 
@@ -126,6 +128,8 @@ export const subtitleRoutes: ServerRoute[] = [
         } else if (subdlPath) {
           const caller = authCheck(request);
           text = await downloadSubdlText(subdlPath, (await subtitleKeysFor(caller ? caller.userId : undefined)).subdl);
+        } else if (gestdownId) {
+          text = await downloadGestdownText(gestdownId);
         }
         if (!text || !text.trim()) return h.response({ error: "Subtitle download failed" }).code(502);
 

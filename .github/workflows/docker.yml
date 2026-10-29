@@ -64,6 +64,9 @@ jobs:
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+          # src/content/builtInKeys.ts; empty when the repository has no such secret.
+          secrets: |
+            opensubtitles_key=${{ secrets.OPENSUBTITLES_APP_KEY }}
 
       - name: Keep the digest
         env:

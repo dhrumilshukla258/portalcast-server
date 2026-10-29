@@ -45,7 +45,7 @@ const DEFS: SettingDef[] = [
   { key: "omdbKeys", env: "OMDB_API_KEY", type: "list", default: [], secret: true, group: "Metadata services", label: "OMDb API keys", help: "Rotten Tomatoes and Metacritic scores. Several keys, comma-separated, are used one after another.", apply: "live" },
   { key: "omdbDailyLimit", env: "OMDB_DAILY_LIMIT", type: "number", default: 900, min: 0, max: 100000, group: "Metadata services", label: "OMDb calls per key per day", help: "A free key allows 1,000 a day. 0 turns OMDb off.", apply: "live" },
   { key: "tvmazeEnabled", type: "boolean", default: true, group: "Metadata services", label: "Use TVmaze", help: "Descriptions and cast for series TMDB does not know. Public API, no key.", apply: "live" },
-  { key: "openSubtitlesKey", env: "OPENSUBTITLES_API_KEY", type: "string", default: "", secret: true, group: "Metadata services", label: "OpenSubtitles API key", help: "Server-wide key; a user's own key in their settings takes priority.", apply: "live" },
+  { key: "openSubtitlesKey", env: "OPENSUBTITLES_API_KEY", type: "string", default: "", secret: true, group: "Metadata services", label: "OpenSubtitles API key", help: "Server-wide key; a user's own key in their settings takes priority. Empty: official builds use their built-in key (about 5 downloads a day per server without an OpenSubtitles account; each user can link theirs for more). Episodes are also searched on Gestdown, free and keyless.", apply: "live" },
   { key: "subdlKey", env: "SUBDL_API_KEY", type: "string", default: "", secret: true, group: "Metadata services", label: "SubDL API key", help: "Second subtitle source.", apply: "live" },
 
   // Email

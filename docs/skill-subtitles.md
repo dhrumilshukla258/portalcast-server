@@ -32,6 +32,12 @@ This code used to live inside the now-deleted `hls.ts` (VOD transcode proxy). Wh
 
 These are regular `fetch()` calls from an already-authenticated web UI session, so they just ride the normal Bearer-JWT gate — no stream token needed (unlike #1 above, which the player element itself has to hit without a header).
 
+### Built-in key and Gestdown (2026-10-29)
+
+- **Built-in OpenSubtitles key**: official builds carry one (`src/content/builtInKeys.ts`), put in at build time from the GitHub secret `OPENSUBTITLES_APP_KEY` (`tsup.config.ts` `define`; `release.yml` passes it as `PORTALCAST_OPENSUBTITLES_KEY`, `docker.yml` as the BuildKit secret `opensubtitles_key`). It is never in the repository; builds without the secret have none. Order: the user's own key, else Admin › Settings / `OPENSUBTITLES_API_KEY`, else the built-in one (`serverOpenSubtitlesKey()` in `content/subtitleKeys.ts`). Without a linked account OpenSubtitles allows only a few downloads a day per server address; every download is stored in `subtitle_files` and reused, so each subtitle costs quota once.
+- **Gestdown** (`src/content/gestdown.ts`): free and keyless (Addic7ed's subtitles), episodes only. Searched with the others when a season and episode are given; the show is the one whose name is the title. Download ids `gd:<id>`. Test: `test/gestdown.test.ts`.
+- User-Agent sent to OpenSubtitles: `PortalCast v1` (register the consumer under that name).
+
 ### Two-tier credential model
 
 - **`OPENSUBTITLES_API_KEY`** (env var, required for anything to work) — identifies your app to OpenSubtitles, sent as `Api-Key` header on every request. If unset, `searchSubtitles()` logs a warning and returns `[]` immediately — **search silently returning nothing is the #1 symptom of a missing key**, check the server log for `[OpenSubtitles] OPENSUBTITLES_API_KEY is not set` first.

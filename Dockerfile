@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM node:20-alpine AS builder
 
 WORKDIR /app
@@ -9,7 +10,11 @@ COPY package*.json ./
 RUN npm ci
 
 COPY . .
-RUN npm run build
+# Official images get the OpenSubtitles key from a build secret (src/content/builtInKeys.ts);
+# without one (local builds) there is none. The mount leaves nothing in the build history;
+# the built server itself carries the key, as any app with a built-in key does.
+RUN --mount=type=secret,id=opensubtitles_key,required=false \
+    PORTALCAST_OPENSUBTITLES_KEY="$(cat /run/secrets/opensubtitles_key 2>/dev/null || true)" npm run build
 
 RUN npm prune --omit=dev
 
