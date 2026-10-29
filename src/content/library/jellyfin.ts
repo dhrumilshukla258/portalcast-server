@@ -279,3 +279,33 @@ export function needsJellyfinTranscode(f: { videoCodec: string | null; container
   if (audio && !BROWSER_AUDIO.has(String(audio.codec).toLowerCase())) return true;
   return !!f.container && !BROWSER_CONTAINERS.has(f.container);
 }
+
+// ---- Jellyfin's own subtitle search (its OpenSubtitles plugin and account) ----------
+
+/** ISO 639-1 -> 639-2/B, the codes Jellyfin's subtitle search takes. */
+const LANG3: Record<string, string> = {
+  en: "eng", hi: "hin", ta: "tam", te: "tel", ml: "mal", kn: "kan", bn: "ben", mr: "mar", gu: "guj", pa: "pan", ur: "urd",
+  ar: "ara", es: "spa", pt: "por", fr: "fre", de: "ger", it: "ita", nl: "dut", pl: "pol", ru: "rus", tr: "tur", el: "gre",
+  he: "heb", fa: "per", zh: "chi", ja: "jpn", ko: "kor", th: "tha", vi: "vie", id: "ind", ms: "may", sv: "swe", no: "nor",
+  da: "dan", fi: "fin", ro: "rum",
+};
+
+export interface JellyfinSubtitleHit { id: string; name: string; provider: string; downloads: number; exact: boolean }
+
+/** Subtitles Jellyfin's subtitle plugins find for one of its items, in a language. */
+export async function jellyfinSubtitleSearch(itemId: string, language: string | undefined): Promise<JellyfinSubtitleHit[]> {
+  const lang3 = LANG3[String(language || "en").slice(0, 2).toLowerCase()];
+  if (!isJellyfinId(itemId) || !lang3) return [];
+  const list = await getJson<any[]>(`/Items/${itemId}/RemoteSearch/Subtitles/${lang3}`, 30_000);
+  return (Array.isArray(list) ? list : [])
+    .filter((s) => typeof s?.Id === "string" && /^[\w.:-]{1,200}$/.test(s.Id))
+    .map((s) => ({ id: s.Id, name: String(s.Name || s.Comment || "Subtitle").slice(0, 200), provider: String(s.ProviderName || "Jellyfin"), downloads: Number(s.DownloadCount) || 0, exact: Boolean(s.IsHashMatch) }));
+}
+
+/** A subtitle file Jellyfin's search found, as text (not saved in Jellyfin). */
+export async function jellyfinSubtitleText(subtitleId: string): Promise<string | null> {
+  if (!/^[\w.:-]{1,200}$/.test(subtitleId)) return null;
+  const res = await jellyfinFetch(`/Providers/Subtitles/Subtitles/${encodeURIComponent(subtitleId)}`, { signal: AbortSignal.timeout(60_000) });
+  if (!res.ok) { await res.body?.cancel().catch(() => {}); return null; }
+  return res.text();
+}

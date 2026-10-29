@@ -91,10 +91,12 @@ export interface SubtitleResult {
   fileId: number;
   /** What to pass to /api/v2/subtitles/download?id= ("os:<fileId>" | "subdl:<path>"). */
   downloadId: string;
-  source: "opensubtitles" | "subdl" | "gestdown";
+  source: "opensubtitles" | "subdl" | "gestdown" | "jellyfin";
   language: string;
   releaseName: string;
   downloadCount: number;
+  /** Made for exactly the file playing (its OpenSubtitles hash matched): timed to it. */
+  exactMatch?: boolean;
 }
 
 export async function searchSubtitles(params: {
@@ -103,6 +105,8 @@ export async function searchSubtitles(params: {
   season?: number;
   episode?: number;
   language?: string;
+  /** The playing file's hash (content/movieHash.ts): matches come back marked and first. */
+  moviehash?: string | null;
 }, apiKey: string = serverOpenSubtitlesKey()): Promise<SubtitleResult[]> {
   if (!apiKey) return [];
 
@@ -113,6 +117,7 @@ export async function searchSubtitles(params: {
   if (params.year) query.year = params.year;
   if (params.season !== undefined) query.season_number = String(params.season);
   if (params.episode !== undefined) query.episode_number = String(params.episode);
+  if (params.moviehash && /^[0-9a-f]{16}$/.test(params.moviehash)) query.moviehash = params.moviehash;
 
   try {
     const { data } = await axios.get(`${OS_BASE}/subtitles`, {
@@ -134,10 +139,11 @@ export async function searchSubtitles(params: {
           language: r.attributes?.language || "unknown",
           releaseName: r.attributes?.release || r.attributes?.files?.[0]?.file_name || "Subtitle",
           downloadCount: r.attributes?.download_count || 0,
+          exactMatch: r.attributes?.moviehash_match === true,
         } as SubtitleResult;
       })
       .filter((r): r is SubtitleResult => r !== null)
-      .sort((a, b) => b.downloadCount - a.downloadCount);
+      .sort((a, b) => Number(!!b.exactMatch) - Number(!!a.exactMatch) || b.downloadCount - a.downloadCount);
   } catch (err: any) {
     logger.error(`[OpenSubtitles] search failed for "${params.title}": ${err?.response?.status ?? ""} ${err?.response?.data ? JSON.stringify(err.response.data) : err?.message}`);
     return [];

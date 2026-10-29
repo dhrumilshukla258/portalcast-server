@@ -27,7 +27,26 @@ interface MediaMetadata {
   videoCodec: string;
   audio: MediaTrack[];
   subtitles: MediaTrack[];
+  /**
+   * Subtitle files beside a library file (Jellyfin's external subtitles, a folder's .srt):
+   * WebVTT links on this server. Apps list them before anything online (servers from 2026-10-29).
+   */
+  external?: { label: string; language?: string; forced?: boolean; url: string }[];
 }
+
+/** A library file's own subtitle files, as links the player can load (/api/local/subtitle). */
+function externalSubtitles(f: MediaFile, token: string): NonNullable<MediaMetadata["external"]> {
+  return (f.sidecars ?? []).map((s, i) => ({
+    label: [s.language ? (languageNames.of(s.language) ?? s.language) : "Subtitle", s.forced ? "forced" : ""].filter(Boolean).join(" · "),
+    language: s.language ?? undefined,
+    forced: s.forced,
+    url: `/api/local/subtitle?t=${encodeURIComponent(token)}&s=${i}`,
+  }));
+}
+
+const languageNames = { of(code: string): string | undefined {
+  try { return new Intl.DisplayNames(["en"], { type: "language" }).of(code); } catch { return undefined; }
+} };
 
 function assertHttpUrl(raw: string) {
   const u = new URL(raw);
@@ -126,12 +145,16 @@ export const subtitleRoutes: ServerRoute[] = [
       const entry = streamTokenFromRequest(request);
       if (!entry) return h.response({ error: "Unauthorized" }).code(401);
 
+      const token = String((request.query as any).t);
       const jf = await jellyfinFileOf(entry);
-      if (jf) return h.response(jellyfinMetadata(jf));
+      if (jf) return h.response({ ...jellyfinMetadata(jf), external: externalSubtitles(jf, token) });
+      // A folder-library file: its probe, plus the subtitle files beside it.
+      const local = entry.resource?.startsWith("local:") ? (await fileForToken(entry.resource))?.file : null;
       const raw = await tokenResource(entry);
       if (!raw) return h.response({ error: "This stream has no file to probe" }).code(400);
       try {
-        return h.response(await probeMetadata(raw));
+        const meta = await probeMetadata(raw);
+        return h.response(local ? { ...meta, external: externalSubtitles(local, token) } : meta);
       } catch (e: any) {
         logger.error(`[Subtitles] /media/info error: ${e.message}`);
         return h.response({ error: "Probe failed" }).code(500);
