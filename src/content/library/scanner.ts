@@ -34,6 +34,8 @@ import { findTmdbIdByImdb } from "@/content/tmdb";
 import { clearDiscoverCache } from "@/services/discoverCache";
 import { invalidateDiscoverIndex } from "@/content/discoverIndex";
 import { probeFile, resolutionLabel } from "@/content/library/probe";
+import { JELLYFIN_ROOT, jellyfinConfig } from "@/content/library/jellyfin";
+import { onSettingChange } from "@/config/settings";
 import {
   EXTRA_DIRS, SUBTITLE_EXTS, isExtraFile, isVideoFile, parseNfo, parseSubtitleName, parseTitle, versionLabelFor,
   parseEpisode, seasonFromFolder,
@@ -251,13 +253,17 @@ async function paceWhileStreaming(): Promise<void> {
  * the catalog row's poster/backdrop point at it (content/library/art.ts). Run after every
  * match, since matching writes TMDB's images back.
  */
-async function applyFolderArt(item: LocalItem): Promise<void> {
-  const dir = path.join(item.root, item.relPath);
-  const st = await statOf(dir);
-  const art = st?.isDirectory() ? await findArt(dir) : null;
-  if (JSON.stringify(art ?? null) !== JSON.stringify(item.art ?? null)) {
-    item.art = art;
-    await item.save();
+export async function applyFolderArt(item: LocalItem): Promise<void> {
+  let art = item.art ?? null;
+  // A Jellyfin title's artwork is Jellyfin's, recorded by the sync (content/library/jellyfinSync.ts).
+  if (item.root !== JELLYFIN_ROOT) {
+    const dir = path.join(item.root, item.relPath);
+    const st = await statOf(dir);
+    art = st?.isDirectory() ? await findArt(dir) : null;
+    if (JSON.stringify(art ?? null) !== JSON.stringify(item.art ?? null)) {
+      item.art = art;
+      await item.save();
+    }
   }
   if (!art) return;
   const contentId = localContentId(item.id, item.kind);
@@ -277,7 +283,7 @@ async function applyFolderArt(item: LocalItem): Promise<void> {
  * collection, IMDb id), and a locked NFO ("lockdata", your edits in Jellyfin) wins over TMDB.
  * Folder art stays the logo when there is one. Run after every match and art pass.
  */
-async function applyNfoMeta(item: LocalItem): Promise<void> {
+export async function applyNfoMeta(item: LocalItem): Promise<void> {
   const nfo = item.nfo as NfoData | null;
   if (!nfo) return;
   const contentId = localContentId(item.id, item.kind);
@@ -328,6 +334,8 @@ async function applyNfoMeta(item: LocalItem): Promise<void> {
 export interface ScanSummary {
   titles: number;
   added: number;
+  /** Jellyfin: folder-library titles taken over (their ids, progress and lists kept). */
+  adopted?: number;
   probed: number;
   matched: number;
   unmatched: number;
@@ -365,12 +373,30 @@ export async function scanLibraries(onlyId?: number): Promise<string> {
 
 async function scanNow(onlyId?: number): Promise<string> {
   {
-    const libs = await Library.findAll({ where: onlyId ? { id: onlyId } : { enabled: true } });
     const lines: string[] = [];
+    const jellyfin = jellyfinConfig() !== null;
+    if (jellyfin && !onlyId) {
+      // Jellyfin's movie and show libraries, as libraries here (new ones added).
+      const { ensureJellyfinLibraries } = await import("@/content/library/jellyfinSync");
+      const note = await ensureJellyfinLibraries();
+      if (note) lines.push(note);
+    }
+    const libs = await Library.findAll({ where: onlyId ? { id: onlyId } : { enabled: true } });
     for (const lib of libs) {
+      const fromJellyfin = lib.source === "jellyfin";
+      // While Jellyfin is connected it is the source: a folder scan would add the files it
+      // took over a second time. The folder library's titles stay as they are.
+      const skip = fromJellyfin && !jellyfin ? "not read: Jellyfin is not set up (Settings › Jellyfin)"
+        : !fromJellyfin && jellyfin ? "not scanned: Jellyfin is connected, so its libraries are used instead"
+        : null;
+      if (skip) {
+        lines.push(`${lib.name}: ${skip}`);
+        continue;
+      }
       const s = await scanOne(lib);
       const line =
-        `${lib.name}: ${s.titles} titles, ${s.added} new, ${s.probed} probed, ${s.matched} matched, ${s.unmatched} unmatched` +
+        `${lib.name}: ${s.titles} titles, ${s.added} new` + (s.adopted ? `, ${s.adopted} taken over from folder libraries` : "") +
+        (fromJellyfin ? "" : `, ${s.probed} probed`) + `, ${s.matched} matched, ${s.unmatched} unmatched` +
         (s.missing ? `, ${s.missing} missing` : "") + (s.removed ? `, ${s.removed} removed` : "") +
         (s.skippedFolders.length ? `; skipped (not reachable): ${s.skippedFolders.join(", ")}` : "");
       lib.lastScanAt = new Date();
@@ -395,7 +421,15 @@ async function scanOne(lib: Library): Promise<ScanSummary> {
   const seenItemIds = new Set<number>();
   const scannedRoots: string[] = [];
 
-  for (const root of lib.folders || []) {
+  if (lib.source === "jellyfin") {
+    const { syncJellyfinLibrary } = await import("@/content/library/jellyfinSync");
+    const r = await syncJellyfinLibrary(lib, kind, sum);
+    for (const id of r.fileIds) seenFileIds.add(id);
+    for (const id of r.itemIds) seenItemIds.add(id);
+    if (r.complete) scannedRoots.push(JELLYFIN_ROOT);
+  }
+
+  for (const root of lib.source === "jellyfin" ? [] : lib.folders || []) {
     const known = await MediaFile.count({ where: { libraryId: lib.id, root } });
     const st = await statOf(root);
     const found = st?.isDirectory() ? (kind === "series" ? await walkSeries(root) : await walk(root)) : [];
@@ -454,25 +488,7 @@ async function scanOne(lib: Library): Promise<ScanSummary> {
         seenFileIds.add(row.id);
       }
 
-      // Match titles that are new, renamed, or not matched yet (a later scan retries
-      // unmatched ones once a day at most).
-      const retryDue = !item.matchedTmdbId && (!item.matchedAt || Date.now() - item.matchedAt.getTime() > 24 * 3600_000);
-      if (!item.matchedAt || retryDue) {
-        try {
-          let tmdbId = item.tmdbIdLocked ?? item.tmdbIdHint ?? null;
-          if (!tmdbId && t.imdbId) tmdbId = await findTmdbIdByImdb(t.imdbId, kind === "series" ? "tv" : "movie");
-          const matched = await withBusyRetry(`[library] matching "${item.name}"`, () => enrichLocalTitle({ contentId: localContentId(item.id, kind), type: kind, name: item.name, year: item.year, tmdbId }));
-          item.matchedTmdbId = matched ?? null;
-          item.matchedAt = new Date();
-          await item.save();
-        } catch (e: any) {
-          logger.warn(`[library] could not match "${item.name}": ${e?.message ?? e}`);
-        }
-      }
-      await applyFolderArt(item);
-      await applyNfoMeta(item);
-      if (item.matchedTmdbId) sum.matched++;
-      else sum.unmatched++;
+      await matchAndDecorate(item, t.imdbId, kind, sum);
     }
   }
 
@@ -500,6 +516,44 @@ async function scanOne(lib: Library): Promise<ScanSummary> {
   }
   return sum;
 }
+
+/**
+ * Matches a title that is new, renamed, or not matched yet (a later scan retries unmatched
+ * ones once a day at most), then applies its artwork and NFO (or Jellyfin) metadata.
+ */
+export async function matchAndDecorate(item: LocalItem, imdbId: string | null, kind: "movie" | "series", sum: ScanSummary): Promise<void> {
+  const retryDue = !item.matchedTmdbId && (!item.matchedAt || Date.now() - item.matchedAt.getTime() > 24 * 3600_000);
+  if (!item.matchedAt || retryDue) {
+    try {
+      let tmdbId = item.tmdbIdLocked ?? item.tmdbIdHint ?? null;
+      if (!tmdbId && imdbId) tmdbId = await findTmdbIdByImdb(imdbId, kind === "series" ? "tv" : "movie");
+      const matched = await withBusyRetry(`[library] matching "${item.name}"`, () => enrichLocalTitle({ contentId: localContentId(item.id, kind), type: kind, name: item.name, year: item.year, tmdbId }));
+      item.matchedTmdbId = matched ?? null;
+      item.matchedAt = new Date();
+      await item.save();
+    } catch (e: any) {
+      logger.warn(`[library] could not match "${item.name}": ${e?.message ?? e}`);
+    }
+  }
+  await applyFolderArt(item);
+  await applyNfoMeta(item);
+  if (item.matchedTmdbId) sum.matched++;
+  else sum.unmatched++;
+}
+
+// Saving the Jellyfin address or key reads its libraries right away (a few seconds after the
+// last change, so saving both settings starts one scan).
+let jellyfinTimer: NodeJS.Timeout | null = null;
+onSettingChange((key) => {
+  if (key !== "jellyfinUrl" && key !== "jellyfinApiKey") return;
+  if (jellyfinTimer) clearTimeout(jellyfinTimer);
+  jellyfinTimer = setTimeout(() => {
+    jellyfinTimer = null;
+    if (!jellyfinConfig()) return;
+    scanLibraries().catch((e) => logger.error(`[library] Jellyfin sync failed: ${e?.message ?? e}`));
+  }, 3000);
+  jellyfinTimer.unref?.();
+});
 
 /** Removes a local title and its catalog row. Watch progress is kept. */
 export async function removeItem(item: LocalItem): Promise<void> {

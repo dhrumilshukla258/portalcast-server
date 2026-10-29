@@ -16,6 +16,25 @@ Related: [[skill-settings]], [[skill-titles-and-tmdb]], [[skill-stream-tokens]],
 | `src/routes/library/stream.ts` | `/api/local/stream` (range requests) and `/api/local/subtitle` (sidecar subtitles) |
 | `src/routes/library/admin.ts` | `/api/admin/libraries*`: CRUD, folder browser, scan, titles, TMDB search, fix match |
 
+## Jellyfin (2026-10-28)
+
+The owner's decision: Jellyfin stays the media server, PortalCast reads it. **Settings › Jellyfin** (`jellyfinUrl`, `jellyfinApiKey` secret; env `JELLYFIN_URL`, `JELLYFIN_API_KEY`); **Test connection** calls `GET /api/admin/jellyfin/test`. Saving either setting starts a sync a few seconds later.
+
+| File | What it does |
+|---|---|
+| `src/content/library/jellyfin.ts` | The client (key in the `Authorization: MediaBrowser Token=` and `X-Emby-Token` headers, never in a URL), Jellyfin data in our shapes (`fileFieldsOf`, `nfoOf`, `artOf`), paths for stream, subtitle, image and HLS, `needsJellyfinTranscode` |
+| `src/content/library/jellyfinSync.ts` | `ensureJellyfinLibraries` (each Jellyfin movies/tvshows library becomes a `Library` with `source = "jellyfin"`, `folders = [its Jellyfin id]`; one removed in Jellyfin is switched off), `syncJellyfinLibrary` |
+
+- **Rows**: `LocalItem` root `jellyfin`, relPath = Jellyfin item id; `MediaFile` root `jellyfin`, relPath = `<item id>/<media source id>`, `remotePath` = the path Jellyfin reports. Tracks, size, resolution, HDR and duration come from Jellyfin's media streams (no ffprobe). Metadata goes through `applyNfoMeta` (`nfoOf` gives the NFO shape; "Lock this item" = a locked NFO); TMDB/IMDb ids from `ProviderIds` drive the match, so it merges with IPTV copies by id. Episodes without a number are left out, as in the folder scan.
+- **Ids are kept**: a file is found by its Jellyfin ids, else by `remotePath` (Jellyfin re-created the item), else it **takes over** a folder-library file whose path below its library folder ends Jellyfin's path (longest wins). The title and file keep their ids, so progress, My List and cards stay. A taken-over title's folder files Jellyfin does not have get `missingSince`.
+- **While Jellyfin is set up, folder libraries are not scanned** (their titles stay as they are); without it, Jellyfin libraries are not read.
+- **Unreachable or empty**: nothing is marked missing (as with an offline disk).
+- **Playback**: `/api/local/stream` relays `/Videos/<id>/stream?static=true` with the range passed on. The webui gets `/api/local/jf/master.m3u8?t=` (Jellyfin's H.264/AAC HLS, relayed by `/api/local/jf/part?t=&p=`, every playlist address rewritten to point back here; only relative Jellyfin paths are accepted) when `needsJellyfinTranscode` (video not H.264/VP9/AV1, audio not AAC/MP3/Opus/Vorbis/FLAC, or another container). The TV always gets the file.
+- **Subtitles**: embedded tracks by index and external ones (`sidecars` relPath `jf:<index>`) as Jellyfin's `Stream.vtt`; `/api/media/info` answers from the stored tracks.
+- **Artwork**: `art` = which images Jellyfin has (`Primary`, `Backdrop`, `Logo`) and a version from their tags; `/api/images/local` relays them (`w` becomes Jellyfin's `maxWidth`). Episode stills: `thumb = "jellyfin"`.
+- Admin: a Jellyfin library has no folder editing; "Remove" empties it and switches it off (deleted, the next sync would add it back).
+- Test: `test/jellyfin-sync.test.ts` (stand-in Jellyfin through `setJellyfinTransport`).
+
 ## Mounts and roots
 
 The NAS is mounted read-only into the container (for example `/srv/mergerfs/datapool:/media:ro`). The `mediaRoots` setting (default `/media`) lists the folders libraries may use; the admin folder browser shows only directories under them, and a library folder outside them is refused (paths are resolved with `realpath`, so a symlink cannot escape).

@@ -88,6 +88,8 @@ const DEFS: SettingDef[] = [
   { key: "epgEmptyRecheckHours", env: "EPG_EMPTY_RECHECK_HOURS", type: "number", default: 72, min: 0, max: 720, group: "Provider tuning", label: "Ask channels without a guide again after (hours)", help: "Many channels have no guide at all (80% on one large portal). A channel that had none at two guide refreshes in a row is asked again only after this many hours, instead of at every refresh; one that gets a guide is picked up then, and new channels are always asked. \"Refresh guide\" in Admin still asks every channel. 0 asks every channel every time.", apply: "live" },
 
   // Local libraries
+  { key: "jellyfinUrl", env: "JELLYFIN_URL", type: "string", default: "", group: "Jellyfin", label: "Jellyfin server address", help: "For example http://192.168.1.10:8096. Your Jellyfin movie and show libraries become My Library (Admin › Libraries); Jellyfin keeps scanning, metadata and transcoding. Apps never see this address: streams and artwork go through this server. Empty: Jellyfin is off.", apply: "live" },
+  { key: "jellyfinApiKey", env: "JELLYFIN_API_KEY", type: "string", default: "", secret: true, group: "Jellyfin", label: "Jellyfin API key", help: "Jellyfin Dashboard › API Keys › +. Stays on this server.", apply: "live" },
   { key: "mediaRoots", type: "list", default: ["/media"], group: "Local libraries", label: "Media roots", help: "Folders inside the container that libraries may use (the NAS mounts in the compose file). The folder browser shows nothing outside them.", apply: "live" },
 
   // Images
@@ -212,12 +214,16 @@ export async function saveSetting(key: string, raw: unknown): Promise<unknown> {
     if (def.max !== undefined && n > def.max) throw new SettingError(`"${def.label}" must be at most ${def.max}`);
   }
   if (def.options && !def.options.includes(value as string)) throw new SettingError(`"${def.label}" must be one of ${def.options.join(", ")}`);
-  if (key === "publicBaseUrl" && value) {
+  if ((key === "publicBaseUrl" || key === "jellyfinUrl") && value) {
     try {
       const u = new URL(value as string);
       if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error();
+      // Credentials in the address would be sent to Jellyfin and shown in the admin page.
+      if (u.username || u.password) throw new Error();
     } catch {
-      throw new SettingError("Public base URL must look like https://stream.example.com");
+      throw new SettingError(key === "jellyfinUrl"
+        ? "The Jellyfin address must look like http://192.168.1.10:8096 (the key goes in its own setting)"
+        : "Public base URL must look like https://stream.example.com");
     }
   }
   const stored = def.secret ? { enc: encryptSecret(JSON.stringify(value)) } : { v: value };

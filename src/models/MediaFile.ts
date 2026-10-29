@@ -40,10 +40,14 @@ export class MediaFile extends Model {
   @Column(DataType.TEXT)
   declare root: string;
 
-  /** Path relative to `root`. */
+  /** Path relative to `root`. From Jellyfin: "<item id>/<media source id>". */
   @Index
   @Column(DataType.TEXT)
   declare relPath: string;
+
+  /** From Jellyfin: the file's path as Jellyfin sees it (content/library/jellyfinSync.ts). */
+  @Column(DataType.TEXT)
+  declare remotePath: string | null;
 
   @Column(DataType.BIGINT)
   declare size: number;

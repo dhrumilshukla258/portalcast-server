@@ -5,6 +5,9 @@ import { promisify } from "util";
 import NodeCache from "node-cache";
 import { logger } from "@/infra/logger";
 import { streamTokenFromRequest } from "@/services/StreamTokens";
+import { Readable } from "stream";
+import type { MediaFile } from "@/models/MediaFile";
+import { JELLYFIN_ROOT, jellyfinFetch, jellyfinIdsOf, jellyfinSubtitlePath } from "@/content/library/jellyfin";
 
 const execFileAsync = promisify(execFile);
 
@@ -81,6 +84,27 @@ async function probeMetadata(url: string): Promise<MediaMetadata> {
 // client sends: a caller-supplied `url=` let any signed-in user make the
 // server open arbitrary addresses, including ones inside the home network.
 // Older webuis still send `url=`; it is accepted and ignored.
+/** The Jellyfin file a token names, or null (content/library/jellyfin.ts). */
+async function jellyfinFileOf(entry: { resource?: string } | null | undefined): Promise<MediaFile | null> {
+  const r = entry?.resource;
+  if (!r?.startsWith("local:")) return null;
+  const f = (await fileForToken(r))?.file;
+  return f && f.root === JELLYFIN_ROOT ? f : null;
+}
+
+/** A Jellyfin file's tracks, as the probe would give them: Jellyfin already read them. */
+function jellyfinMetadata(f: MediaFile): MediaMetadata {
+  const track = (type: string) => (t: { index: number; codec: string; language?: string | null; title?: string | null }): MediaTrack => ({
+    index: t.index, codec_name: t.codec, codec_type: type, language: t.language ?? undefined, title: t.title ?? undefined,
+  });
+  return {
+    duration: f.duration ?? 0,
+    videoCodec: f.videoCodec ?? "",
+    audio: (f.audioTracks ?? []).map(track("audio")),
+    subtitles: (f.subtitleTracks ?? []).map(track("subtitle")),
+  };
+}
+
 async function tokenResource(entry: { resource?: string } | null | undefined): Promise<string | null> {
   const r = entry?.resource;
   if (!r) return null;
@@ -102,6 +126,8 @@ export const subtitleRoutes: ServerRoute[] = [
       const entry = streamTokenFromRequest(request);
       if (!entry) return h.response({ error: "Unauthorized" }).code(401);
 
+      const jf = await jellyfinFileOf(entry);
+      if (jf) return h.response(jellyfinMetadata(jf));
       const raw = await tokenResource(entry);
       if (!raw) return h.response({ error: "This stream has no file to probe" }).code(400);
       try {
@@ -121,10 +147,24 @@ export const subtitleRoutes: ServerRoute[] = [
 
       const { track } = request.query as { track?: string };
       if (track === undefined) return h.response("Missing params").code(400);
-      const raw = await tokenResource(entry);
-      if (!raw) return h.response("This stream has no file").code(400);
       const idx = parseInt(track, 10);
       if (!Number.isInteger(idx) || idx < 0 || idx > 64) return h.response("Bad track").code(400);
+      const jf = await jellyfinFileOf(entry);
+      if (jf) {
+        // Jellyfin converts the embedded track to WebVTT itself.
+        const ids = jellyfinIdsOf(jf.relPath);
+        const jfPath = ids ? jellyfinSubtitlePath(ids.itemId, ids.sourceId, idx) : null;
+        if (!jfPath) return h.response("Bad track").code(400);
+        try {
+          const res = await jellyfinFetch(jfPath, { signal: AbortSignal.timeout(120_000) });
+          if (!res.ok || !res.body) return h.response("Jellyfin could not send this subtitle").code(502);
+          return h.response(Readable.fromWeb(res.body as any)).type("text/vtt").header("Access-Control-Allow-Origin", "*");
+        } catch {
+          return h.response("Jellyfin is not reachable").code(502);
+        }
+      }
+      const raw = await tokenResource(entry);
+      if (!raw) return h.response("This stream has no file").code(400);
 
       try {
         const args = [

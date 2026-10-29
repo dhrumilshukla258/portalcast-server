@@ -18,7 +18,14 @@ export class Library extends Model {
   @Column(DataType.STRING)
   declare kind: string;
 
-  /** Absolute folders inside the container, each under one of the media roots. */
+  /**
+   * "folders" (null on rows from before 2026-10-28): folders on the NAS, scanned here.
+   * "jellyfin": one of the connected Jellyfin server's libraries (content/library/jellyfin.ts).
+   */
+  @Column(DataType.STRING)
+  declare source: string | null;
+
+  /** Absolute folders inside the container, each under one of the media roots; for Jellyfin, its library id. */
   @Column(DataType.JSON)
   declare folders: string[];
 

@@ -10,6 +10,7 @@
 
 import { onDiscoverCacheClear } from "@/services/discoverCache";
 import { needsBrowserFallback } from "@/content/library/remux";
+import { JELLYFIN_ROOT, needsJellyfinTranscode } from "@/content/library/jellyfin";
 import { artMarker } from "@/content/library/art";
 import { Op } from "sequelize";
 import { LocalItem } from "@/models/LocalItem";
@@ -234,6 +235,9 @@ export async function localPlayLink(fileId: string, userLabel: string, title?: s
     itemId: episode ? `LF${file.id}` : `L${file.itemId}`,
     hideable: false,
   });
+  if (file.root === JELLYFIN_ROOT) {
+    return client === "web" && needsJellyfinTranscode(file) ? `/api/local/jf/master.m3u8?t=${token}&m3u8=1` : `/api/local/stream?t=${token}`;
+  }
   if (client === "web" && needsBrowserFallback(file)) return `/api/local/hls/index.m3u8?t=${token}&m3u8=1`;
   return `/api/local/stream?t=${token}`;
 }

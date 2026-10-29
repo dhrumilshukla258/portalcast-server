@@ -15,6 +15,11 @@ import { streamTracker } from "@/services/StreamTracker";
 import { clientIp } from "@/infra/clientIp";
 import { toVtt } from "@/content/subtitleText";
 import { logger } from "@/infra/logger";
+import { Readable } from "stream";
+import crypto from "crypto";
+import {
+  JELLYFIN_ROOT, jellyfinFetch, jellyfinIdsOf, jellyfinStreamPath, jellyfinSubtitlePath, jellyfinImagePath, jellyfinHlsPath,
+} from "@/content/library/jellyfin";
 
 // Local files, byte for byte (no transcoding), with seeking (HTTP range requests). The ?t=
 // stream token names a file id; the path stays on the server. Token-gated like /api/proxy
@@ -47,7 +52,8 @@ export async function fileForToken(resource: string | undefined): Promise<{ file
   if (hit && Date.now() - hit.at < RECENT_MS) return hit.value;
   const file = await MediaFile.findByPk(Number(m[1]));
   if (!file || file.missingSince) return null;
-  const value = { file, abs: path.join(file.root, file.relPath) };
+  // A Jellyfin file has no path here: it is relayed from Jellyfin (relayJellyfin below).
+  const value = { file, abs: file.root === JELLYFIN_ROOT ? "" : path.join(file.root, file.relPath) };
   prune(recentFiles);
   recentFiles.set(m[1], { at: Date.now(), value });
   return value;
@@ -85,9 +91,107 @@ function parseRange(header: string | undefined, size: number): { start: number; 
   return { start, end };
 }
 
+/**
+ * Relays a Jellyfin request to the client: status, length, range and type pass through, the
+ * body is streamed, and the request to Jellyfin stops when the client goes away. The
+ * Jellyfin address and key stay on this server.
+ */
+async function relayJellyfin(request: any, h: any, jfPath: string, opts: { range?: boolean; cache?: string; fallbackType?: string } = {}) {
+  const ac = new AbortController();
+  request.raw.req.on("close", () => ac.abort());
+  const headers: Record<string, string> = {};
+  if (opts.range && request.headers.range) headers.Range = String(request.headers.range);
+  let res: Response;
+  try {
+    res = await jellyfinFetch(jfPath, { method: request.method === "head" ? "HEAD" : "GET", headers, signal: ac.signal });
+  } catch (e: any) {
+    if (!ac.signal.aborted) logger.warn(`[jellyfin] relay failed: ${e?.message ?? e}`);
+    return h.response({ error: "Jellyfin is not reachable" }).code(502);
+  }
+  if (!res.ok) {
+    await res.body?.cancel().catch(() => {});
+    if (res.status === 416) return h.response().code(416).header("Content-Range", res.headers.get("content-range") ?? "bytes */0");
+    return h.response({ error: res.status === 404 ? "Jellyfin no longer has this file" : "Jellyfin could not send this file" }).code(res.status === 404 ? 404 : 502);
+  }
+  const out = h.response(request.method === "head" || !res.body ? undefined : Readable.fromWeb(res.body as any)).code(res.status);
+  for (const k of ["content-length", "content-range", "accept-ranges"]) {
+    const v = res.headers.get(k);
+    if (v) out.header(k, v);
+  }
+  out.type(res.headers.get("content-type") || opts.fallbackType || "application/octet-stream");
+  out.header("Cache-Control", opts.cache ?? "private, no-store").header("Access-Control-Allow-Origin", "*");
+  return out;
+}
+
+/** Jellyfin's HLS playlist with every address in it pointing back here (`part?t=&p=`). */
+function rewritePlaylist(text: string, token: string): string {
+  const via = (uri: string) => `part?t=${encodeURIComponent(token)}&p=${encodeURIComponent(uri)}`;
+  return text.split(/\r?\n/).map((line) => {
+    const l = line.trim();
+    if (!l) return line;
+    if (l.startsWith("#")) return line.replace(/URI="([^"]+)"/g, (_m, u: string) => (isSafePart(u) ? `URI="${via(u)}"` : _m));
+    return isSafePart(l) ? via(l) : "#";
+  }).join("\n");
+}
+
+/** A path Jellyfin's playlists use, relative to /Videos/<id>/ ("main.m3u8?...", "hls1/main/0.ts?..."). */
+function isSafePart(p: string): boolean {
+  return /^[A-Za-z0-9._~-][A-Za-z0-9._~\/-]*(\?[A-Za-z0-9._~%=&+:,-]*)?$/.test(p) && !p.includes("..") && !p.includes("//");
+}
+
 const IMAGE_MIME: Record<string, string> = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp" };
 
 export const localStreamRoutes: ServerRoute[] = [
+  {
+    // A Jellyfin file the browser cannot play: Jellyfin's own HLS transcode, relayed.
+    method: "GET",
+    path: "/api/local/jf/master.m3u8",
+    handler: async (request, h) => {
+      const entry = streamTokenFromRequest(request);
+      const target = entry ? await fileForToken(entry.resource) : null;
+      const ids = target?.file.root === JELLYFIN_ROOT ? jellyfinIdsOf(target.file.relPath) : null;
+      if (!entry || !target || !ids) return h.response("Invalid or expired link").code(403);
+      // One transcode session per token: Jellyfin keys its running transcode by it.
+      const session = crypto.createHash("sha1").update(String((request.query as any).t)).digest("hex").slice(0, 32);
+      const jfPath = jellyfinHlsPath(ids.itemId, ids.sourceId, session)!;
+      let res: Response;
+      try {
+        res = await jellyfinFetch(jfPath, { signal: AbortSignal.timeout(60_000) });
+      } catch {
+        return h.response("Jellyfin is not reachable").code(502);
+      }
+      if (!res.ok) return h.response("Jellyfin could not prepare this file").code(502);
+      streamTracker.touch("vod", clientIp(request), `local:${target.file.id}`, entry.userLabel, { kind: "movie", label: entry.label, category: entry.category });
+      return h.response(rewritePlaylist(await res.text(), String((request.query as any).t)))
+        .type("application/vnd.apple.mpegurl").header("Cache-Control", "no-store");
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/local/jf/part",
+    handler: async (request, h) => {
+      const entry = streamTokenFromRequest(request);
+      const target = entry ? await fileForToken(entry.resource) : null;
+      const ids = target?.file.root === JELLYFIN_ROOT ? jellyfinIdsOf(target.file.relPath) : null;
+      if (!entry || !target || !ids) return h.response("Invalid or expired link").code(403);
+      const part = String((request.query as any).p || "");
+      if (!isSafePart(part)) return h.response("Not found").code(404);
+      const jfPath = `/Videos/${ids.itemId}/${part}`;
+      if (/\.m3u8(\?|$)/.test(part)) {
+        let res: Response;
+        try {
+          res = await jellyfinFetch(jfPath, { signal: AbortSignal.timeout(60_000) });
+        } catch {
+          return h.response("Jellyfin is not reachable").code(502);
+        }
+        if (!res.ok) return h.response("Jellyfin could not prepare this file").code(502);
+        return h.response(rewritePlaylist(await res.text(), String((request.query as any).t)))
+          .type("application/vnd.apple.mpegurl").header("Cache-Control", "no-store");
+      }
+      streamTracker.touch("vod", clientIp(request), `local:${target.file.id}`, entry.userLabel, { kind: "movie", label: entry.label, category: entry.category });
+      return relayJellyfin(request, h, jfPath, { fallbackType: "video/mp2t" });
+    },
+  },
   {
     // Browser fallback playlist (content/library/remux.ts): keyframe-aligned segments.
     method: "GET",
@@ -147,6 +251,17 @@ export const localStreamRoutes: ServerRoute[] = [
       const a = String(q.a || "");
       if (!/^(f?\d+|c(movie|series)_[\w-]+)\.(poster|backdrop|logo|still)\.\d+$/.test(a) || !verifyArt(a, q.s)) return h.response("Not found").code(404);
       const [id, kind] = a.split(".");
+      const width = Number(q.w);
+      const scaleTo = q.w !== undefined && ART_WIDTHS.has(width) ? width : undefined;
+      // Jellyfin's artwork, relayed (Jellyfin scales it). The version in the URL changes with the image.
+      const jf = id.startsWith("c") ? null : id.startsWith("f")
+        ? await MediaFile.findByPk(Number(id.slice(1)), { attributes: ["id", "root", "relPath", "thumb"] }).then((mf) => (mf?.root === JELLYFIN_ROOT && mf.thumb ? jellyfinIdsOf(mf.relPath)?.itemId ?? null : null))
+        : await LocalItem.findByPk(Number(id), { attributes: ["id", "root", "relPath", "art"] }).then((it) => (it?.root === JELLYFIN_ROOT && (it.art as any)?.[kind] ? it.relPath : null));
+      if (jf) {
+        const jfPath = jellyfinImagePath(jf, kind as any, scaleTo);
+        if (!jfPath) return h.response("Not found").code(404);
+        return relayJellyfin(request, h, jfPath, { cache: "public, max-age=31536000, immutable", fallbackType: "image/jpeg" });
+      }
       let file: string | null = null;
       if (id.startsWith("c")) {
         // Custom artwork chosen in the admin page (content/customArt.ts).
@@ -166,9 +281,8 @@ export const localStreamRoutes: ServerRoute[] = [
       if (!type || !(await fs.promises.access(file).then(() => true, () => false))) return h.response("Not found").code(404);
       // `w` (342, 780, 1280): a copy scaled to that width (content/library/artSizes.ts), else
       // the original. Not signed: it only picks a smaller copy of what the signature allows.
-      const width = Number(q.w);
-      if (q.w !== undefined && ART_WIDTHS.has(width)) {
-        const scaled = await scaledArt(file, `${a}.${q.s}`, width);
+      if (scaleTo) {
+        const scaled = await scaledArt(file, `${a}.${q.s}`, scaleTo);
         if (scaled) return h.response(fs.createReadStream(scaled)).type("image/jpeg").header("Cache-Control", "public, max-age=31536000, immutable");
       }
       // The version in the URL changes when the file does, so devices may keep it for a year.
@@ -184,6 +298,13 @@ export const localStreamRoutes: ServerRoute[] = [
       if (!entry || !target) {
         if ((request.query as any)?.t && !request.app?.streamTokenWrongNetwork) recordFromRequest(request, "stream_token_invalid");
         return h.response({ error: "Invalid or expired link" }).code(403);
+      }
+      if (target.file.root === JELLYFIN_ROOT) {
+        const ids = jellyfinIdsOf(target.file.relPath);
+        const jfPath = ids ? jellyfinStreamPath(ids.itemId, ids.sourceId) : null;
+        if (!jfPath) return h.response({ error: "Invalid or expired link" }).code(403);
+        streamTracker.touch("vod", clientIp(request), `local:${target.file.id}`, entry.userLabel, { kind: "movie", label: entry.label, category: entry.category });
+        return relayJellyfin(request, h, jfPath, { range: true, fallbackType: MIME["." + (target.file.container || "")] });
       }
       const size = await fileSize(target.abs);
       if (size === null) return h.response({ error: "The file is not reachable (is the disk online?)" }).code(404);
@@ -233,6 +354,12 @@ export const localStreamRoutes: ServerRoute[] = [
       const idx = Number((request.query as any)?.s);
       const side = Number.isInteger(idx) ? (target.file.sidecars ?? [])[idx] : undefined;
       if (!side) return h.response("No such subtitle").code(404);
+      if (target.file.root === JELLYFIN_ROOT) {
+        const ids = jellyfinIdsOf(target.file.relPath);
+        const jfPath = ids ? jellyfinSubtitlePath(ids.itemId, ids.sourceId, Number(side.relPath.replace(/^jf:/, ""))) : null;
+        if (!jfPath) return h.response("No such subtitle").code(404);
+        return relayJellyfin(request, h, jfPath, { fallbackType: "text/vtt" });
+      }
       const subPath = path.join(target.file.root, side.relPath);
       if (side.format === "ass" || side.format === "ssa") {
         // Styled subtitles: FFmpeg turns them into plain WebVTT cues.

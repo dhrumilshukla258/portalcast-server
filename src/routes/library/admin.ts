@@ -12,6 +12,7 @@ import { scanLibraries, isScanning, removeLibraryContent, fixMatch, localContent
 import { searchTmdbCandidates } from "@/content/tmdb";
 import { recordFromRequest } from "@/services/SecurityEvents";
 import { logger } from "@/infra/logger";
+import { jellyfinConfig, jellyfinServerInfo, jellyfinLibraries } from "@/content/library/jellyfin";
 
 // Admin › Libraries (docs/skill-local-library.md). Under /api/admin/ (admin-gated in
 // server.ts) and re-checked here. Folders must sit under one of the media roots (the
@@ -45,8 +46,12 @@ async function describe(lib: Library) {
     LocalItem.count({ where: { libraryId: lib.id, missingSince: { [Op.ne]: null } } }),
     MediaFile.count({ where: { libraryId: lib.id, missingSince: null } }),
   ]);
+  const jellyfin = lib.source === "jellyfin";
   return {
-    id: lib.id, name: lib.name, kind: lib.kind, folders: lib.folders || [], enabled: lib.enabled,
+    id: lib.id, name: lib.name, kind: lib.kind, enabled: lib.enabled,
+    // A Jellyfin library's "folder" is its id there: shown as where it comes from instead.
+    source: jellyfin ? "jellyfin" : "folders",
+    folders: jellyfin ? [`Jellyfin › ${lib.name}`] : lib.folders || [],
     lastScanAt: lib.lastScanAt, lastScanSummary: lib.lastScanSummary,
     counts: { titles: items, files, unmatched, missing },
   };
@@ -108,6 +113,9 @@ export const libraryAdminRoutes: ServerRoute[] = [
         if (!name) return h.response({ error: "Give the library a name" }).code(400);
         lib.name = name;
       }
+      if (body.folders !== undefined && lib.source === "jellyfin") {
+        return h.response({ error: "This library comes from Jellyfin: change its folders in Jellyfin" }).code(400);
+      }
       if (body.folders !== undefined) {
         const { folders, error } = cleanFolders(body.folders);
         if (error) return h.response({ error }).code(400);
@@ -129,6 +137,13 @@ export const libraryAdminRoutes: ServerRoute[] = [
       if (!lib) return h.response({ error: "No such library" }).code(404);
       if (isScanning()) return h.response({ error: "A scan is running; try again when it ends" }).code(409);
       await removeLibraryContent(lib.id);
+      if (lib.source === "jellyfin" && jellyfinConfig()) {
+        // Deleted, it would come back at the next sync: kept switched off instead (switch it on to read it again).
+        Object.assign(lib, { enabled: false, lastScanSummary: "Switched off and emptied: switch it on to read it from Jellyfin again" });
+        await lib.save();
+        recordFromRequest(request, "setting_changed", `Jellyfin library ${lib.id} switched off`, (admin as any).userId ?? null);
+        return { ok: true, switchedOff: true };
+      }
       await lib.destroy();
       recordFromRequest(request, "setting_changed", `library ${request.params.id} deleted`, (admin as any).userId ?? null);
       return { ok: true };
@@ -143,6 +158,21 @@ export const libraryAdminRoutes: ServerRoute[] = [
       if (isScanning()) return { started: false, scanning: true };
       scanLibraries(id).catch((e) => logger.error(`[library] scan failed: ${e?.message ?? e}`));
       return { started: true, scanning: true };
+    },
+  },
+  {
+    // Settings › Jellyfin "Test": can this server reach Jellyfin with the key, and which libraries it reads.
+    method: "GET",
+    path: "/api/admin/jellyfin/test",
+    handler: async (request, h) => {
+      if (!requireAdmin(request)) return forbidden(h);
+      if (!jellyfinConfig()) return { ok: false, error: "Set the Jellyfin address and API key first" };
+      try {
+        const [info, libraries] = await Promise.all([jellyfinServerInfo(), jellyfinLibraries()]);
+        return { ok: true, server: info.name, version: info.version, libraries: libraries.map((l) => ({ name: l.name, kind: l.kind })) };
+      } catch (e: any) {
+        return { ok: false, error: String(e?.message ?? e).slice(0, 200) };
+      }
     },
   },
   {
@@ -189,7 +219,7 @@ export const libraryAdminRoutes: ServerRoute[] = [
           .map((i) => {
             const m = metaById.get(localContentId(i.id, i.kind));
             return {
-              id: i.id, kind: i.kind, name: i.name, year: i.year, folder: i.relPath, matchedTmdbId: i.matchedTmdbId,
+              id: i.id, kind: i.kind, name: i.name, year: i.year, folder: i.root === "jellyfin" ? "Jellyfin" : i.relPath, matchedTmdbId: i.matchedTmdbId,
               locked: i.tmdbIdLocked != null, missingSince: i.missingSince, poster: m?.poster ?? null,
               matchedTitle: m?.trimmedName ?? null, matchedYear: m?.year ?? null,
             };
