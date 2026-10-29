@@ -150,6 +150,13 @@ test("Jellyfin libraries become My Library, taking over folder-library files wit
   assert.equal(again!.missingSince, null);
   assert.equal((await LocalItem.findByPk(oldItem.id))!.relPath, HEAT_NEW);
 
+  // Both have details: Jellyfin's win, TMDB's fill what Jellyfin lacks (no tagline in Jellyfin).
+  await ContentMeta.update({ overview: "From TMDB.", tagline: "TMDB tagline" } as any, { where: { id: `movie_L${oldItem.id}` } });
+  await scanLibraries();
+  const merged = await ContentMeta.findByPk(`movie_L${oldItem.id}`);
+  assert.equal(merged!.overview, "A heist.");
+  assert.equal(merged!.tagline, "TMDB tagline");
+
   // Jellyfin unreachable: nothing is marked missing.
   down = true;
   const offline = await scanLibraries();

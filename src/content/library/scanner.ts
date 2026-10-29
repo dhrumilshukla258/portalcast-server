@@ -12,7 +12,7 @@
 //      progress is kept). A library folder that is gone or empty while it had files is
 //      skipped instead, so an unplugged disk never empties the library.
 
-import { storePeople, peopleCount, titleKeyOf } from "@/content/people";
+import { storePeople, peopleCount, peopleOf, titleKeyOf } from "@/content/people";
 import { withBusyRetry } from "@/infra/busyRetry";
 import { lockOf } from "@/content/customArt";
 import { parseNfoFull, type NfoData } from "@/content/library/nfo";
@@ -289,7 +289,9 @@ export async function applyNfoMeta(item: LocalItem): Promise<void> {
   const contentId = localContentId(item.id, item.kind);
   const meta = await ContentMeta.findByPk(contentId);
   if (!meta) return;
-  const locked = nfo.locked;
+  // Jellyfin's details win wherever it has them; TMDB fills only what Jellyfin lacks
+  // (owner 2026-10-28). A locked NFO (edits in Jellyfin) works the same way.
+  const locked = nfo.locked || item.root === JELLYFIN_ROOT;
   const fill = (field: keyof ContentMeta, value: any) => (locked || !(meta as any)[field]) && value != null && value !== "";
   const patch: Record<string, any> = {};
   if (fill("overview", nfo.plot)) patch.overview = nfo.plot;
@@ -306,7 +308,7 @@ export async function applyNfoMeta(item: LocalItem): Promise<void> {
   if (fill("originalTitle", nfo.originalTitle)) patch.originalTitle = nfo.originalTitle;
   if (fill("premiered", nfo.premiered)) patch.premiered = nfo.premiered;
   if (fill("writers", nfo.writers.join(", "))) patch.writers = nfo.writers.slice(0, 6).join(", ");
-  if (!meta.rating && nfo.rating) patch.rating = nfo.rating;
+  if ((locked || !meta.rating) && nfo.rating) patch.rating = nfo.rating;
   if (item.art?.logo && !lockOf(meta).logo) patch.logo = artMarker(item.id, "logo", item.art.v);
   if (Object.keys(patch).length) await ContentMeta.update(patch, { where: { id: contentId } });
 
@@ -316,10 +318,17 @@ export async function applyNfoMeta(item: LocalItem): Promise<void> {
   const sharedKey = titleKeyOf({ id: contentId, type: item.kind === "series" ? "series" : "movie", tmdbId: meta?.tmdbId ?? null });
   const peopleKey = locked ? contentId : sharedKey;
   if ((locked || (await peopleCount(sharedKey)) === 0) && (nfo.actors.length || nfo.directors.length)) {
+    // The NFO's (or Jellyfin's) people, each with TMDB's photo and person page when TMDB's
+    // list for the title has the same name: the list and roles are theirs, the faces ours.
+    const tmdb = new Map<string, { tmdbPersonId: number | null; photo: string | null }>();
+    if (locked && sharedKey !== contentId) {
+      for (const p of await peopleOf([sharedKey])) tmdb.set(`${p.kind}:${p.name.toLowerCase()}`, { tmdbPersonId: p.tmdbPersonId, photo: p.photo });
+    }
+    const face = (kind: string, name: string) => tmdb.get(`${kind}:${name.toLowerCase()}`) ?? { tmdbPersonId: null, photo: null };
     await storePeople(peopleKey, [
-      ...nfo.actors.slice(0, 20).map((a, i) => ({ kind: "cast", name: a.name, role: a.role, order: i, tmdbPersonId: null, photo: null })),
-      ...nfo.directors.map((n, i) => ({ kind: "director", name: n, role: null, order: i, tmdbPersonId: null, photo: null })),
-      ...nfo.writers.slice(0, 6).map((n, i) => ({ kind: "writer", name: n, role: null, order: i, tmdbPersonId: null, photo: null })),
+      ...nfo.actors.slice(0, 20).map((a, i) => ({ kind: "cast", name: a.name, role: a.role, order: i, ...face("cast", a.name) })),
+      ...nfo.directors.map((n, i) => ({ kind: "director", name: n, role: null, order: i, ...face("director", n) })),
+      ...nfo.writers.slice(0, 6).map((n, i) => ({ kind: "writer", name: n, role: null, order: i, ...face("writer", n) })),
     ]);
   }
   // Genres and countries: from the NFO when the title has none (or the NFO is locked).
