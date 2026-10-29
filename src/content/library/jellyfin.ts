@@ -309,3 +309,73 @@ export async function jellyfinSubtitleText(subtitleId: string): Promise<string |
   if (!res.ok) { await res.body?.cancel().catch(() => {}); return null; }
   return res.text();
 }
+
+// ---- Signing in with Jellyfin accounts, and direct streams --------------------------
+
+/** Jellyfin's address as the apps reach it (Settings › Jellyfin address for apps), else the server's. */
+export function jellyfinAppUrl(): string | null {
+  const own = String(setting<string>("jellyfinAppUrl") || "").trim().replace(/\/+$/, "");
+  return /^https?:\/\/[^/\s]+/i.test(own) ? own : jellyfinConfig()?.url ?? null;
+}
+
+export interface JellyfinSignIn { userId: string; name: string; isAdmin: boolean; token: string }
+
+/**
+ * Checks a Jellyfin username and password with Jellyfin (/Users/AuthenticateByName). The
+ * password is passed on once and never stored; the access token Jellyfin returns is the
+ * user's own (their libraries and limits). Null for wrong details or a disabled user.
+ */
+export async function jellyfinAuthenticate(username: string, password: string, device: string): Promise<JellyfinSignIn | null> {
+  const cfg = jellyfinConfig();
+  if (!cfg) throw new Error("Jellyfin is not set up");
+  const deviceId = crypto.createHash("sha256").update(`portalcast:${device}:${username}`).digest("hex").slice(0, 32);
+  const res = await transport(`${cfg.url}/Users/AuthenticateByName`, {
+    method: "POST",
+    redirect: "error",
+    signal: AbortSignal.timeout(15_000),
+    headers: {
+      Authorization: `MediaBrowser Client="PortalCast", Device="PortalCast", DeviceId="${deviceId}", Version="1"`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({ Username: username, Pw: password }),
+  });
+  if (res.status === 401 || res.status === 403 || res.status === 400) { await res.body?.cancel().catch(() => {}); return null; }
+  if (!res.ok) throw new Error(`Jellyfin answered ${res.status}`);
+  const data: any = await res.json();
+  const user = data?.User;
+  if (!user?.Id || !data?.AccessToken || user?.Policy?.IsDisabled) return null;
+  return { userId: String(user.Id), name: String(user.Name || username), isAdmin: Boolean(user.Policy?.IsAdministrator), token: String(data.AccessToken) };
+}
+
+/** Whether a user's Jellyfin token still works (signed out in Jellyfin, or the user removed: no). */
+export async function jellyfinTokenWorks(token: string): Promise<boolean> {
+  const cfg = jellyfinConfig();
+  if (!cfg) return false;
+  try {
+    const res = await transport(`${cfg.url}/Users/Me`, {
+      redirect: "error", signal: AbortSignal.timeout(8_000),
+      headers: { Authorization: `MediaBrowser Client="PortalCast", Device="PortalCast", DeviceId="portalcast-check", Version="1", Token="${token}"`, Accept: "application/json" },
+    });
+    await res.body?.cancel().catch(() => {});
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A link the app plays straight from Jellyfin with the viewer's own token (`ApiKey`, the
+ * parameter Jellyfin keeps when legacy logins are off). `t` (this server's stream token) and
+ * `lib=1` ride along, ignored by Jellyfin, so the apps still find the file's subtitles here.
+ */
+export function jellyfinDirectLink(itemId: string, sourceId: string, userToken: string, streamToken: string, hls: boolean): string | null {
+  const base = jellyfinAppUrl();
+  if (!base || !isJellyfinId(itemId) || !isJellyfinId(sourceId) || !/^[\w-]{8,128}$/.test(userToken)) return null;
+  const extra = `&ApiKey=${encodeURIComponent(userToken)}&t=${encodeURIComponent(streamToken)}&lib=1`;
+  if (hls) {
+    const path = jellyfinHlsPath(itemId, sourceId, crypto.createHash("sha1").update(streamToken).digest("hex").slice(0, 32));
+    return path ? `${base}${path}${extra}&m3u8=1` : null;
+  }
+  return `${base}${jellyfinStreamPath(itemId, sourceId)}${extra}`;
+}

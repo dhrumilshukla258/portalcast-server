@@ -90,6 +90,11 @@ const DEFS: SettingDef[] = [
   // Local libraries
   { key: "jellyfinUrl", env: "JELLYFIN_URL", type: "string", default: "", group: "Jellyfin", label: "Jellyfin server address", help: "For example http://192.168.1.10:8096. Your Jellyfin movie and show libraries become My Library (Admin › Libraries); Jellyfin keeps scanning, metadata and transcoding. Apps never see this address: streams and artwork go through this server. Empty: Jellyfin is off.", apply: "live" },
   { key: "jellyfinApiKey", env: "JELLYFIN_API_KEY", type: "string", default: "", secret: true, group: "Jellyfin", label: "Jellyfin API key", help: "Jellyfin Dashboard › API Keys › +. Stays on this server.", apply: "live" },
+  { key: "jellyfinSignIn", type: "boolean", default: false, group: "Jellyfin", label: "Sign in with Jellyfin", help: "People can sign in here with their Jellyfin username and password (checked by Jellyfin, never stored here). Their PortalCast account is created on the first sign-in and linked to their Jellyfin user.", apply: "live" },
+  { key: "jellyfinNewUsers", type: "string", default: "approve", options: ["approve", "allow"], group: "Jellyfin", label: "New Jellyfin sign-ins", help: "approve: a new account waits for an admin (as with other sign-ups). allow: every Jellyfin user can sign in at once.", apply: "live" },
+  { key: "jellyfinAdmins", type: "boolean", default: false, group: "Jellyfin", label: "Jellyfin admins are admins here", help: "A Jellyfin administrator who signs in becomes a PortalCast admin.", apply: "live" },
+  { key: "jellyfinDirectStreams", type: "boolean", default: true, group: "Jellyfin", label: "Apps play Jellyfin files straight from Jellyfin", help: "For people signed in with Jellyfin: the app streams from Jellyfin with their own Jellyfin login (not the API key), and this server carries no video. Others, and when off, play through this server.", apply: "live" },
+  { key: "jellyfinAppUrl", type: "string", default: "", group: "Jellyfin", label: "Jellyfin address for apps", help: "How phones, TVs and browsers reach Jellyfin, when it differs from the address above (for example http://192.168.1.10:8096 while this server uses http://jellyfin:8096). Empty: the address above.", apply: "live" },
   { key: "mediaRoots", type: "list", default: ["/media"], group: "Local libraries", label: "Media roots", help: "Folders inside the container that libraries may use (the NAS mounts in the compose file). The folder browser shows nothing outside them.", apply: "live" },
 
   // Images
@@ -214,14 +219,14 @@ export async function saveSetting(key: string, raw: unknown): Promise<unknown> {
     if (def.max !== undefined && n > def.max) throw new SettingError(`"${def.label}" must be at most ${def.max}`);
   }
   if (def.options && !def.options.includes(value as string)) throw new SettingError(`"${def.label}" must be one of ${def.options.join(", ")}`);
-  if ((key === "publicBaseUrl" || key === "jellyfinUrl") && value) {
+  if ((key === "publicBaseUrl" || key === "jellyfinUrl" || key === "jellyfinAppUrl") && value) {
     try {
       const u = new URL(value as string);
       if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error();
       // Credentials in the address would be sent to Jellyfin and shown in the admin page.
       if (u.username || u.password) throw new Error();
     } catch {
-      throw new SettingError(key === "jellyfinUrl"
+      throw new SettingError(key === "jellyfinUrl" || key === "jellyfinAppUrl"
         ? "The Jellyfin address must look like http://192.168.1.10:8096 (the key goes in its own setting)"
         : "Public base URL must look like https://stream.example.com");
     }

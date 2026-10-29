@@ -10,7 +10,10 @@
 
 import { onDiscoverCacheClear } from "@/services/discoverCache";
 import { needsBrowserFallback } from "@/content/library/remux";
-import { JELLYFIN_ROOT, needsJellyfinTranscode } from "@/content/library/jellyfin";
+import { JELLYFIN_ROOT, needsJellyfinTranscode, jellyfinIdsOf, jellyfinDirectLink, jellyfinTokenWorks } from "@/content/library/jellyfin";
+import { User } from "@/models/User";
+import { decryptSecret } from "@/auth/crypto";
+import { setting } from "@/config/settings";
 import { artMarker } from "@/content/library/art";
 import { Op } from "sequelize";
 import { LocalItem } from "@/models/LocalItem";
@@ -222,7 +225,25 @@ export async function localFileAsTitle(fileId: string) {
   return { ...all, total_items: data.length, total_loaded: data.length, data };
 }
 
-export async function localPlayLink(fileId: string, userLabel: string, title?: string, client?: string): Promise<string | null> {
+// Whether a user's Jellyfin token still works, checked at most every 10 minutes.
+const tokenChecks = new Map<number, { at: number; token: string | null }>();
+
+/** The viewer's own Jellyfin token, when they signed in with Jellyfin and it still works. */
+async function viewerJellyfinToken(userId: number): Promise<string | null> {
+  const hit = tokenChecks.get(userId);
+  if (hit && Date.now() - hit.at < 10 * 60_000) return hit.token;
+  const u = await User.findByPk(userId, { attributes: ["id", "jellyfinTokenEnc"] });
+  let token: string | null = null;
+  if (u?.jellyfinTokenEnc) {
+    try { token = decryptSecret(u.jellyfinTokenEnc); } catch { token = null; }
+    if (token && !(await jellyfinTokenWorks(token))) token = null;
+  }
+  tokenChecks.set(userId, { at: Date.now(), token });
+  if (tokenChecks.size > 1000) tokenChecks.delete(tokenChecks.keys().next().value as number);
+  return token;
+}
+
+export async function localPlayLink(fileId: string, userLabel: string, title?: string, client?: string, userId?: number, pageIsHttps = false): Promise<string | null> {
   const id = Number(String(fileId).slice(2));
   const file = await MediaFile.findByPk(id);
   if (!file || file.missingSince) return null;
@@ -236,7 +257,18 @@ export async function localPlayLink(fileId: string, userLabel: string, title?: s
     hideable: false,
   });
   if (file.root === JELLYFIN_ROOT) {
-    return client === "web" && needsJellyfinTranscode(file) ? `/api/local/jf/master.m3u8?t=${token}&m3u8=1` : `/api/local/stream?t=${token}`;
+    const transcode = client === "web" && needsJellyfinTranscode(file);
+    // Signed in with Jellyfin: the app streams straight from Jellyfin with the viewer's own
+    // Jellyfin login, and this server carries no video (owner 2026-10-29). Otherwise relayed.
+    if (userId != null && setting<boolean>("jellyfinDirectStreams")) {
+      const ids = jellyfinIdsOf(file.relPath);
+      const own = ids ? await viewerJellyfinToken(userId) : null;
+      const direct = ids && own ? jellyfinDirectLink(ids.itemId, ids.sourceId, own, token, transcode) : null;
+      // A page opened over https cannot play from an http Jellyfin (the browser blocks it).
+      const blocked = client === "web" && pageIsHttps && direct?.startsWith("http:");
+      if (direct && !blocked) return direct;
+    }
+    return transcode ? `/api/local/jf/master.m3u8?t=${token}&m3u8=1` : `/api/local/stream?t=${token}`;
   }
   if (client === "web" && needsBrowserFallback(file)) return `/api/local/hls/index.m3u8?t=${token}&m3u8=1`;
   return `/api/local/stream?t=${token}`;

@@ -264,6 +264,7 @@ const init = async () => {
         p === "/api/auth/login" ||
         p === "/api/auth/setup" ||
         p === "/api/auth/google" ||
+        p === "/api/auth/jellyfin" ||
         p === "/api/auth/refresh" ||
         p === "/api/auth/forgot-password" ||
         p === "/api/auth/reset-password" ||

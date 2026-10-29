@@ -84,4 +84,12 @@ export class User extends Model {
     /** The user's own SubDL API key (encrypted); optional, same idea as above. */
     @Column(DataType.TEXT)
     declare subdlApiKeyEnc?: string;
+
+    /** The Jellyfin user this account signs in as ("Sign in with Jellyfin", content/library/jellyfin.ts). */
+    @Column(DataType.STRING)
+    declare jellyfinUserId?: string | null;
+
+    /** That user's own Jellyfin access token (encrypted): direct streams from Jellyfin use it. */
+    @Column(DataType.TEXT)
+    declare jellyfinTokenEnc?: string | null;
 }

@@ -318,6 +318,7 @@ export async function initDB() {
     await ensureColumns("media_files", [["nfo", "JSON"], ["thumb", "TEXT"], ["keyframes", "JSON"]]);
     // Jellyfin as a library source (content/library/jellyfin.ts), 2026-10-28.
     await ensureColumns("libraries", [["source", "VARCHAR(255)"]]);
+    await ensureColumns("users", [["jellyfinUserId", "VARCHAR(255)"], ["jellyfinTokenEnc", "TEXT"]]);
     await ensureColumns("media_files", [["remotePath", "TEXT"]]);
     await ensureColumns("media_files", [["season", "INTEGER"], ["episode", "INTEGER"], ["episodeEnd", "INTEGER"], ["episodeTitle", "VARCHAR(255)"]]);
     await ensureColumns("users", [

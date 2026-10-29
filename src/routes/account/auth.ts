@@ -13,6 +13,8 @@ import { v4 as uuidv4 } from "uuid";
 import { verifyPassword, hashPassword } from "../../auth/password";
 import { sendAdminApprovalRequest, sendPasswordResetEmail } from "../../auth/email";
 import { getPublicOrigin } from "../../infra/publicUrl";
+import { jellyfinConfig, jellyfinAuthenticate } from "@/content/library/jellyfin";
+import { encryptSecret } from "@/auth/crypto";
 
 const client = new OAuth2Client();
 
@@ -597,6 +599,84 @@ export const authRoutes: ServerRoute[] = [
         return { success: true, message: "Device successfully authorized!" };
       } catch (error) {
         logger.error({ err: error }, "Error authorizing device code");
+        return h.response({ error: "Internal Server Error" }).code(500);
+      }
+    },
+  },
+  {
+    // Whether the login page offers "Sign in with Jellyfin" (Settings › Jellyfin).
+    method: "GET",
+    path: "/api/auth/jellyfin/enabled",
+    handler: () => ({ enabled: Boolean(setting<boolean>("jellyfinSignIn") && jellyfinConfig()) }),
+  },
+  {
+    // Sign in with a Jellyfin username and password (Jellyseerr-style). Jellyfin checks them;
+    // the password is never stored. The account is found by its Jellyfin user id, or created
+    // on the first sign-in (waiting for an admin unless Settings › New Jellyfin sign-ins is
+    // "allow"). The user's own Jellyfin token is kept, encrypted, for direct streams.
+    method: "POST",
+    path: "/api/auth/jellyfin",
+    handler: async (request, h) => {
+      try {
+        if (!setting<boolean>("jellyfinSignIn") || !jellyfinConfig()) {
+          return h.response({ error: "Signing in with Jellyfin is not turned on" }).code(404);
+        }
+        const payload = (request.payload || {}) as any;
+        const username = String(payload.username ?? "").trim().slice(0, 128);
+        const password = String(payload.password ?? "").slice(0, 512);
+        const clientType = payload.clientType === "tv" ? "tv" : "web";
+        if (!username) return h.response({ error: "Enter your Jellyfin username" }).code(400);
+
+        let jf;
+        try {
+          jf = await jellyfinAuthenticate(username, password, clientType);
+        } catch (e: any) {
+          logger.warn(`[auth] Jellyfin sign-in: ${e?.message ?? e}`);
+          return h.response({ error: "Jellyfin is not reachable right now" }).code(502);
+        }
+        if (!jf) {
+          recordFromRequest(request, "login_failed", `jellyfin ${username.slice(0, 80)}`);
+          return h.response({ error: "Wrong Jellyfin username or password" }).code(401);
+        }
+
+        const makeAdmin = jf.isAdmin && setting<boolean>("jellyfinAdmins");
+        let user = await User.findOne({ where: { jellyfinUserId: jf.userId } });
+        if (!user) {
+          const allow = setting<string>("jellyfinNewUsers") === "allow" || makeAdmin;
+          user = await User.create({
+            email: `${jf.userId}@jellyfin.invalid`,
+            name: jf.name,
+            role: makeAdmin ? "admin" : "user",
+            isActive: allow,
+            jellyfinUserId: jf.userId,
+            jellyfinTokenEnc: encryptSecret(jf.token),
+            preferences: { preferredContentType: "movie", favorites: [], recentChannels: [] },
+          } as any);
+          if (!allow) {
+            sendAdminApprovalRequest(`${jf.name} (Jellyfin)`, user.email).catch((err) => logger.error({ err }, "Failed to send admin approval email"));
+            return h.response({ error: "Your request for access has been sent. An administrator will let you in." }).code(403);
+          }
+        } else {
+          if (!user.isActive) {
+            recordFromRequest(request, "login_disabled", null, user.id);
+            return h.response({ error: "Your account is waiting for an administrator or is turned off." }).code(403);
+          }
+          user.jellyfinTokenEnc = encryptSecret(jf.token);
+          if (user.name !== jf.name) user.name = jf.name;
+          if (makeAdmin && user.role !== "admin") user.role = "admin";
+        }
+        user.lastLogin = new Date();
+        await user.save();
+
+        const accessToken = createJWT({ userId: user.id, email: user.email, role: user.role }, 3600);
+        const refreshToken = await issueRefreshToken(user.id, clientType, clientIp(request));
+        return {
+          accessToken,
+          refreshToken,
+          user: { id: user.id, email: user.email, name: user.name, role: user.role, avatarUrl: user.avatarUrl },
+        };
+      } catch (error) {
+        logger.error({ err: error }, "Error during Jellyfin sign-in");
         return h.response({ error: "Internal Server Error" }).code(500);
       }
     },
