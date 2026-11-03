@@ -26,7 +26,9 @@
 // titles are applied at query time from the override generation, so hiding/unhiding a
 // title is reflected immediately without a rebuild.
 
-import { channelOf } from "@/content/titleClean";
+import { channelOf, languageOfCategory } from "@/content/titleClean";
+import { readGenres } from "@/infra/storage";
+import { getActiveProfileId } from "@/routes/stalkerV2/shared";
 import { QueryTypes } from "sequelize";
 import { sequelize } from "@/db";
 import { logger } from "@/infra/logger";
@@ -93,6 +95,27 @@ export async function getDiscoverIndex(): Promise<DiscoverIndex> {
 
 function typeKeyOf(t: number): TypeKey { return t === TYPE_MOVIE ? "movie" : t === TYPE_SERIES ? "series" : "all"; }
 
+/**
+ * "movie:18" -> "gu" for the active source's categories named after one language; "*:18" when
+ * only one type has that category id (series listed in VOD categories on some portals).
+ */
+async function categoryLanguages(): Promise<Map<string, string>> {
+  const profileId = await getActiveProfileId();
+  const out = new Map<string, string>();
+  const any = new Map<string, string | null>();
+  for (const t of ["movie", "series"] as const) {
+    for (const g of await readGenres(t, profileId)) {
+      const id = String(g.id ?? "");
+      const l = languageOfCategory(g.title);
+      if (!id || !l) continue;
+      out.set(`${t}:${id}`, l);
+      any.set(id, any.has(id) && any.get(id) !== l ? null : l);
+    }
+  }
+  for (const [id, l] of any) if (l) out.set(`*:${id}`, l);
+  return out;
+}
+
 async function buildIndex(): Promise<DiscoverIndex> {
   const t0 = Date.now();
   // Served from idx_content_meta_discover (db/index.ts) — a covering index, so this reads
@@ -108,17 +131,38 @@ async function buildIndex(): Promise<DiscoverIndex> {
   const langs: string[] = [];
   const langIndex = new Map<string, number>();
   const rankOf = new Map<string, number>();
+  const setLang = (r: number, l: string) => {
+    let li = langIndex.get(l);
+    if (li === undefined) { li = langs.length; langs.push(l); langIndex.set(l, li); }
+    lang[r] = li;
+  };
   for (let r = 0; r < n; r++) {
     const row = rows[r];
     ids[r] = row.id;
     rankOf.set(row.id, r);
     type[r] = row.type === "movie" ? TYPE_MOVIE : row.type === "series" ? TYPE_SERIES : 0;
-    const l = row.originalLanguage;
-    if (l) {
-      let li = langIndex.get(l);
-      if (li === undefined) { li = langs.length; langs.push(l); langIndex.set(l, li); }
-      lang[r] = li;
-    } else lang[r] = -1;
+    if (row.originalLanguage) setLang(r, row.originalLanguage);
+    else lang[r] = -1;
+  }
+  // Titles TMDB has no language for (most often: not matched at all) take their provider
+  // category's ("GUJARATI | MOVIES"), so the language filter finds them too. TMDB's own
+  // language is never replaced.
+  try {
+    const byCategory = await categoryLanguages();
+    if (byCategory.size > 0) {
+      const missing = await sequelize.query<{ id: string; type: string; portalCategoryId: string | null }>(
+        "SELECT id, type, portalCategoryId FROM content_meta WHERE isRepresentative = 1 AND (originalLanguage IS NULL OR originalLanguage = '') AND portalCategoryId IS NOT NULL",
+        { type: QueryTypes.SELECT },
+      );
+      for (const m of missing) {
+        const r = rankOf.get(m.id);
+        if (r === undefined || lang[r] !== -1) continue;
+        const l = byCategory.get(`${m.type}:${m.portalCategoryId}`) ?? byCategory.get(`*:${m.portalCategoryId}`);
+        if (l) setLang(r, l);
+      }
+    }
+  } catch (e: any) {
+    logger.warn(`[discoverIndex] category languages skipped: ${e?.message ?? e}`);
   }
 
   const tables: Record<Exclude<TagKind, "network">, string> = { genre: "content_genres", country: "content_countries", theme: "content_themes" };

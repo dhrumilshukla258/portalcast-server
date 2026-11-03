@@ -331,6 +331,43 @@ export function languageCodeToName(code: string): string {
   return ISO_LANGUAGE_NAMES[code.toLowerCase()] || code.toUpperCase();
 }
 
+/**
+ * The language a provider category is in, as an ISO 639-1 code ("GUJARATI | MOVIES" -> "gu"),
+ * or null when its name has no language, several ("TAMIL & TELUGU"), or one that is only the
+ * subtitles' ("ENGLISH SUB"). Full names only: a short code like "Mal" or "Ben" is too often a
+ * word. Used for titles TMDB could not match, which have no original language of their own
+ * (discoverIndex.ts): half of one provider's Gujarati films were missing from the Gujarati
+ * filter (owner, 2026-11-03).
+ */
+export function languageOfCategory(title: string | null | undefined): string | null {
+  const t = String(title || "").toLowerCase();
+  if (!t || /\bsub(?:s|bed|titles?|titled)?\b/.test(t)) return null;
+  const found = new Set<string>();
+  for (const [name, re] of categoryLanguageRes()) if (re.test(t)) found.add(name);
+  if (found.size !== 1) return null;
+  return ISO_CODE_OF_NAME.get([...found][0]) ?? null;
+}
+
+const ISO_CODE_OF_NAME = (() => {
+  const m = new Map<string, string>();
+  for (const [code, name] of Object.entries(ISO_LANGUAGE_NAMES)) if (!m.has(name)) m.set(name, code);
+  return m;
+})();
+
+let categoryRes: [string, RegExp][] | null = null;
+/** One whole-word pattern per language with a code: its full spellings and its own name. */
+function categoryLanguageRes(): [string, RegExp][] {
+  if (categoryRes) return categoryRes;
+  const spellings = new Map<string, Set<string>>();
+  for (const name of ISO_CODE_OF_NAME.keys()) spellings.set(name, new Set([name.toLowerCase()]));
+  for (const [name, list] of Object.entries(LANGUAGE_ALIASES)) {
+    const set = spellings.get(name);
+    if (set) for (const sp of list) if (sp.length > 3 && !sp.includes(" ")) set.add(sp);
+  }
+  categoryRes = [...spellings].map(([name, set]) => [name, new RegExp(`(?:^|[^\\p{L}])(?:${[...set].join("|")})(?:$|[^\\p{L}])`, "u")]);
+  return categoryRes;
+}
+
 export interface LanguageInfo {
   audio: string | null;
   subtitles: string | null;

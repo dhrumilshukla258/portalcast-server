@@ -27,3 +27,17 @@ test("full language names, quality marks and channel prefixes behave as before",
   assert.equal(stripReleaseNoise("Star Plus Suhani Si Ek Ladki"), "Suhani Si Ek Ladki");
   assert.equal(normalizeTitleKey("Ben 10: Alien Force - Hindi"), normalizeTitleKey("Ben 10: Alien Force"));
 });
+
+test("a provider category's language, for titles TMDB has none for", async () => {
+  const { languageOfCategory } = await import("../src/content/titleClean");
+  const cases: [string, string | null][] = [
+    ["GUJARATI | MOVIES", "gu"], ["GUJARATI | NOTOK & WEB SERIES", "gu"], ["Gujrati Natak", "gu"],
+    ["HINDI | DUBBED", "hi"], ["BENGALI | BANGLA MOVIES", "bn"], ["TURKISH | SERIES", "tr"], ["ENGLISH | 4K UHD MOVIES", "en"],
+    // No language, two languages, a word that only looks like one, subtitles only.
+    ["KIDS | MOVIES", null], ["PORTUGUESE | SPANISH MOVIES", null], ["HINDU | RELIGIOUS", null],
+    ["ENGLISH SUB", null], ["Korean Subbed", null], ["SOUTH | DUBBED", null], ["All", null], ["", null],
+    // Short codes are not taken from a category name.
+    ["MAL MOVIES", null], ["BEN TV", null],
+  ];
+  for (const [title, want] of cases) assert.equal(languageOfCategory(title), want, title);
+});
