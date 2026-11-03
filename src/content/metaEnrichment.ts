@@ -22,7 +22,8 @@ import { ContentCountry } from "@/models/ContentCountry";
 import { ContentTheme } from "@/models/ContentTheme";
 import { SystemConfig } from "@/models/SystemConfig";
 import { clearDiscoverCache } from "@/services/discoverCache";
-import { normalizeTitleKey, stripReleaseNoise } from "@/content/titleClean";
+import { normalizeTitleKey, stripReleaseNoise, languageOfCategory } from "@/content/titleClean";
+import { seasonMarkerOf, seriesBaseKey, withoutSeasonMarker } from "@/content/seasonParts";
 import { tmdbQueries, titleYearOf } from "@/content/tmdb";
 
 /**
@@ -34,11 +35,24 @@ import { tmdbQueries, titleYearOf } from "@/content/tmdb";
  * TMDB id alone merged 2,456 such groups on the live catalog (2026-10-20).
  */
 const TRAILING_YEAR = /[\s_\-]*[(\[]?(?:19|20)\d{2}[)\]]?\s*$/;
-export function groupKeyFor(type: ContentType, name: string, year: string | null | undefined, tmdbId?: number | null): string {
-  if (!tmdbId) return `${type}:${normalizeTitleKey(name)}:${year || ""}`;
-  const key = normalizeTitleKey(name);
+export function groupKeyFor(type: ContentType, name: string, year: string | null | undefined, tmdbId?: number | null, categoryId?: string | null): string {
+  // A series' season parts ("Lost: Season 2", "Mylanchi S07") share their show's key
+  // (content/seasonParts.ts). Parts TMDB did not match have no year in common (each season
+  // aired in its own): theirs is the show's name in its provider category.
+  const marker = type === "series" ? seasonMarkerOf(name) : null;
+  if (!tmdbId) {
+    if (marker && categoryId) return `${type}:${marker.base}:cat${categoryId}`;
+    return `${type}:${normalizeTitleKey(name)}:${year || ""}`;
+  }
+  const key = marker ? marker.base : normalizeTitleKey(name);
   const noYear = key.replace(TRAILING_YEAR, "").trim() || key;
   return `${type}:${noYear}:tmdb${tmdbId}`;
+}
+
+/** The cleaned name shown for a title; a series' season marker is left out (one show). */
+export function displayNameOf(type: string, name: string): string {
+  const cleaned = stripReleaseNoise(name);
+  return type === "series" ? withoutSeasonMarker(cleaned) : cleaned;
 }
 
 // Single catch-all genre tag for titles whose only "genre" signal is a
@@ -228,8 +242,8 @@ async function upsertContent(contentId: string, type: ContentType, name: string,
       // one real title. Legitimate variants (same film dubbed into different
       // languages) share the same production year, so this doesn't split those
       // apart. See db/index.ts's one-time migration for existing rows.
-      groupKey: groupKeyFor(type, name, resolved.year, resolved.tmdbId),
-      trimmedName: stripReleaseNoise(name),
+      groupKey: groupKeyFor(type, name, resolved.year, resolved.tmdbId, categoryId),
+      trimmedName: displayNameOf(type, name),
       portalCategoryId: categoryId,
       cast: resolved.cast,
       director: resolved.director,
@@ -823,6 +837,14 @@ async function runFixups(): Promise<void> {
     await recomputeRepresentatives();
     clearDiscoverCache();
   });
+  // Season parts of one show ("Lost: Season 2") share its group (content/seasonParts.ts):
+  // wrongly matched or unmatched parts are matched to their show, then every group is rebuilt.
+  await step("season-parts-match", async () => { logger.info(`[MetaEnrich] ${await matchSeasonParts()}`); });
+  await step("regroup-seasons", async () => {
+    await regroupAll();
+    await recomputeRepresentatives();
+    clearDiscoverCache();
+  });
   // The first run read only object-shaped meta and sealed nothing: stored meta is JSON text.
   await step("seal-progress-links", async () => {});
   await step("seal-progress-links-2", sealProgressLinks);
@@ -1051,7 +1073,7 @@ export async function backfillCreditsAndOverview(): Promise<void> {
  */
 async function regroupAll(alsoRename?: RegExp): Promise<void> {
   const rows = (await ContentMeta.findAll({
-    attributes: ["id", "type", "name", "year", "tmdbId", "groupKey", "trimmedName"],
+    attributes: ["id", "type", "name", "year", "tmdbId", "groupKey", "trimmedName", "portalCategoryId"],
     raw: true,
   })) as any[];
   // The cleaned name is only rewritten where today's rules are meant to change it: a title
@@ -1059,10 +1081,11 @@ async function regroupAll(alsoRename?: RegExp): Promise<void> {
   // "Star Wars"). Other rows keep theirs, so no older cleaning rule is applied anew.
   const changes = rows
     .map((r) => {
-      const fresh = stripReleaseNoise(r.name);
+      const fresh = displayNameOf(r.type, r.name);
       const old = r.trimmedName || "";
-      const trimmedName = channelOf(r.name) || fresh.length > old.length || alsoRename?.test(r.name) ? fresh : old;
-      return { id: r.id, groupKey: groupKeyFor(r.type, r.name, r.year, r.tmdbId), trimmedName, old: r };
+      const seasonPart = r.type === "series" && !!seasonMarkerOf(r.name);
+      const trimmedName = seasonPart || channelOf(r.name) || fresh.length > old.length || alsoRename?.test(r.name) ? fresh : old;
+      return { id: r.id, groupKey: groupKeyFor(r.type, r.name, r.year, r.tmdbId, r.portalCategoryId), trimmedName, old: r };
     })
     .filter((c) => c.groupKey !== c.old.groupKey || c.trimmedName !== (c.old.trimmedName || ""));
   const BATCH = 500;
@@ -1131,6 +1154,109 @@ async function portalListItem(cache: Map<string, Map<string, any>>, row: { id: s
  * Flower Moon, owner 2026-10-23). null when there is no such portal title; throws when TMDB does
  * not know the id.
  */
+/** Which season parts matchSeasonParts moves to which TMDB title (pure; see there). */
+export function planSeasonPartMatches(rows: any[], catLang: Map<string, string>): { row: any; tmdbId: number }[] {
+  const langOf = (r: any) => catLang.get(String(r.portalCategoryId)) ?? "";
+  const byBase = new Map<string, any[]>();
+  for (const r of rows) {
+    const base = seriesBaseKey(r.name);
+    const list = byBase.get(base) ?? [];
+    list.push(r);
+    byBase.set(base, list);
+  }
+  const named = (r: any, base: string) => !!r.tmdbId && !!r.originalTitle && normalizeTitleKey(r.originalTitle) === base;
+  const moves: { row: any; tmdbId: number }[] = [];
+  for (const [base, list] of byBase) {
+    if (list.length < 2 || !list.some((r) => seasonMarkerOf(r.name))) continue;
+    for (const part of list) {
+      if (!seasonMarkerOf(part.name) || part.tmdbIdLocked || named(part, base)) continue;
+      const lang = langOf(part);
+      const votes = new Map<number, number>();
+      for (const r of list) if (r !== part && named(r, base) && langOf(r) === lang) votes.set(r.tmdbId, (votes.get(r.tmdbId) ?? 0) + 1);
+      const ranked = [...votes].sort((a, b) => b[1] - a[1]);
+      if (ranked.length === 0 || (ranked.length > 1 && ranked[0][1] === ranked[1][1])) continue;
+      if (Number(part.tmdbId) === ranked[0][0]) continue;
+      // A match most of the show's parts share is not overruled by fewer: a TMDB title in
+      // another script ("बिग बॉस" for Bigg Boss) is not "named like the show", yet right.
+      const current = part.tmdbId ? list.filter((r) => r.tmdbId === part.tmdbId && langOf(r) === lang).length : 0;
+      if (current >= ranked[0][1]) continue;
+      moves.push({ row: part, tmdbId: ranked[0][0] });
+    }
+  }
+  return moves;
+}
+
+/**
+ * Season parts of one show matched to different TMDB titles, or to none (content/seasonParts.ts):
+ * "Lost: Season 1" matched to Attack on Titan while Seasons 3-6 are Lost, "Asianet : Mylanchi
+ * S07" unmatched beside a matched "Mylanchi Season 7". Such a part is matched to its show, so
+ * it joins the show's group, when all of this holds:
+ * - its own match is missing or plainly not this show (the TMDB title is not the show's name);
+ * - exactly one TMDB title named like the show is used by its other parts (or one most of them
+ *   use), in a category of the same language as the part's;
+ * - more of its parts use that title than use the part's own match;
+ * - nobody fixed the part's match by hand (Admin's Fix match locks it).
+ * Two real shows of the same name (Empire 1962 and Empire 2015) are left as they are.
+ */
+export async function matchSeasonParts(): Promise<string> {
+  const rows = (await ContentMeta.findAll({
+    where: { type: "series", portalCategoryId: { [Op.ne]: LOCAL_CATEGORY } },
+    attributes: ["id", "type", "name", "poster", "tmdbId", "originalTitle", "portalCategoryId", "tmdbIdLocked", "groupKey"],
+    raw: true,
+  })) as any[];
+  const catLang = new Map<string, string>();
+  for (const t of ["series", "movie"] as const) {
+    for (const g of await readGenres(t)) {
+      const l = languageOfCategory(g.title);
+      if (l && !catLang.has(String(g.id))) catLang.set(String(g.id), l);
+    }
+  }
+  const moves = planSeasonPartMatches(rows, catLang);
+  const metas = new Map<number, TmdbMeta | null>();
+  const lists = new Map<string, Map<string, any>>();
+  let done = 0;
+  for (const m of moves) {
+    if (!metas.has(m.tmdbId)) {
+      metas.set(m.tmdbId, await fetchMetaByTmdbId("tv", m.tmdbId).catch(() => null));
+      await sleep(THROTTLE_MS);
+    }
+    const meta = metas.get(m.tmdbId);
+    if (!meta) continue;
+    try {
+      await applyMatch(m.row, "tv", meta, m.tmdbId, lists);
+      done++;
+      logger.info(`[MetaEnrich] season part "${m.row.name}" matched to its show (TMDB ${m.tmdbId}, was ${m.row.tmdbId ?? "none"})`);
+    } catch (e: any) {
+      logger.warn(`[MetaEnrich] season part "${m.row.name}" not re-matched: ${e?.message ?? e}`);
+    }
+  }
+  if (done) {
+    await withBusyRetry("[MetaEnrich] updating Discover", () => recomputeRepresentatives());
+    clearDiscoverCache();
+  }
+  return `${done} of ${moves.length} season parts matched to their show`;
+}
+
+/** One portal row matched to [meta] (null: matched automatically again), locked to [lockId]. */
+async function applyMatch(v: any, kind: "movie" | "tv", meta: TmdbMeta | null, lockId: number | null, lists: Map<string, Map<string, any>>): Promise<number | null> {
+  const portalId = String(v.id).replace(/^(movie|series)_/, "");
+  const cacheKey = kind === "movie" ? `tmdb_movie_${portalId}` : `tmdb_tv_${portalId}`;
+  if (meta) await xtreamCache.set(cacheKey, meta);
+  else await xtreamCache.delete(cacheKey);
+  const it = await portalListItem(lists, v).catch(() => undefined);
+  const resolved = await resolveMeta(
+    kind, cacheKey, v.name, extractYear(it?.year || it?.releaseDate || it?.added || ""),
+    splitList(it?.genres_str ?? it?.genre), splitList(it?.country),
+    it?.stream_icon || it?.cover || v.poster || null, portalPlot(it),
+    { directors: it?.director, cast: it?.actors || it?.cast, imdbRating: it?.rating_imdb },
+  );
+  await withBusyRetry(`[MetaEnrich] fix match ${v.name}`, async () => {
+    await upsertContent(v.id, v.type, v.name, resolved, v.portalCategoryId || "");
+    await ContentMeta.update({ tmdbIdLocked: lockId ?? null }, { where: { id: v.id } });
+  });
+  return resolved.tmdbId ?? null;
+}
+
 export async function fixPortalMatch(contentId: string, tmdbId: number | null): Promise<{ tmdbId: number | null; locked: boolean; versions: number } | null> {
   const attributes = ["id", "type", "name", "poster", "portalCategoryId", "groupKey"];
   const row = (await ContentMeta.findByPk(contentId, { attributes, raw: true })) as any;
@@ -1144,22 +1270,8 @@ export async function fixPortalMatch(contentId: string, tmdbId: number | null): 
   const lists = new Map<string, Map<string, any>>();
   let matched: number | null = null;
   for (const v of versions) {
-    const portalId = String(v.id).replace(/^(movie|series)_/, "");
-    const cacheKey = kind === "movie" ? `tmdb_movie_${portalId}` : `tmdb_tv_${portalId}`;
-    if (meta) await xtreamCache.set(cacheKey, meta);
-    else await xtreamCache.delete(cacheKey);
-    const it = await portalListItem(lists, v).catch(() => undefined);
-    const resolved = await resolveMeta(
-      kind, cacheKey, v.name, extractYear(it?.year || it?.releaseDate || it?.added || ""),
-      splitList(it?.genres_str ?? it?.genre), splitList(it?.country),
-      it?.stream_icon || it?.cover || v.poster || null, portalPlot(it),
-      { directors: it?.director, cast: it?.actors || it?.cast, imdbRating: it?.rating_imdb },
-    );
-    await withBusyRetry(`[MetaEnrich] fix match ${v.name}`, async () => {
-      await upsertContent(v.id, v.type, v.name, resolved, v.portalCategoryId || "");
-      await ContentMeta.update({ tmdbIdLocked: tmdbId ?? null }, { where: { id: v.id } });
-    });
-    if (v.id === row.id) matched = resolved.tmdbId ?? null;
+    const resolvedId = await applyMatch(v, kind, meta, tmdbId, lists);
+    if (v.id === row.id) matched = resolvedId;
   }
   await withBusyRetry("[MetaEnrich] updating Discover", () => recomputeRepresentatives());
   clearDiscoverCache();
@@ -1345,7 +1457,7 @@ async function recleanChannelNames(): Promise<void> {
   let recleaned = 0;
   let matched = 0;
   for (const row of rows) {
-    const trimmed = stripReleaseNoise(row.name);
+    const trimmed = displayNameOf(row.type, row.name);
     const hasChannel = !!channelOf(row.name);
     if (trimmed === row.trimmedName && !hasChannel) continue;
     recleaned++;
@@ -1353,7 +1465,7 @@ async function recleanChannelNames(): Promise<void> {
     // "Star Wars ..." / "Colors of Love"): only the cleaned name and the name-based group.
     if (row.tmdbId || !hasChannel) {
       await ContentMeta.update(
-        row.tmdbId ? { trimmedName: trimmed } : { trimmedName: trimmed, groupKey: groupKeyFor(row.type, row.name, row.year, null) },
+        row.tmdbId ? { trimmedName: trimmed } : { trimmedName: trimmed, groupKey: groupKeyFor(row.type, row.name, row.year, null, row.portalCategoryId) },
         { where: { id: row.id } },
       );
       continue;

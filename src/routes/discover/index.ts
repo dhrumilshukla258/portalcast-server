@@ -6,6 +6,7 @@ import { titleKeyOf } from "@/content/people";
 import { LOCAL_CATEGORY } from "@/content/metaEnrichment";
 import { localVersionLabel } from "@/content/library/catalog";
 import { categoryNames, iptvVersionLabel } from "@/content/versionLabel";
+import { onePerLanguage, audioLanguageOf } from "@/content/seasonParts";
 import { artUrl } from "@/content/library/art";
 import { ratingFields } from "@/content/titleRatings";
 import { stripReleaseNoise, channelOf } from "@/content/titleClean";
@@ -712,11 +713,15 @@ export const discoverRoutes: ServerRoute[] = [
 
       // Every version sharing the title's groupKey, representative first, then by name
       // (content/catalog/cards.ts: the snapshot when on, the database otherwise).
-      const rows = await variantRows(id, await getHiddenContentKeys());
-      if (rows.length === 0) return { variants: [] };
+      const allRows = await variantRows(id, await getHiddenContentKeys());
+      if (allRows.length === 0) return { variants: [] };
+      const profileId = await getActiveProfileId();
+      // A show listed one season at a time: one version per language, each opening all its
+      // seasons (content/seasonParts.ts).
+      const seriesNames = (await categoryNames(profileId)).series;
+      const rows = onePerLanguage(allRows as any[], (r: any) => r.portalCategoryId === LOCAL_CATEGORY ? "local" : audioLanguageOf(r.name, seriesNames.get(String(r.portalCategoryId))));
 
       const ids = rows.map((r: any) => r.id);
-      const profileId = await getActiveProfileId();
       await ensureMediaInfoLoaded();
       const [{ genres: genresById, countries: countriesById }, names] = await Promise.all([
         titleRows(ids),

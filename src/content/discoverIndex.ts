@@ -26,7 +26,8 @@
 // titles are applied at query time from the override generation, so hiding/unhiding a
 // title is reflected immediately without a rebuild.
 
-import { channelOf, languageOfCategory } from "@/content/titleClean";
+import { channelOf, languageOfCategory, languageCodeOfName } from "@/content/titleClean";
+import { audioLanguageOf } from "@/content/seasonParts";
 import { readGenres } from "@/infra/storage";
 import { getActiveProfileId } from "@/routes/stalkerV2/shared";
 import { QueryTypes } from "sequelize";
@@ -42,7 +43,10 @@ const TYPE_SERIES = 2;
 export interface DiscoverIndex {
   ids: string[];                 // rank -> content_meta.id
   type: Uint8Array;              // rank -> TYPE_MOVIE | TYPE_SERIES | 0
-  lang: Int32Array;              // rank -> index into langs (-1 = none)
+  lang: Int32Array;              // rank -> index into langs (-1 = none): the original language
+  /** Language code -> ascending ranks of titles with that audio: their original language or
+   *  any copy's ("HINDI | DUBBED", "Movie - Tamil"). What the language filter means. */
+  audio: Map<string, Int32Array>;
   langs: string[];
   langIndex: Map<string, number>;
   rankOf: Map<string, number>;   // id -> rank
@@ -99,21 +103,26 @@ function typeKeyOf(t: number): TypeKey { return t === TYPE_MOVIE ? "movie" : t =
  * "movie:18" -> "gu" for the active source's categories named after one language; "*:18" when
  * only one type has that category id (series listed in VOD categories on some portals).
  */
-async function categoryLanguages(): Promise<Map<string, string>> {
+async function categoryLanguages(): Promise<{ langs: Map<string, string>; titles: Map<string, string> }> {
   const profileId = await getActiveProfileId();
   const out = new Map<string, string>();
+  // Every category's name by "type:id" ("movie:18" -> "GUJARATI | MOVIES"), "*:id" as above.
+  const titles = new Map<string, string>();
   const any = new Map<string, string | null>();
   for (const t of ["movie", "series"] as const) {
     for (const g of await readGenres(t, profileId)) {
       const id = String(g.id ?? "");
+      if (!id) continue;
+      titles.set(`${t}:${id}`, String(g.title ?? ""));
+      if (!titles.has(`*:${id}`)) titles.set(`*:${id}`, String(g.title ?? ""));
       const l = languageOfCategory(g.title);
-      if (!id || !l) continue;
+      if (!l) continue;
       out.set(`${t}:${id}`, l);
       any.set(id, any.has(id) && any.get(id) !== l ? null : l);
     }
   }
   for (const [id, l] of any) if (l) out.set(`*:${id}`, l);
-  return out;
+  return { langs: out, titles };
 }
 
 async function buildIndex(): Promise<DiscoverIndex> {
@@ -147,8 +156,14 @@ async function buildIndex(): Promise<DiscoverIndex> {
   // Titles TMDB has no language for (most often: not matched at all) take their provider
   // category's ("GUJARATI | MOVIES"), so the language filter finds them too. TMDB's own
   // language is never replaced.
+  const audioLists = new Map<string, number[]>();
+  const addAudio = (code: string, r: number) => {
+    let list = audioLists.get(code);
+    if (!list) audioLists.set(code, (list = []));
+    list.push(r);
+  };
   try {
-    const byCategory = await categoryLanguages();
+    const { langs: byCategory, titles } = await categoryLanguages();
     if (byCategory.size > 0) {
       const missing = await sequelize.query<{ id: string; type: string; portalCategoryId: string | null }>(
         "SELECT id, type, portalCategoryId FROM content_meta WHERE isRepresentative = 1 AND (originalLanguage IS NULL OR originalLanguage = '') AND portalCategoryId IS NOT NULL",
@@ -161,8 +176,31 @@ async function buildIndex(): Promise<DiscoverIndex> {
         if (l) setLang(r, l);
       }
     }
+    // Every copy's audio counts for its title: a Hollywood film in "HINDI | DUBBED" is found
+    // under Hindi as well as English (owner, 2026-11-03: the category is the audio).
+    const copies = await sequelize.query<{ id: string; type: string; groupKey: string; name: string; portalCategoryId: string | null; isRepresentative: number }>(
+      "SELECT id, type, groupKey, name, portalCategoryId, isRepresentative FROM content_meta WHERE groupKey IS NOT NULL",
+      { type: QueryTypes.SELECT },
+    );
+    const repOf = new Map<string, number>();
+    for (const c of copies) if (c.isRepresentative) { const r = rankOf.get(c.id); if (r !== undefined) repOf.set(`${c.type}|${c.groupKey}`, r); }
+    for (const c of copies) {
+      const r = repOf.get(`${c.type}|${c.groupKey}`);
+      if (r === undefined || !c.portalCategoryId || c.portalCategoryId === "local") continue;
+      const title = titles.get(`${c.type}:${c.portalCategoryId}`) ?? titles.get(`*:${c.portalCategoryId}`);
+      const code = languageCodeOfName(audioLanguageOf(c.name, title));
+      if (code) addAudio(code, r);
+    }
   } catch (e: any) {
     logger.warn(`[discoverIndex] category languages skipped: ${e?.message ?? e}`);
+  }
+  for (let r = 0; r < n; r++) if (lang[r] >= 0) addAudio(langs[lang[r]], r);
+  const audio = new Map<string, Int32Array>();
+  for (const [code, list] of audioLists) {
+    const arr = Int32Array.from(list).sort();
+    let w = 0;
+    for (let i = 0; i < arr.length; i++) if (i === 0 || arr[i] !== arr[i - 1]) arr[w++] = arr[i];
+    audio.set(code, w === arr.length ? arr : arr.slice(0, w));
   }
 
   const tables: Record<Exclude<TagKind, "network">, string> = { genre: "content_genres", country: "content_countries", theme: "content_themes" };
@@ -211,19 +249,18 @@ async function buildIndex(): Promise<DiscoverIndex> {
       .map(([value, arr]) => ({ value, count: count(arr) }))
       .filter((f) => f.count > 0)
       .sort((a, b) => b.count - a.count);
-    const langCounts = new Int32Array(langs.length);
-    for (let r = 0; r < n; r++) if (lang[r] >= 0 && (want === -1 || type[r] === want)) langCounts[lang[r]]++;
+    const languageFacet = [...audio].map(([value, arr]) => ({ value, count: count(arr) })).filter((f) => f.count > 0).sort((a, b) => b.count - a.count);
     facets[tk] = {
       genres: tagFacet("genre"),
       countries: tagFacet("country"),
       themes: tagFacet("theme"),
       networks: tagFacet("network"),
-      languages: langs.map((value, i) => ({ value, count: langCounts[i] })).filter((f) => f.count > 0).sort((a, b) => b.count - a.count),
+      languages: languageFacet,
     };
   }
 
   logger.info(`[discoverIndex] built: ${n} titles, ${postings.genre.size} genres, ${postings.country.size} countries, ${postings.theme.size} themes, ${postings.network.size} channels in ${Date.now() - t0} ms`);
-  return { ids, type, lang, langs, langIndex, rankOf, postings, facets, builtAt: Date.now() };
+  return { ids, type, lang, audio, langs, langIndex, rankOf, postings, facets, builtAt: Date.now() };
 }
 
 export function facetsFor(idx: DiscoverIndex, type?: string) {
@@ -251,11 +288,11 @@ export interface BrowseQuery {
 /** Matching ids for one page (newest first) and the total match count. */
 export function browse(idx: DiscoverIndex, q: BrowseQuery): { ids: string[]; total: number } {
   const want = q.type === "movie" ? TYPE_MOVIE : q.type === "series" ? TYPE_SERIES : -1;
-  let wantLang = -2; // -2 = no language filter
+  // The language filter: titles with that audio (DiscoverIndex.audio), ranks ascending.
+  let langList: Int32Array | null = null;
   if (q.language) {
-    const li = idx.langIndex.get(q.language);
-    if (li === undefined) return { ids: [], total: 0 };
-    wantLang = li;
+    langList = idx.audio.get(q.language) ?? null;
+    if (!langList || langList.length === 0) return { ids: [], total: 0 };
   }
   const hiddenRanks = new Set<number>();
   for (const id of q.hidden) { const r = idx.rankOf.get(id); if (r !== undefined) hiddenRanks.add(r); }
@@ -267,7 +304,7 @@ export function browse(idx: DiscoverIndex, q: BrowseQuery): { ids: string[]; tot
     return false;
   };
   const keep = (r: number) =>
-    (want === -1 || idx.type[r] === want) && (wantLang === -2 || idx.lang[r] === wantLang) && !hiddenRanks.has(r) &&
+    (want === -1 || idx.type[r] === want) && !hiddenRanks.has(r) &&
     (excluded.length === 0 || !isExcluded(r));
 
   const start = (q.page - 1) * q.pageSize;
@@ -276,9 +313,13 @@ export function browse(idx: DiscoverIndex, q: BrowseQuery): { ids: string[]; tot
   let total = 0;
   const take = (r: number) => { if (total >= start && total < end) out.push(idx.ids[r]); total++; };
 
+  if (q.tags.length === 0 && langList) {
+    for (let i = 0; i < langList.length; i++) if (keep(langList[i])) take(langList[i]);
+    return { ids: out, total };
+  }
   if (q.tags.length === 0) {
     const n = idx.ids.length;
-    if (want === -1 && wantLang === -2) {
+    if (want === -1) {
       // Unfiltered feed: the count is arithmetic, the page is a slice (skipping hidden).
       if (hiddenRanks.size === 0 && excluded.length === 0) return { ids: idx.ids.slice(start, Math.min(end, n)), total: n };
     }
@@ -292,6 +333,7 @@ export function browse(idx: DiscoverIndex, q: BrowseQuery): { ids: string[]; tot
     if (!arr || arr.length === 0) return { ids: [], total: 0 };
     lists.push(arr);
   }
+  if (langList) lists.push(langList);
   lists.sort((a, b) => a.length - b.length);
   const [base, ...rest] = lists;
   const cursors = rest.map(() => 0);

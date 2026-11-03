@@ -354,6 +354,11 @@ const ISO_CODE_OF_NAME = (() => {
   return m;
 })();
 
+/** "Hindi" -> "hi": a language name (as LANGUAGE_ALIASES spells it) to its ISO 639-1 code. */
+export function languageCodeOfName(name: string | null | undefined): string | null {
+  return name ? ISO_CODE_OF_NAME.get(name) ?? null : null;
+}
+
 let categoryRes: [string, RegExp][] | null = null;
 /** One whole-word pattern per language with a code: its full spellings and its own name. */
 function categoryLanguageRes(): [string, RegExp][] {

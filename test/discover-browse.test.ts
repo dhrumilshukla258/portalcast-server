@@ -21,6 +21,8 @@ function index(): DiscoverIndex {
     lang: new Int32Array(6).fill(-1),
     langs: [],
     langIndex: new Map(),
+    // Hindi: m2 (original) and m3 (a Hindi-dubbed copy of an English film); Tamil: s4.
+    audio: new Map([["hi", Int32Array.from([1, 2])], ["en", Int32Array.from([2])], ["ta", Int32Array.from([3])]]),
     rankOf: new Map(ids.map((id, r) => [id, r])),
     postings,
     facets: {} as DiscoverIndex["facets"],
@@ -51,4 +53,13 @@ test("only exclusions: everything else, with type, hidden titles and pages appli
 test("an unknown excluded genre changes nothing; no filters is the whole list", () => {
   assert.deepEqual(browse(index(), q({ tags: g("Crime"), exclude: g("Western") })), { ids: ["m1", "m2", "m3", "s4", "m6"], total: 5 });
   assert.deepEqual(browse(index(), q({})), { ids: ["m1", "m2", "m3", "s4", "m5", "m6"], total: 6 });
+});
+
+test("a language: titles with that audio, dubbed copies included", () => {
+  assert.deepEqual(browse(index(), q({ language: "hi" })), { ids: ["m2", "m3"], total: 2 });
+  assert.deepEqual(browse(index(), q({ language: "en" })), { ids: ["m3"], total: 1 });
+  assert.deepEqual(browse(index(), q({ language: "hi", type: "series" })), { ids: [], total: 0 });
+  assert.deepEqual(browse(index(), q({ language: "gu" })), { ids: [], total: 0 });
+  // With genres: both must hold.
+  assert.deepEqual(browse(index(), q({ language: "hi", tags: g("Horror") })), { ids: ["m3"], total: 1 });
 });
