@@ -41,12 +41,29 @@ export function groupKeyFor(type: ContentType, name: string, year: string | null
   // aired in its own): theirs is the show's name in its provider category.
   const marker = type === "series" ? seasonMarkerOf(name) : null;
   if (!tmdbId) {
-    if (marker && categoryId) return `${type}:${marker.base}:cat${categoryId}`;
-    return `${type}:${normalizeTitleKey(name)}:${year || ""}`;
+    if (marker && categoryId) return `${type}:${foldKeyPunctuation(marker.base)}:cat${categoryId}`;
+    return `${type}:${foldKeyPunctuation(normalizeTitleKey(name))}:${year || ""}`;
   }
-  const key = marker ? marker.base : normalizeTitleKey(name);
+  const key = foldKeyPunctuation(marker ? marker.base : normalizeTitleKey(name));
   const noYear = key.replace(TRAILING_YEAR, "").trim() || key;
   return `${type}:${noYear}:tmdb${tmdbId}`;
+}
+
+/**
+ * A group key's name without the punctuation copies of one title spell differently: dashes
+ * ("Golmaal - Fun Unlimited", "Golmaal – Fun Unlimited", the library's "Golmaal: Fun
+ * Unlimited" were three titles, owner 2026-11-03), apostrophes (straight, curly, or lost to a
+ * bad encoding: "Don't", "Don’t", "Don�t"), and "!", "?", ".", ",". The name stays in the key:
+ * it keeps a wrong TMDB match ("Half" matched to a Harry Potter film) out of the real title.
+ */
+export function foldKeyPunctuation(key: string): string {
+  const folded = key
+    .replace(/['’‘`´�]/g, "")
+    .replace(/[!?.,]+/g, "")
+    .replace(/[-‐‑‒–—―−]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return folded || key;
 }
 
 /** The cleaned name shown for a title; a series' season marker is left out (one show). */
@@ -841,6 +858,13 @@ async function runFixups(): Promise<void> {
   // wrongly matched or unmatched parts are matched to their show, then every group is rebuilt.
   await step("season-parts-match", async () => { logger.info(`[MetaEnrich] ${await matchSeasonParts()}`); });
   await step("regroup-seasons", async () => {
+    await regroupAll();
+    await recomputeRepresentatives();
+    clearDiscoverCache();
+  });
+  // Keys no longer depend on dashes, apostrophes and "!?.," (foldKeyPunctuation): copies of
+  // one title spelled differently become one title with versions.
+  await step("regroup-punctuation", async () => {
     await regroupAll();
     await recomputeRepresentatives();
     clearDiscoverCache();

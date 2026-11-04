@@ -50,7 +50,7 @@ test("season parts share their show's group; other series keep theirs", () => {
   assert.equal(groupKeyFor("series", "Metoo Wolf Of Bollywood -S01", "2019", null, "10"), groupKeyFor("series", "Metoo Wolf Of Bollywood - S02", "2020", null, "10"));
   assert.notEqual(groupKeyFor("series", "Rahasya Romancho S01", "", null, "10"), groupKeyFor("series", "Rahasya Romancho S01", "", null, "36"));
   // No marker: as before.
-  assert.equal(groupKeyFor("series", "Kim's Convenience 2016", "2016", 65495), "series:kim's convenience:tmdb65495");
+  assert.equal(groupKeyFor("series", "Kim's Convenience 2016", "2016", 65495), "series:kims convenience:tmdb65495");
   assert.equal(groupKeyFor("series", "Out Story", "2021", null, "10"), "series:out story:2021");
   // Movies are never touched.
   assert.equal(groupKeyFor("movie", "Season 2", "2020", null), "movie:season 2:2020");
@@ -160,4 +160,17 @@ test("wrongly matched or unmatched season parts are matched to their show, and o
   ];
   const moves = planSeasonPartMatches(rows, cat).map((m) => `${m.row.id}->${m.tmdbId}`).sort();
   assert.deepEqual(moves, ["series_1->4607", "series_2->4607", "series_7->235327"]);
+});
+
+test("copies of one title spelled with different punctuation share a key (Golmaal)", () => {
+  const key = groupKeyFor("movie", "Golmaal - Fun Unlimited", "2006", 19670);
+  assert.equal(key, "movie:golmaal fun unlimited:tmdb19670");
+  assert.equal(groupKeyFor("movie", "Golmaal – Fun Unlimited UHD", "2006", 19670), key);
+  assert.equal(groupKeyFor("movie", "Golmaal: Fun Unlimited", "2006", 19670), key);
+  assert.equal(groupKeyFor("movie", "Don't Log Off", "", 728623), groupKeyFor("movie", "Don’t Log Off", "", 728623));
+  assert.equal(groupKeyFor("movie", "Ape vs. Mecha Ape", "", 1), groupKeyFor("movie", "Ape vs Mecha Ape", "", 1));
+  // The name still counts: a wrong match to the same TMDB id stays apart.
+  assert.notEqual(groupKeyFor("movie", "Half", "", 767), groupKeyFor("movie", "Harry Potter and the Half-Blood Prince", "", 767));
+  // A name of punctuation only keeps it.
+  assert.equal(groupKeyFor("movie", "...", "", null).startsWith("movie:"), true);
 });
