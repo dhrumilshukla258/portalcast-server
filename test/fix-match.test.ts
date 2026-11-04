@@ -32,7 +32,7 @@ test("Fix match: the chosen title is kept and locked; null matches automatically
   await initDB();
   await loadSettings();
   await saveSetting("tmdbToken", "stand-in");
-  await ContentMeta.upsert({ id: "movie_9001", type: "movie", name: "Lion", portalCategoryId: "77", tmdbId: 8587, source: "tmdb", year: "1994", enrichedAt: new Date() } as any);
+  await ContentMeta.upsert({ id: "movie_9001", type: "movie", name: "The Lion King", portalCategoryId: "77", tmdbId: 8587, source: "tmdb", year: "1994", enrichedAt: new Date() } as any);
 
   assert.deepEqual(await fixPortalMatch("movie_9001", 334543), { tmdbId: 334543, locked: true, versions: 1 });
   let row: any = await ContentMeta.findByPk("movie_9001", { raw: true });

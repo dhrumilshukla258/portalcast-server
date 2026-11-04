@@ -361,6 +361,41 @@ function normName(s: string): string {
   return String(s || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
+/**
+ * A one-word name is only one of a result's names when it is nearly that name (a spelling:
+ * "Bohurupi" / "Bahurupi") or opens a two-word one. TMDB's search returns any title holding
+ * the word, and the most popular won: "VS" became Coyote vs. Acme, "Half" a Harry Potter
+ * film, "Will" Good Will Hunting, "Golden" Kingsman (owner 2026-11-03: a "VS" card with
+ * Coyote vs. Acme's poster that did not open). Names of more words are not checked here.
+ */
+export function oneWordFits(want: string, names: string[]): boolean {
+  if (!want || want.includes(" ")) return true;
+  return names.some((n) => {
+    const words = n.split(" ");
+    if (words.length === 2 && words[0] === want) return true;
+    return words.length === 1 && similarity(want, n) >= 0.8;
+  });
+}
+
+/** 1 - edit distance / longer length. */
+function similarity(a: string, b: string): number {
+  if (a === b) return 1;
+  const m = a.length, n = b.length;
+  if (!m || !n) return 0;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return 1 - prev[n] / Math.max(m, n);
+}
+
+/** Whether TMDB answers at all (a failed search reads as "no results"). */
+export async function tmdbReachable(): Promise<boolean> {
+  return (await tmdbGet("/configuration")) !== null;
+}
+
 /** The result that best fits the query: name match first, then year, then popularity. */
 export function pickResult(results: any[], q: TitleQuery, kind: "movie" | "tv", titleYear: number | null = null, fullTitle: string | null = null): any | null {
   const full = fullTitle ? normName(fullTitle) : null;
@@ -372,6 +407,7 @@ export function pickResult(results: any[], q: TitleQuery, kind: "movie" | "tv", 
     const exact = names.includes(want);
     const starts = !exact && names.some((n) => n.startsWith(`${want} `) || want.startsWith(`${n} `));
     if (q.strict && !exact) continue;
+    if (!exact && !oneWordFits(want, names)) continue;
     const ry = String((kind === "movie" ? r.release_date : r.first_air_date) || "").slice(0, 4);
     // TMDB's title exactly equal to our whole title (number included: "Blade Runner 2049",
     // "Fear Street: 1994") is trusted as is. Otherwise a year written in the name must agree

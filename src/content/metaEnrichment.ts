@@ -24,7 +24,7 @@ import { SystemConfig } from "@/models/SystemConfig";
 import { clearDiscoverCache } from "@/services/discoverCache";
 import { normalizeTitleKey, stripReleaseNoise, languageOfCategory } from "@/content/titleClean";
 import { seasonMarkerOf, seriesBaseKey, withoutSeasonMarker } from "@/content/seasonParts";
-import { tmdbQueries, titleYearOf } from "@/content/tmdb";
+import { tmdbQueries, titleYearOf, tmdbReachable } from "@/content/tmdb";
 
 /**
  * The key language/format variants of one title share: the cleaned name plus, when TMDB
@@ -869,6 +869,13 @@ async function runFixups(): Promise<void> {
     await recomputeRepresentatives();
     clearDiscoverCache();
   });
+  // One-word names TMDB gave a longer title they are only a word of ("VS" -> Coyote vs. Acme).
+  await step("rematch-one-word-names", async () => {
+    logger.info(`[MetaEnrich] ${await rematchOneWordNames()}`);
+    await regroupAll();
+    await recomputeRepresentatives();
+    clearDiscoverCache();
+  });
   // The first run read only object-shaped meta and sealed nothing: stored meta is JSON text.
   await step("seal-progress-links", async () => {});
   await step("seal-progress-links-2", sealProgressLinks);
@@ -1279,6 +1286,58 @@ async function applyMatch(v: any, kind: "movie" | "tv", meta: TmdbMeta | null, l
     await ContentMeta.update({ tmdbIdLocked: lockId ?? null }, { where: { id: v.id } });
   });
   return resolved.tmdbId ?? null;
+}
+
+/**
+ * A one-word name matched to a longer title it is only a middle word of ("VS" -> "Coyote vs.
+ * Acme", "Golden" -> "Kingsman: The Golden Circle"): the TMDB pick before oneWordFits
+ * (content/tmdb.ts). Pure; [rows] carry trimmedName and originalTitle. Titles named in
+ * another script are left alone (no English title is stored to compare with).
+ */
+export function oneWordMismatches<T extends { trimmedName?: string | null; originalTitle?: string | null; tmdbIdLocked?: number | null }>(rows: T[]): T[] {
+  const norm = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  return rows.filter((r) => {
+    if (r.tmdbIdLocked || !r.trimmedName || !r.originalTitle || !/^[\u0000-ɏ\s]+$/.test(r.originalTitle)) return false;
+    const want = norm(r.trimmedName);
+    const words = norm(r.originalTitle).split(" ");
+    return !!want && !want.includes(" ") && words.length >= 3 && words[0] !== want && words.slice(1).includes(want);
+  });
+}
+
+/**
+ * Those titles are searched again with today's rules: the same title is kept, another one is
+ * taken, and none leaves the title unmatched with the portal's own poster and plot. Nothing
+ * is changed while TMDB does not answer (a failed search reads as no result).
+ */
+async function rematchOneWordNames(): Promise<string> {
+  const rows = oneWordMismatches((await ContentMeta.findAll({
+    where: { tmdbId: { [Op.ne]: null }, portalCategoryId: { [Op.ne]: LOCAL_CATEGORY } },
+    attributes: ["id", "type", "name", "year", "poster", "portalCategoryId", "trimmedName", "originalTitle", "tmdbId", "tmdbIdLocked"],
+    raw: true,
+  })) as any[]);
+  if (!rows.length) return "no one-word names to match again";
+  if (!(await tmdbReachable())) throw new Error("TMDB does not answer; trying again on the next start");
+  const lists = new Map<string, Map<string, any>>();
+  let kept = 0, moved = 0, cleared = 0;
+  for (const row of rows) {
+    const kind = row.type === "movie" ? "movie" : "tv";
+    const meta = kind === "movie" ? await fetchMovieMeta(row.name, row.year || undefined) : await fetchTVMeta(row.name, row.year || undefined);
+    await sleep(THROTTLE_MS);
+    if (meta && Number(meta.tmdbId) === Number(row.tmdbId)) { kept++; continue; }
+    if (!meta && !(await tmdbReachable())) throw new Error("TMDB stopped answering; trying again on the next start");
+    if (meta) {
+      await applyMatch(row, kind, meta, null, lists);
+      moved++;
+    } else {
+      const portalId = String(row.id).replace(/^(movie|series)_/, "");
+      await xtreamCache.set(kind === "movie" ? `tmdb_movie_${portalId}` : `tmdb_tv_${portalId}`, { _not_found: true });
+      await applyMatch(row, kind, null, null, lists);
+      await withBusyRetry(`[MetaEnrich] unmatch ${row.name}`, () => ContentMeta.update({ tmdbId: null }, { where: { id: row.id } }));
+      cleared++;
+    }
+    logger.info(`[MetaEnrich] one-word name ${row.name}: was ${row.originalTitle}, now ${meta ? meta.tmdbId : "unmatched"}`);
+  }
+  return `one-word names matched again: ${rows.length} (${kept} kept, ${moved} to another title, ${cleared} unmatched)`;
 }
 
 export async function fixPortalMatch(contentId: string, tmdbId: number | null): Promise<{ tmdbId: number | null; locked: boolean; versions: number } | null> {
