@@ -33,7 +33,7 @@ import { getEpgCache, fetchAndCacheEpg } from "@/content/epg";
 import { getPublicOrigin } from "@/infra/publicUrl";
 import { channelLogoPath, proxiedLogoPath } from "@/providers/portalAssets";
 import { fetchMovieMeta, fetchTVMeta } from "@/content/tmdb";
-import { searchSubtitles, resolveSubtitleDownloadUrl, type SubtitleResult } from "@/content/opensubtitles";
+import { searchSubtitles, resolveSubtitleDownloadUrl, downloadableFirst, openSubtitlesDownloadsFailing, type SubtitleResult } from "@/content/opensubtitles";
 import { searchSubdl, downloadSubdlText, isValidSubdlPath } from "@/content/subdl";
 import { subtitleKeysFor } from "@/content/subtitleKeys";
 import { searchGestdown, downloadGestdownText, isValidGestdownId } from "@/content/gestdown";
@@ -79,7 +79,8 @@ export const subtitleRoutes: ServerRoute[] = [
         const jfItem = jfFile?.root === JELLYFIN_ROOT ? jellyfinIdsOf(jfFile.relPath)?.itemId ?? null : null;
         const key = JSON.stringify([title.trim().toLowerCase(), year ?? "", season ?? "", episode ?? "", lang ?? "", moviehash ?? "", jfItem ?? ""]);
         const hit = searchCache.get(key);
-        if (hit && Date.now() - hit.at < SEARCH_TTL_MS) return { success: true, results: hit.results };
+        // OpenSubtitles' files go last while its downloads fail (content/opensubtitles.ts).
+        if (hit && Date.now() - hit.at < SEARCH_TTL_MS) return { success: true, results: downloadableFirst(hit.results as SubtitleResult[], openSubtitlesDownloadsFailing()) };
 
         const params = {
           title,
@@ -112,7 +113,7 @@ export const subtitleRoutes: ServerRoute[] = [
           searchCache.set(key, { at: Date.now(), results });
           if (searchCache.size > 500) searchCache.delete(searchCache.keys().next().value as string);
         }
-        return { success: true, results };
+        return { success: true, results: downloadableFirst(results, openSubtitlesDownloadsFailing()) };
       } catch (err) {
         logger.error({ err }, "Subtitle search error");
         return h.response({ success: false, error: "Subtitle search failed." }).code(500);

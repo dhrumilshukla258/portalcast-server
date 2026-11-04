@@ -2,7 +2,7 @@
 // "not these genres" leaves out any title carrying one of them.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { browse, type DiscoverIndex } from "../src/content/discoverIndex";
+import { browse, imdbScore, type DiscoverIndex } from "../src/content/discoverIndex";
 
 // Six titles, newest first (rank = position); type 1 = movie, 2 = series.
 function index(): DiscoverIndex {
@@ -23,6 +23,8 @@ function index(): DiscoverIndex {
     langIndex: new Map(),
     // Hindi: m2 (original) and m3 (a Hindi-dubbed copy of an English film); Tamil: s4.
     audio: new Map([["hi", Int32Array.from([1, 2])], ["en", Int32Array.from([2])], ["ta", Int32Array.from([3])]]),
+    // IMDb x10: m1 8.1, m2 7.0, m3 none, s4 9.2, m5 6.9, m6 7.5.
+    imdb: Uint8Array.from([81, 70, 0, 92, 69, 75]),
     rankOf: new Map(ids.map((id, r) => [id, r])),
     postings,
     facets: {} as DiscoverIndex["facets"],
@@ -62,4 +64,21 @@ test("a language: titles with that audio, dubbed copies included", () => {
   assert.deepEqual(browse(index(), q({ language: "gu" })), { ids: [], total: 0 });
   // With genres: both must hold.
   assert.deepEqual(browse(index(), q({ language: "hi", tags: g("Horror") })), { ids: ["m3"], total: 1 });
+});
+
+test("IMDb rating: titles rated at least that, alone or with other filters", () => {
+  assert.deepEqual(browse(index(), q({ minImdb: 7 })), { ids: ["m1", "m2", "s4", "m6"], total: 4 });
+  assert.deepEqual(browse(index(), q({ minImdb: 7.5, type: "movie" })), { ids: ["m1", "m6"], total: 2 });
+  assert.deepEqual(browse(index(), q({ minImdb: 7, tags: g("Crime"), exclude: g("Horror") })), { ids: ["m1", "m2", "s4"], total: 3 });
+  assert.deepEqual(browse(index(), q({ minImdb: 7, language: "hi" })), { ids: ["m2"], total: 1 });
+  // A title with no IMDb score is not "rated 0 or more": no filter, no change.
+  assert.equal(browse(index(), q({})).total, 6);
+});
+
+test("IMDb scores are stored x10 and only when real", () => {
+  assert.equal(imdbScore(7.5), 75);
+  assert.equal(imdbScore("8.04"), 80);
+  assert.equal(imdbScore(null), 0);
+  assert.equal(imdbScore(0), 0);
+  assert.equal(imdbScore(11), 0);
 });

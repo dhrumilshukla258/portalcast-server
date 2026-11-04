@@ -150,6 +150,38 @@ export async function searchSubtitles(params: {
   }
 }
 
+// Downloads failing at OpenSubtitles while its search still answers: its download endpoint
+// returned "503 Service unavailable" for hours on 2026-11-04, and the shared pool's daily limit
+// answers 406. Each top OpenSubtitles result then failed in turn ("Couldn't load that
+// subtitle"). For a while after such a failure the search lists other sources' files first
+// (downloadableFirst); a download that works again ends it at once.
+const DOWNLOADS_DOWN_FOR_MS = 15 * 60 * 1000;
+let downloadsDownUntil = 0;
+
+export function openSubtitlesDownloadsFailing(now: number = Date.now()): boolean {
+  return now < downloadsDownUntil;
+}
+
+/** Records how an OpenSubtitles download went: [status] of the failure, or null when it worked. */
+export function noteOpenSubtitlesDownload(status: number | null, sharedPool: boolean, now: number = Date.now()): void {
+  if (status === null) { downloadsDownUntil = 0; return; }
+  // 5xx is the service; 406/429 is the quota or rate limit of the pool everyone shares (a linked
+  // account's own limit is that user's alone).
+  if (status >= 500 || (sharedPool && (status === 406 || status === 429))) downloadsDownUntil = now + DOWNLOADS_DOWN_FOR_MS;
+}
+
+/** [results] with OpenSubtitles' files last while its downloads fail; the order is kept otherwise. */
+export function downloadableFirst<T extends { source: string }>(results: T[], osFailing: boolean): T[] {
+  if (!osFailing) return results;
+  return [...results.filter((r) => r.source !== "opensubtitles"), ...results.filter((r) => r.source === "opensubtitles")];
+}
+
+/** The start of an error body for the log (OpenSubtitles' 503 is a whole HTML page). */
+function brief(data: unknown): string {
+  const s = typeof data === "string" ? data : JSON.stringify(data);
+  return s.length > 200 ? `${s.slice(0, 200)}…` : s;
+}
+
 // OpenSubtitles gates actual file downloads behind a POST that returns a temporary,
 // rate-limited download link — this isn't the final .srt content itself.
 // `appUserId`, when provided, draws from that user's own linked OpenSubtitles
@@ -166,6 +198,7 @@ export async function resolveSubtitleDownloadUrl(fileId: number, appUserId?: num
       { file_id: fileId },
       { headers: headers(session?.token, apiKey), timeout: 8000 },
     );
+    if (data?.link) noteOpenSubtitlesDownload(null, !session);
     return data?.link || null;
   } catch (err: any) {
     // A cached session token may have expired server-side early or been
@@ -175,12 +208,15 @@ export async function resolveSubtitleDownloadUrl(fileId: number, appUserId?: num
       logger.warn(`[OpenSubtitles] linked session for user ${appUserId} rejected (401) — retrying anonymously`);
       try {
         const { data } = await axios.post(`${OS_BASE}/download`, { file_id: fileId }, { headers: headers(undefined, apiKey), timeout: 8000 });
+        if (data?.link) noteOpenSubtitlesDownload(null, true);
         return data?.link || null;
       } catch {
         // fall through to the error log below
       }
     }
-    logger.error(`[OpenSubtitles] download resolve failed for fileId=${fileId}: ${err?.response?.status ?? ""} ${err?.response?.data ? JSON.stringify(err.response.data) : err?.message}`);
+    const status = Number(err?.response?.status) || 0;
+    if (status) noteOpenSubtitlesDownload(status, !session);
+    logger.error(`[OpenSubtitles] download resolve failed for fileId=${fileId}: ${status || ""} ${err?.response?.data ? brief(err.response.data) : err?.message}`);
     return null;
   }
 }

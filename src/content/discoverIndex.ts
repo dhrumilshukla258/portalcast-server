@@ -49,6 +49,9 @@ export interface DiscoverIndex {
   audio: Map<string, Int32Array>;
   langs: string[];
   langIndex: Map<string, number>;
+  /** rank -> IMDb score x10 (75 = 7.5), the highest of the title's copies with 20+ votes
+   *  (the rating cards show, content/titleRatings.ts); 0 = none. The IMDb rating filter. */
+  imdb: Uint8Array;
   rankOf: Map<string, number>;   // id -> rank
   postings: Record<TagKind, Map<string, Int32Array>>;
   facets: Record<TypeKey, {
@@ -57,6 +60,8 @@ export interface DiscoverIndex {
     themes: { value: string; count: number }[];
     languages: { value: string; count: number }[];
     networks: { value: string; count: number }[];
+    /** "8" -> titles rated 8+ on IMDb, for each of IMDB_STEPS. */
+    imdbRatings: { value: string; count: number }[];
   }>;
   builtAt: number;
 }
@@ -96,6 +101,9 @@ export async function getDiscoverIndex(): Promise<DiscoverIndex> {
     .finally(() => { building = null; });
   return building;
 }
+
+/** The IMDb rating filter's choices: "at least 9", "at least 8", ... */
+export const IMDB_STEPS = [9, 8, 7, 6, 5] as const;
 
 function typeKeyOf(t: number): TypeKey { return t === TYPE_MOVIE ? "movie" : t === TYPE_SERIES ? "series" : "all"; }
 
@@ -156,6 +164,7 @@ async function buildIndex(): Promise<DiscoverIndex> {
   // Titles TMDB has no language for (most often: not matched at all) take their provider
   // category's ("GUJARATI | MOVIES"), so the language filter finds them too. TMDB's own
   // language is never replaced.
+  const imdb = new Uint8Array(n);
   const audioLists = new Map<string, number[]>();
   const addAudio = (code: string, r: number) => {
     let list = audioLists.get(code);
@@ -178,15 +187,18 @@ async function buildIndex(): Promise<DiscoverIndex> {
     }
     // Every copy's audio counts for its title: a Hollywood film in "HINDI | DUBBED" is found
     // under Hindi as well as English (owner, 2026-11-03: the category is the audio).
-    const copies = await sequelize.query<{ id: string; type: string; groupKey: string; name: string; portalCategoryId: string | null; isRepresentative: number }>(
-      "SELECT id, type, groupKey, name, portalCategoryId, isRepresentative FROM content_meta WHERE groupKey IS NOT NULL",
+    // The same scan gives each title's IMDb score (any copy's: they share one rating).
+    const copies = await sequelize.query<{ id: string; type: string; groupKey: string; name: string; portalCategoryId: string | null; isRepresentative: number; imdbRating: number | null; imdbVotes: number | null }>(
+      "SELECT id, type, groupKey, name, portalCategoryId, isRepresentative, imdbRating, imdbVotes FROM content_meta WHERE groupKey IS NOT NULL",
       { type: QueryTypes.SELECT },
     );
     const repOf = new Map<string, number>();
     for (const c of copies) if (c.isRepresentative) { const r = rankOf.get(c.id); if (r !== undefined) repOf.set(`${c.type}|${c.groupKey}`, r); }
     for (const c of copies) {
       const r = repOf.get(`${c.type}|${c.groupKey}`);
-      if (r === undefined || !c.portalCategoryId || c.portalCategoryId === "local") continue;
+      if (r === undefined) continue;
+      if ((Number(c.imdbVotes) || 0) >= 20) imdb[r] = Math.max(imdb[r], imdbScore(c.imdbRating));
+      if (!c.portalCategoryId || c.portalCategoryId === "local") continue;
       const title = titles.get(`${c.type}:${c.portalCategoryId}`) ?? titles.get(`*:${c.portalCategoryId}`);
       const code = languageCodeOfName(audioLanguageOf(c.name, title));
       if (code) addAudio(code, r);
@@ -250,17 +262,29 @@ async function buildIndex(): Promise<DiscoverIndex> {
       .filter((f) => f.count > 0)
       .sort((a, b) => b.count - a.count);
     const languageFacet = [...audio].map(([value, arr]) => ({ value, count: count(arr) })).filter((f) => f.count > 0).sort((a, b) => b.count - a.count);
+    const atLeast = new Array<number>(IMDB_STEPS.length).fill(0);
+    for (let r = 0; r < n; r++) {
+      if (imdb[r] === 0 || (want !== -1 && type[r] !== want)) continue;
+      for (let i = 0; i < IMDB_STEPS.length; i++) if (imdb[r] >= IMDB_STEPS[i] * 10) atLeast[i]++;
+    }
     facets[tk] = {
       genres: tagFacet("genre"),
       countries: tagFacet("country"),
       themes: tagFacet("theme"),
       networks: tagFacet("network"),
       languages: languageFacet,
+      imdbRatings: IMDB_STEPS.map((s, i) => ({ value: String(s), count: atLeast[i] })).filter((f) => f.count > 0),
     };
   }
 
   logger.info(`[discoverIndex] built: ${n} titles, ${postings.genre.size} genres, ${postings.country.size} countries, ${postings.theme.size} themes, ${postings.network.size} channels in ${Date.now() - t0} ms`);
-  return { ids, type, lang, audio, langs, langIndex, rankOf, postings, facets, builtAt: Date.now() };
+  return { ids, type, lang, audio, langs, langIndex, imdb, rankOf, postings, facets, builtAt: Date.now() };
+}
+
+/** An IMDb score as stored in DiscoverIndex.imdb: 7.5 -> 75; 0 when there is none. */
+export function imdbScore(rating: unknown): number {
+  const v = Number(rating);
+  return v > 0 && v <= 10 ? Math.round(v * 10) : 0;
 }
 
 export function facetsFor(idx: DiscoverIndex, type?: string) {
@@ -281,6 +305,8 @@ export interface BrowseQuery {
   /** Titles carrying any of these are left out ("not Horror"). */
   exclude?: { kind: TagKind; value: string }[];
   hidden: Set<string>;
+  /** Only titles rated at least this on IMDb (1-10; 20+ votes). */
+  minImdb?: number;
   page: number;
   pageSize: number;
 }
@@ -303,8 +329,10 @@ export function browse(idx: DiscoverIndex, q: BrowseQuery): { ids: string[]; tot
     for (const arr of excluded) { const p = lowerBound(arr, r, 0); if (p < arr.length && arr[p] === r) return true; }
     return false;
   };
+  const minImdb = q.minImdb ? imdbScore(q.minImdb) : 0;
   const keep = (r: number) =>
     (want === -1 || idx.type[r] === want) && !hiddenRanks.has(r) &&
+    (minImdb === 0 || idx.imdb[r] >= minImdb) &&
     (excluded.length === 0 || !isExcluded(r));
 
   const start = (q.page - 1) * q.pageSize;
@@ -321,7 +349,7 @@ export function browse(idx: DiscoverIndex, q: BrowseQuery): { ids: string[]; tot
     const n = idx.ids.length;
     if (want === -1) {
       // Unfiltered feed: the count is arithmetic, the page is a slice (skipping hidden).
-      if (hiddenRanks.size === 0 && excluded.length === 0) return { ids: idx.ids.slice(start, Math.min(end, n)), total: n };
+      if (hiddenRanks.size === 0 && excluded.length === 0 && minImdb === 0) return { ids: idx.ids.slice(start, Math.min(end, n)), total: n };
     }
     for (let r = 0; r < n; r++) if (keep(r)) take(r);
     return { ids: out, total };

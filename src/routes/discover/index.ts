@@ -331,6 +331,8 @@ export const discoverRoutes: ServerRoute[] = [
         countries: f.countries,
         themes: f.themes,
         languages: f.languages,
+        // IMDb rating: how many titles are rated at least 9, 8, 7, 6, 5 (clients show "8+").
+        imdbRatings: f.imdbRatings,
         // Channels shows air on, with their logos (from the live channel list).
         // "Channel / Platform": TV channels that exist in Live TV, plus streaming platforms and
         // the generic "Urdu TV" (never in Live TV). A channel the portal does not carry keeps
@@ -378,6 +380,8 @@ export const discoverRoutes: ServerRoute[] = [
       const [idx, hidden] = await Promise.all([getDiscoverIndex(), getHiddenContentKeySet()]);
       const { ids, total } = browseIndex(idx, {
         type, language: q.language ? String(q.language) : undefined, tags, exclude, hidden, page, pageSize: PAGE_SIZE,
+        // "minImdb=7": rated 7+ on IMDb.
+        minImdb: Number(q.minImdb) > 0 ? Math.min(10, Number(q.minImdb)) : undefined,
       });
 
       // The page's rows and tags: from the catalog snapshot when it is on (titles changed since
