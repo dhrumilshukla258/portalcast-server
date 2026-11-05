@@ -94,3 +94,15 @@ test("matches from the TV guide: first airing, no replays, highlights or archive
   assert.deepEqual(guideGamesFrom(progs, ["Football"], now).map((g: any) => g.title), ["Everton v Chelsea"]);
   assert.deepEqual(guideGamesFrom(progs, ["Tennis"], now), []);
 });
+
+test("channels the admin listed are matched by name, whatever the case and spacing (Settings › Sports)", async () => {
+  const { channelNameKey, excludedNames } = await import("../src/content/sports");
+  // Owner 2026-11-05: ZEE BUSINESS's guide was a sports channel's schedule.
+  const names = excludedNames(["ZEE BUSINESS", "  star gold 4k ", "", 7]);
+  assert.ok(names.has(channelNameKey("ZEE BUSINESS")));
+  assert.ok(names.has(channelNameKey("Zee  Business")));
+  assert.ok(names.has(channelNameKey("STAR GOLD 4K")));
+  assert.ok(!names.has(channelNameKey("ZEE BUSINESS HD")), "only the channel named");
+  assert.ok(!names.has(""));
+  assert.equal(excludedNames(undefined).size, 0, "nothing set: every channel");
+});

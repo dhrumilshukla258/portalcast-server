@@ -249,6 +249,7 @@ export interface GameMatch { channelId: string; programme: string }
  */
 async function matchGames(snap: Snapshot, games: Game[]): Promise<Map<string, GameMatch[]>> {
   const out = new Map<string, GameMatch[]>();
+  const skip = await replayChannels();
   const end = guideEnd(snap);
   const nowSec = Math.floor(Date.now() / 1000);
   const byWindow = new Map<string, { w: ReturnType<typeof windowOf>; items: { g: Game; needles: string[] }[] }>();
@@ -264,6 +265,7 @@ async function matchGames(snap: Snapshot, games: Game[]): Promise<Map<string, Ga
   }
   for (const { w, items } of byWindow.values()) {
     await forEachProgramme(snap, w.from, w.to, (channelId, name, start) => {
+      if (skip.has(channelId)) return;
       if (w.startsInside && (start < w.from || start >= w.to)) return;
       const p = liveName(name);
       if (!p) return;
@@ -451,7 +453,11 @@ function mergeSameMatch(games: GuideGame[]): GuideGame[] {
 
 let guideCache: { key: string; result: Promise<GuideGame[]> } | null = null;
 
-/** Channel ids in a group whose name says replays (the owner's "SPORTS REPLAYS"); 10 minutes. */
+/**
+ * Channel ids Sports never uses; 10 minutes. Those in a group whose name says replays (the
+ * owner's "SPORTS REPLAYS"), and those the admin listed by name (Settings › Sports, "channels not
+ * used"; owner 2026-11-05: ZEE BUSINESS's guide was a sports channel's schedule).
+ */
 let replayCache: { at: number; ids: Set<string> } | null = null;
 async function replayChannels(): Promise<Set<string>> {
   if (replayCache && Date.now() - replayCache.at < 10 * 60_000) return replayCache.ids;
@@ -460,10 +466,21 @@ async function replayChannels(): Promise<Set<string>> {
     const profileId = await activeProfileIdForSports();
     const [genres, channels] = await Promise.all([readGenres("channel", profileId), readChannels(profileId)]);
     const replayGroups = new Set(genres.filter((g: any) => /replay/i.test(String(g.title ?? ""))).map((g: any) => String(g.id)));
-    for (const c of channels) if (replayGroups.has(String(c.tv_genre_id))) ids.add(String(c.id));
+    const named = excludedNames(setting<string[]>("sportsExcludedChannels"));
+    for (const c of channels) {
+      if (replayGroups.has(String(c.tv_genre_id)) || named.has(channelNameKey(c.name))) ids.add(String(c.id));
+    }
   } catch { /* none known: nothing excluded */ }
   replayCache = { at: Date.now(), ids };
   return ids;
+}
+
+/** A channel name as compared with the admin's list: case, spaces and "|" do not count. */
+export function channelNameKey(name: unknown): string {
+  return String(name ?? "").toLowerCase().replace(/[|]+/g, " ").replace(/\s+/g, " ").trim();
+}
+export function excludedNames(list: unknown): Set<string> {
+  return new Set((Array.isArray(list) ? list : []).map(channelNameKey).filter(Boolean));
 }
 
 /**
@@ -513,7 +530,11 @@ let loading: Promise<string> | null = null;
 let settingsChanged = false;
 let matchCache: { key: string; result: Promise<Map<string, GameMatch[]>> } | null = null;
 
-onSettingChange((key) => { if (key === "sportsLeagues") settingsChanged = true; });
+onSettingChange((key) => {
+  if (key === "sportsLeagues") settingsChanged = true;
+  // Channels not used: matched again at once.
+  if (key === "sportsExcludedChannels") { replayCache = null; guideCache = null; matchCache = null; }
+});
 
 /** The configured league slugs: lowercase, valid, unique, at most 20. */
 export function configuredLeagues(): string[] {
