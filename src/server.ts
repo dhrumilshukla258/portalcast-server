@@ -8,6 +8,8 @@ import { ContentCache } from "./models/ContentCache";
 import { runStorageMigrations } from "./db/storageMigrations";
 import { titleImageRoutes } from "./routes/admin/titleImages";
 import { titleMatchRoutes } from "./routes/admin/titleMatch";
+import { titleMergeRoutes } from "./routes/admin/titleMerge";
+import { loadTitleMerges } from "./content/titleMerges";
 import { evictImageCache } from "./content/imageCache";
 import { startPortalHealth, iptvHealth } from "./services/portalHealth";
 import { libraryAdminRoutes } from "./routes/library/admin";
@@ -94,6 +96,8 @@ const init = async () => {
     logger.info("ADMIN_PASSWORD is not set — admins sign in with their own account; the emergency admin password is off.");
   }
   await initDB();
+  // Titles the admin merged (content/titleMerges.ts): known before anything is grouped.
+  await loadTitleMerges().catch((e) => logger.warn(`[merges] not loaded: ${e?.message ?? e}`));
   // Settings saved in the admin page (config/settings.ts), before anything reads them.
   await loadSettings();
 
@@ -203,6 +207,7 @@ const init = async () => {
   server.route(overviewRoutes);
   server.route(titleImageRoutes);
   server.route(titleMatchRoutes);
+  server.route(titleMergeRoutes);
   server.route(adminRoutes);
   server.route(authRoutes);
   server.route(setupRoutes);

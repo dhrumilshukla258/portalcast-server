@@ -22,6 +22,7 @@ import { ContentCountry } from "@/models/ContentCountry";
 import { ContentTheme } from "@/models/ContentTheme";
 import { SystemConfig } from "@/models/SystemConfig";
 import { clearDiscoverCache } from "@/services/discoverCache";
+import { mergedKey, mergeProblem, addTitleMerge, removeTitleMerge, listTitleMerges } from "@/content/titleMerges";
 import { normalizeTitleKey, stripReleaseNoise, languageOfCategory } from "@/content/titleClean";
 import { seasonMarkerOf, seriesBaseKey, withoutSeasonMarker } from "@/content/seasonParts";
 import { tmdbQueries, titleYearOf, tmdbReachable } from "@/content/tmdb";
@@ -36,6 +37,12 @@ import { tmdbQueries, titleYearOf, tmdbReachable } from "@/content/tmdb";
  */
 const TRAILING_YEAR = /[\s_\-]*[(\[]?(?:19|20)\d{2}[)\]]?\s*$/;
 export function groupKeyFor(type: ContentType, name: string, year: string | null | undefined, tmdbId?: number | null, categoryId?: string | null): string {
+  // Titles the admin merged into another (content/titleMerges.ts) take that title's group.
+  return mergedKey(naturalGroupKeyFor(type, name, year, tmdbId, categoryId));
+}
+
+/** The group a title has by its own name, year and match, before any merge by the admin. */
+export function naturalGroupKeyFor(type: ContentType, name: string, year: string | null | undefined, tmdbId?: number | null, categoryId?: string | null): string {
   // A series' season parts ("Lost: Season 2", "Mylanchi S07") share their show's key
   // (content/seasonParts.ts). Parts TMDB did not match have no year in common (each season
   // aired in its own): theirs is the show's name in its provider category.
@@ -1302,6 +1309,63 @@ export function oneWordMismatches<T extends { trimmedName?: string | null; origi
     const words = norm(r.originalTitle).split(" ");
     return !!want && !want.includes(" ") && words.length >= 3 && words[0] !== want && words.slice(1).includes(want);
   });
+}
+
+
+/** A title the admin cannot merge (unknown, other type, a loop): the message says why. */
+export class MergeRefused extends Error {}
+
+const MERGE_ATTRS = ["id", "type", "name", "year", "tmdbId", "groupKey", "portalCategoryId", "trimmedName"];
+
+/** Rows of [type] in [keys] whose group changes under the current merges, moved to it. */
+async function regroupKeys(type: string, keys: string[]): Promise<number> {
+  const rows = (await ContentMeta.findAll({ where: { type, groupKey: [...new Set(keys)] }, attributes: MERGE_ATTRS, raw: true })) as any[];
+  let moved = 0;
+  await ContentMeta.sequelize!.transaction(async (transaction) => {
+    for (const r of rows) {
+      const key = groupKeyFor(r.type, r.name, r.year, r.tmdbId, r.portalCategoryId);
+      if (key === r.groupKey) continue;
+      await ContentMeta.update({ groupKey: key }, { where: { id: r.id }, transaction });
+      moved++;
+    }
+  });
+  return moved;
+}
+
+/**
+ * Admin "Merge with…" (title page): every copy of [fromId]'s title joins [intoId]'s title as
+ * versions (owner 2026-11-05: "Dune: Part One" from the NAS beside the portal's "Dune"). Kept by
+ * content/titleMerges.ts; new copies of the merged title follow.
+ */
+export async function mergeTitles(fromId: string, intoId: string): Promise<{ from: string; to: string; moved: number }> {
+  const a = (await ContentMeta.findByPk(fromId, { attributes: MERGE_ATTRS, raw: true })) as any;
+  const b = (await ContentMeta.findByPk(intoId, { attributes: MERGE_ATTRS, raw: true })) as any;
+  if (!a || !b) throw new MergeRefused("Unknown title");
+  if (a.type !== b.type) throw new MergeRefused("A movie can only be merged with a movie, a show with a show");
+  const from = naturalGroupKeyFor(a.type, a.name, a.year, a.tmdbId, a.portalCategoryId);
+  const to = b.groupKey || groupKeyFor(b.type, b.name, b.year, b.tmdbId, b.portalCategoryId);
+  const problem = mergeProblem(from, to);
+  if (problem) throw new MergeRefused(problem);
+  const before = a.groupKey || from;
+  await addTitleMerge({ type: a.type, from, to, fromName: a.trimmedName || a.name, toName: b.trimmedName || b.name });
+  const moved = await withBusyRetry("[MetaEnrich] merging titles", () => regroupKeys(a.type, [from, before]));
+  await withBusyRetry("[MetaEnrich] updating Discover", () => recomputeRepresentatives());
+  clearDiscoverCache();
+  logger.info(`[MetaEnrich] merged "${a.trimmedName || a.name}" into "${b.trimmedName || b.name}" (${moved} copies)`);
+  return { from, to: mergedKey(from), moved };
+}
+
+/** Undoes the merge of group [from]: its copies form their own title again. */
+export async function unmergeTitle(from: string): Promise<{ moved: number } | null> {
+  const merge = listTitleMerges().find((m) => m.from === from);
+  if (!merge) return null;
+  const target = merge.to;
+  await removeTitleMerge(from);
+  const moved = await withBusyRetry("[MetaEnrich] undoing a merge", () => regroupKeys(merge.type, [target]));
+  await withBusyRetry("[MetaEnrich] updating Discover", () => recomputeRepresentatives());
+  clearDiscoverCache();
+  logger.info(`[MetaEnrich] merge of "${merge.fromName}" into "${merge.toName}" undone (${moved} copies)`);
+  return { moved };
 }
 
 /**
