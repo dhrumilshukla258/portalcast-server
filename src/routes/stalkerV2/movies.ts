@@ -28,6 +28,7 @@ import { XtreamCache } from "@/models/XtreamCache";
 import { ContentOverride } from "@/models/ContentOverride";
 import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres, catchupScan, xtreamCache, getOrRefreshVodStreams, getOrRefreshSeriesList } from "@/services/xtreamCache";
 import { logger } from "@/infra/logger";
+import { peekDiscoverIndex, categoryFitsType } from "@/content/discoverIndex";
 import { authCheck } from "@/auth/jwt";
 import { mintStreamToken, proxyUrlFor, streamTokenFromRequest } from "@/services/StreamTokens";
 import {
@@ -96,7 +97,10 @@ export const movieRoutes: ServerRoute[] = [
         }
         // Local library (content/library): "My Library" first, when it has movies.
         const local = await localMovieCategory();
-        const groups = [...(local ? [local] : []), ...(await applyGenreOverrides(channels, "movie"))];
+        // Only the categories that hold this type's titles (discoverIndex categoryFitsType).
+        const counts = peekDiscoverIndex()?.categoryCounts;
+        const provider = (await applyGenreOverrides(channels, "movie")).filter((g: any) => categoryFitsType(counts, "movie", String(g.id)));
+        const groups = [...(local ? [local] : []), ...provider];
         return {
           success: true,
           page: Number(1),

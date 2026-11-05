@@ -52,6 +52,8 @@ export interface DiscoverIndex {
   /** rank -> IMDb score x10 (75 = 7.5), the highest of the title's copies with 20+ votes
    *  (the rating cards show, content/titleRatings.ts); 0 = none. The IMDb rating filter. */
   imdb: Uint8Array;
+  /** "movie:10" -> the copies of that type in portal category 10 (categoryFitsType). */
+  categoryCounts: Map<string, number>;
   rankOf: Map<string, number>;   // id -> rank
   postings: Record<TagKind, Map<string, Int32Array>>;
   facets: Record<TypeKey, {
@@ -82,6 +84,27 @@ export function invalidateDiscoverIndex(): void {
     getDiscoverIndex().catch((e) => logger.error(`[discoverIndex] rebuild failed: ${e?.message ?? e}`));
   }, 2000);
   rebuildTimer.unref?.();
+}
+
+/** The index if it is built, without waiting for a build. */
+export function peekDiscoverIndex(): DiscoverIndex | null {
+  return current;
+}
+
+/**
+ * Whether a provider category is listed under Movies or Series. A portal can send the same
+ * categories for both (owner 2026-11-04: "KIDS | TV SHOWS", 1 film and 1,010 shows, was a Movies
+ * category; "ENGLISH | NEW RELEASE", 16,572 films and 3 shows, a Series one). It is listed where
+ * that type has at least 10 of its titles and 5 % of them; mixed ones ("ENGLISH | DOCUMENTARIES")
+ * stay in both. Too few titles to tell (or none known yet): it stays. Its titles are found
+ * either way (All, search, filters).
+ */
+export function categoryFitsType(counts: Map<string, number> | undefined, type: "movie" | "series", categoryId: string): boolean {
+  if (!counts) return true;
+  const mine = counts.get(`${type}:${categoryId}`) ?? 0;
+  const other = counts.get(`${type === "movie" ? "series" : "movie"}:${categoryId}`) ?? 0;
+  if (mine + other < 20) return true;
+  return mine >= 10 && mine / (mine + other) >= 0.05;
 }
 
 /** Build at startup in the background (server.ts). */
@@ -165,6 +188,7 @@ async function buildIndex(): Promise<DiscoverIndex> {
   // category's ("GUJARATI | MOVIES"), so the language filter finds them too. TMDB's own
   // language is never replaced.
   const imdb = new Uint8Array(n);
+  const categoryCounts = new Map<string, number>();
   const audioLists = new Map<string, number[]>();
   const addAudio = (code: string, r: number) => {
     let list = audioLists.get(code);
@@ -195,6 +219,10 @@ async function buildIndex(): Promise<DiscoverIndex> {
     const repOf = new Map<string, number>();
     for (const c of copies) if (c.isRepresentative) { const r = rankOf.get(c.id); if (r !== undefined) repOf.set(`${c.type}|${c.groupKey}`, r); }
     for (const c of copies) {
+      if (c.portalCategoryId && c.portalCategoryId !== "local") {
+        const k = `${c.type}:${c.portalCategoryId}`;
+        categoryCounts.set(k, (categoryCounts.get(k) ?? 0) + 1);
+      }
       const r = repOf.get(`${c.type}|${c.groupKey}`);
       if (r === undefined) continue;
       if ((Number(c.imdbVotes) || 0) >= 20) imdb[r] = Math.max(imdb[r], imdbScore(c.imdbRating));
@@ -278,7 +306,7 @@ async function buildIndex(): Promise<DiscoverIndex> {
   }
 
   logger.info(`[discoverIndex] built: ${n} titles, ${postings.genre.size} genres, ${postings.country.size} countries, ${postings.theme.size} themes, ${postings.network.size} channels in ${Date.now() - t0} ms`);
-  return { ids, type, lang, audio, langs, langIndex, imdb, rankOf, postings, facets, builtAt: Date.now() };
+  return { ids, type, lang, audio, langs, langIndex, imdb, categoryCounts, rankOf, postings, facets, builtAt: Date.now() };
 }
 
 /** An IMDb score as stored in DiscoverIndex.imdb: 7.5 -> 75; 0 when there is none. */
