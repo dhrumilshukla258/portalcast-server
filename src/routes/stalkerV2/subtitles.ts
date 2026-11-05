@@ -38,6 +38,8 @@ import { searchSubdl, downloadSubdlText, isValidSubdlPath } from "@/content/subd
 import { subtitleKeysFor } from "@/content/subtitleKeys";
 import { searchGestdown, downloadGestdownText, isValidGestdownId } from "@/content/gestdown";
 import { hashForResource } from "@/content/movieHash";
+import { playingItemOf, keptFor, withKept, recordKept, isSubtitleKey, cleanLabel } from "@/content/subtitleChoices";
+import { recordFromRequest } from "@/services/SecurityEvents";
 import { fileForToken } from "@/routes/library/stream";
 import { JELLYFIN_ROOT, jellyfinIdsOf, jellyfinSubtitleSearch, jellyfinSubtitleText } from "@/content/library/jellyfin";
 import {
@@ -79,8 +81,18 @@ export const subtitleRoutes: ServerRoute[] = [
         const jfItem = jfFile?.root === JELLYFIN_ROOT ? jellyfinIdsOf(jfFile.relPath)?.itemId ?? null : null;
         const key = JSON.stringify([title.trim().toLowerCase(), year ?? "", season ?? "", episode ?? "", lang ?? "", moviehash ?? "", jfItem ?? ""]);
         const hit = searchCache.get(key);
+        // Subtitles viewers kept on for this very item come first (content/subtitleChoices.ts);
+        // they change as viewers report them, so they are added after the cache.
+        const item = playingItemOf(playing, (await getActiveProfileId()) ?? 0);
+        const keptLang = (lang ?? "en").toLowerCase();
+        const kept = item ? await keptFor(item, keptLang).catch((e: any) => {
+          logger.warn(`[subtitles] kept subtitles not read: ${e?.message ?? e}`);
+          return [];
+        }) : [];
         // OpenSubtitles' files go last while its downloads fail (content/opensubtitles.ts).
-        if (hit && Date.now() - hit.at < SEARCH_TTL_MS) return { success: true, results: downloadableFirst(hit.results as SubtitleResult[], openSubtitlesDownloadsFailing()) };
+        if (hit && Date.now() - hit.at < SEARCH_TTL_MS) {
+          return { success: true, results: withKept(downloadableFirst(hit.results as SubtitleResult[], openSubtitlesDownloadsFailing()), kept, keptLang) };
+        }
 
         const params = {
           title,
@@ -113,10 +125,48 @@ export const subtitleRoutes: ServerRoute[] = [
           searchCache.set(key, { at: Date.now(), results });
           if (searchCache.size > 500) searchCache.delete(searchCache.keys().next().value as string);
         }
-        return { success: true, results: downloadableFirst(results, openSubtitlesDownloadsFailing()) };
+        return { success: true, results: withKept(downloadableFirst(results, openSubtitlesDownloadsFailing()), kept, keptLang) };
       } catch (err) {
         logger.error({ err }, "Subtitle search error");
         return h.response({ success: false, error: "Subtitle search failed." }).code(500);
+      }
+    },
+  },
+
+  {
+    // A subtitle kept on while watching (content/subtitleChoices.ts): ?t= is the stream playing
+    // (the movie or episode comes from it, never from the body); body { id, lang, delayMs, label }.
+    method: "POST",
+    path: "/api/v2/subtitles/kept",
+    options: { payload: { maxBytes: 2048 } },
+    handler: async (request, h) => {
+      const user = authCheck(request);
+      if (!user) return h.response({ error: "Unauthorized" }).code(401);
+      const body = (request.payload ?? {}) as { id?: unknown; lang?: unknown; delayMs?: unknown; label?: unknown };
+      if (!isSubtitleKey(body.id)) return h.response({ error: "Invalid subtitle id" }).code(400);
+      const lang = String(body.lang ?? "en");
+      if (!/^[a-z]{2,3}(-[a-z]{2})?$/i.test(lang)) return h.response({ error: "Invalid language" }).code(400);
+      const delayMs = Number(body.delayMs ?? 0);
+      if (!Number.isFinite(delayMs) || Math.abs(delayMs) > 60_000) return h.response({ error: "Invalid delay" }).code(400);
+
+      const entry = streamTokenFromRequest(request);
+      if (!entry) return h.response({ error: "Not playing anything" }).code(400);
+      // Only the viewer the stream was opened for: a choice changes the order for everyone.
+      if (entry.userLabel !== streamUserLabel(request)) {
+        recordFromRequest(request, "forbidden", "subtitle kept for another viewer's stream", Number(user.userId) || null);
+        return h.response({ error: "Forbidden" }).code(403);
+      }
+      const item = playingItemOf(entry, (await getActiveProfileId()) ?? 0);
+      if (!item) return h.response({ error: "Not a movie or an episode" }).code(400);
+      try {
+        // Only a file this server served (and stored): it is real and it loads.
+        if (!(await SubtitleFile.findByPk(body.id, { attributes: ["key"] }))) return h.response({ error: "Subtitle not downloaded here" }).code(404);
+        await recordKept(item, Number(user.userId), lang.toLowerCase(), body.id, delayMs, cleanLabel(body.label));
+        logger.info(`[subtitles] kept on: ${item.itemType} ${item.itemId} ${lang} ${body.id} (${Math.round(delayMs)} ms)`);
+        return { success: true };
+      } catch (e: any) {
+        logger.error(`[subtitles] kept subtitle not stored: ${e?.message ?? e}`);
+        return h.response({ error: "Could not store it" }).code(500);
       }
     },
   },

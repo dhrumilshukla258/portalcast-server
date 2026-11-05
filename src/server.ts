@@ -406,7 +406,8 @@ const init = async () => {
       path.startsWith("/api/user/") ||
       path === "/api/auth/device/authorize" ||
       path === "/api/auth/logout" ||
-      path === "/api/v2/media-info";
+      path === "/api/v2/media-info" ||
+      path === "/api/v2/subtitles/kept";
 
     if ((isAdminOnlyPath || (isMutation && !isUserOwnData)) && user.role !== "admin") {
       recordFromRequest(request, "forbidden", `${request.method.toUpperCase()} ${path}`, user.userId as number | undefined);

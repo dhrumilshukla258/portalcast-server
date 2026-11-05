@@ -10,6 +10,7 @@ import { sendUserApprovedEmail } from "@/auth/email";
 import { socketService } from "@/services/SocketService";
 import { streamTracker } from "@/services/StreamTracker";
 import { requestMetrics } from "@/services/RequestMetrics";
+import { SubtitleChoice } from "@/models/SubtitleChoice";
 
 export const userManagementRoutes: ServerRoute[] = [
   {
@@ -270,6 +271,8 @@ export const userManagementRoutes: ServerRoute[] = [
 
         await revokeAllForUser(user.id, "account deleted");
         forgetAccountStatus(user.id);
+        // Their subtitle choices go too (they counted toward what everyone sees first).
+        await SubtitleChoice.destroy({ where: { userId: user.id } });
         await user.destroy();
         return { success: true, message: "User deleted successfully" };
       } catch (error) {
