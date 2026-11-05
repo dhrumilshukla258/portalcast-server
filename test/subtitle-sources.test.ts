@@ -28,3 +28,23 @@ test("a 5xx or the shared pool's limit marks downloads failing for a while; one 
   noteOpenSubtitlesDownload(406, false, t0);
   assert.equal(openSubtitlesDownloadsFailing(t0 + 1), false);
 });
+
+test("failures in a row keep OpenSubtitles last for longer, up to 6 hours; a working download resets it", () => {
+  const min = 60_000;
+  const t0 = 50_000_000;
+  noteOpenSubtitlesDownload(null, true, t0);
+  // The TV's Best match tried five files in a second at 18:55; at 19:33 its files were on top again.
+  for (let i = 0; i < 5; i++) noteOpenSubtitlesDownload(503, false, t0 + i * 200);
+  assert.equal(openSubtitlesDownloadsFailing(t0 + 38 * min), true);
+  assert.equal(openSubtitlesDownloadsFailing(t0 + 239 * min), true);
+  assert.equal(openSubtitlesDownloadsFailing(t0 + 241 * min), false);
+  for (let i = 0; i < 20; i++) noteOpenSubtitlesDownload(503, false, t0);
+  assert.equal(openSubtitlesDownloadsFailing(t0 + 359 * min), true);
+  assert.equal(openSubtitlesDownloadsFailing(t0 + 361 * min), false);
+  noteOpenSubtitlesDownload(null, true, t0 + 1);
+  assert.equal(openSubtitlesDownloadsFailing(t0 + 2), false);
+  // After a reset the next failure starts again at 15 minutes.
+  noteOpenSubtitlesDownload(503, false, t0 + 3);
+  assert.equal(openSubtitlesDownloadsFailing(t0 + 14 * min), true);
+  assert.equal(openSubtitlesDownloadsFailing(t0 + 16 * min), false);
+});

@@ -155,8 +155,13 @@ export async function searchSubtitles(params: {
 // answers 406. Each top OpenSubtitles result then failed in turn ("Couldn't load that
 // subtitle"). For a while after such a failure the search lists other sources' files first
 // (downloadableFirst); a download that works again ends it at once.
-const DOWNLOADS_DOWN_FOR_MS = 15 * 60 * 1000;
+// Each failure in a row doubles the while, up to 6 hours: with a fixed 15 minutes, OpenSubtitles'
+// files were back on top after every quiet spell of the all-day outage, and the first pick failed
+// each time (owner 2026-11-04, Ted Lasso on the TV).
+const DOWNLOADS_DOWN_FIRST_MS = 15 * 60 * 1000;
+const DOWNLOADS_DOWN_MAX_MS = 6 * 60 * 60 * 1000;
 let downloadsDownUntil = 0;
+let downloadFailuresInARow = 0;
 
 export function openSubtitlesDownloadsFailing(now: number = Date.now()): boolean {
   return now < downloadsDownUntil;
@@ -164,10 +169,14 @@ export function openSubtitlesDownloadsFailing(now: number = Date.now()): boolean
 
 /** Records how an OpenSubtitles download went: [status] of the failure, or null when it worked. */
 export function noteOpenSubtitlesDownload(status: number | null, sharedPool: boolean, now: number = Date.now()): void {
-  if (status === null) { downloadsDownUntil = 0; return; }
+  if (status === null) { downloadsDownUntil = 0; downloadFailuresInARow = 0; return; }
   // 5xx is the service; 406/429 is the quota or rate limit of the pool everyone shares (a linked
   // account's own limit is that user's alone).
-  if (status >= 500 || (sharedPool && (status === 406 || status === 429))) downloadsDownUntil = now + DOWNLOADS_DOWN_FOR_MS;
+  if (status >= 500 || (sharedPool && (status === 406 || status === 429))) {
+    downloadFailuresInARow = Math.min(downloadFailuresInARow + 1, 16);
+    const forMs = Math.min(DOWNLOADS_DOWN_MAX_MS, DOWNLOADS_DOWN_FIRST_MS * 2 ** (downloadFailuresInARow - 1));
+    downloadsDownUntil = Math.max(downloadsDownUntil, now + forMs);
+  }
 }
 
 /** [results] with OpenSubtitles' files last while its downloads fail; the order is kept otherwise. */
