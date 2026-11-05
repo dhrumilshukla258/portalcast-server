@@ -29,4 +29,12 @@ export class GenreOverride extends Model {
 
   @Column({ type: DataType.STRING, allowNull: true })
   declare virtual_title: string | null;
+
+  /**
+   * On a "p<profile>:vod_<id>" row: what that provider category holds, set by the admin
+   * ("movie" | "series" | "both"); null = decided from its titles (discoverIndex
+   * categoryFitsType). Owner 2026-11-04: a provider may put films and shows in the same list.
+   */
+  @Column({ type: DataType.STRING, allowNull: true })
+  declare holds: "movie" | "series" | "both" | null;
 }

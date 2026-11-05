@@ -91,6 +91,11 @@ export function peekDiscoverIndex(): DiscoverIndex | null {
   return current;
 }
 
+/** Each type's copies in a provider category ("movie:10" counts), for Admin. */
+export function categoryTypeCounts(counts: Map<string, number> | undefined, categoryId: string): { movie: number; series: number } {
+  return { movie: counts?.get(`movie:${categoryId}`) ?? 0, series: counts?.get(`series:${categoryId}`) ?? 0 };
+}
+
 /**
  * Whether a provider category is listed under Movies or Series. A portal can send the same
  * categories for both (owner 2026-11-04: "KIDS | TV SHOWS", 1 film and 1,010 shows, was a Movies
@@ -99,7 +104,15 @@ export function peekDiscoverIndex(): DiscoverIndex | null {
  * stay in both. Too few titles to tell (or none known yet): it stays. Its titles are found
  * either way (All, search, filters).
  */
-export function categoryFitsType(counts: Map<string, number> | undefined, type: "movie" | "series", categoryId: string): boolean {
+export function categoryFitsType(
+  counts: Map<string, number> | undefined,
+  type: "movie" | "series",
+  categoryId: string,
+  /** What the admin said it holds (Admin › Categories, per profile): it wins. */
+  holds?: "movie" | "series" | "both",
+): boolean {
+  if (holds === "both") return true;
+  if (holds) return holds === type;
   if (!counts) return true;
   const mine = counts.get(`${type}:${categoryId}`) ?? 0;
   const other = counts.get(`${type === "movie" ? "series" : "movie"}:${categoryId}`) ?? 0;

@@ -77,6 +77,7 @@ import { Op } from "sequelize";
 import { logger } from "./infra/logger";
 import { authCheck, type JWTPayload } from "./auth/jwt";
 import { primeDiscoverIndex } from "./content/discoverIndex";
+import { moveGenreOverridesToProfile } from "./content/overrides";
 import { refreshSports } from "./content/sports";
 import { sportsRoutes } from "./routes/sports";
 
@@ -530,6 +531,8 @@ const init = async () => {
 
   logger.info(`Server running at: ${server.info.uri}`);
 
+  // Category overrides written before they were per profile become the active profile's (once).
+  moveGenreOverridesToProfile().catch((e) => logger.warn(`[overrides] per-profile move failed (retried at the next start): ${e?.message ?? e}`));
   // In-memory Discover index (facets/browse): build now instead of on the first request.
   primeDiscoverIndex();
   // Watch progress in memory (content/viewers.ts): loaded now, so no request waits for it.

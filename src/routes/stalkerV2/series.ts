@@ -29,6 +29,7 @@ import { authCheck } from "@/auth/jwt";
 import { mintStreamToken, proxyUrlFor, streamTokenFromRequest } from "@/services/StreamTokens";
 import {
   applyGenreOverrides,
+  categoryHolds,
   applyChannelOverrides,
   applyPortalItemOverrides,
   getHiddenGenreIds,
@@ -466,9 +467,11 @@ export const seriesRoutes: ServerRoute[] = [
         }
         // Local library (content/library): "My Library" first, when it has shows.
         const local = await localSeriesCategory();
-        // Only the categories that hold this type's titles (discoverIndex categoryFitsType).
+        // Only the categories that hold this type's titles (discoverIndex categoryFitsType), or
+        // that the admin says do (Admin › Categories, per profile).
         const counts = peekDiscoverIndex()?.categoryCounts;
-        const provider = (await applyGenreOverrides(channels, "series")).filter((g: any) => categoryFitsType(counts, "series", String(g.id)));
+        const holds = await categoryHolds(profileId ?? null);
+        const provider = (await applyGenreOverrides(channels, "series")).filter((g: any) => categoryFitsType(counts, "series", String(g.id), holds.get(String(g.id))));
         const groups = [...(local ? [local] : []), ...provider];
         return {
           success: true,

@@ -1,6 +1,10 @@
+import { Op } from "sequelize";
 import { GenreOverride } from "@/models/GenreOverride";
 import { ContentOverride } from "@/models/ContentOverride";
+import { SystemConfig } from "@/models/SystemConfig";
 import { GenreType } from "@/models/Genre";
+import { getActiveProfileId } from "@/routes/stalkerV2/shared";
+import { logger } from "@/infra/logger";
 
 // ── Override generation ─────────────────────────────────────────────────────
 // Bumped by Sequelize hooks on every ContentOverride / GenreOverride write (content manager,
@@ -42,30 +46,111 @@ export async function getAllContentOverrides(type: string): Promise<Map<string, 
   return map;
 }
 
-export function genreKey(type: GenreType, id: string): string {
-  return `${type}_${id}`;
+/**
+ * The key of a category's override: "p3:movie_42" for provider profile 3 (owner 2026-11-04:
+ * each provider has its own categories). Without a profile, "movie_42": the form older
+ * servers wrote, for every profile (moved to the active profile once, moveGenreOverridesToProfile).
+ * "vod_42" rows hold what provider category 42 holds (both lists share the provider's ids).
+ */
+export function genreKey(type: GenreType | "vod", id: string, profileId?: number | null): string {
+  return `${profileId != null ? `p${profileId}:` : ""}${type}_${id}`;
+}
+
+/** The provider profile whose category overrides apply now: the active one. */
+export async function overridesProfile(): Promise<number | null> {
+  return (await getActiveProfileId()) ?? null;
+}
+
+/** What a provider category holds, as the admin set it. */
+export type CategoryHolds = "movie" | "series" | "both";
+export function isCategoryHolds(v: unknown): v is CategoryHolds {
+  return v === "movie" || v === "series" || v === "both";
+}
+
+const holdsCache = new Map<string, { gen: number; map: Map<string, CategoryHolds> }>();
+
+/** Provider category id -> what the admin said it holds, for this profile. */
+export async function categoryHolds(profileId?: number | null): Promise<Map<string, CategoryHolds>> {
+  const pid = profileId === undefined ? await overridesProfile() : profileId;
+  if (pid == null) return new Map();
+  const gen = overridesGeneration();
+  const hit = holdsCache.get(String(pid));
+  if (hit && hit.gen === gen) return hit.map;
+  const prefix = `p${pid}:vod_`;
+  const rows = await GenreOverride.findAll({ where: { genre_key: { [Op.like]: `${prefix}%` } }, raw: true });
+  const map = new Map<string, CategoryHolds>();
+  for (const r of rows as any[]) if (isCategoryHolds(r.holds)) map.set(r.genre_key.slice(prefix.length), r.holds);
+  holdsCache.set(String(pid), { gen, map });
+  return map;
+}
+
+const MOVE_FLAG = "genre_overrides_per_profile";
+
+/**
+ * Once: category overrides written before they were per profile ("movie_42") become the
+ * active profile's ("p1:movie_42"): they were made for the provider in use. Until it has run
+ * (or with no active profile) the old rows still apply, as before.
+ */
+export async function moveGenreOverridesToProfile(): Promise<void> {
+  if ((await SystemConfig.findByPk(MOVE_FLAG))?.value) return;
+  const pid = await overridesProfile();
+  if (pid == null) return;
+  const rows = await GenreOverride.findAll({ where: { genre_key: { [Op.notLike]: "p%:%" } } });
+  let moved = 0;
+  for (const row of rows) {
+    const key = `p${pid}:${row.genre_key}`;
+    if (!(await GenreOverride.findByPk(key))) {
+      const { genre_key: _old, createdAt: _c, updatedAt: _u, ...fields } = row.get({ plain: true }) as any;
+      await GenreOverride.create({ ...fields, genre_key: key });
+      moved++;
+    }
+    await row.destroy();
+  }
+  await SystemConfig.upsert({ key: MOVE_FLAG, value: true });
+  if (rows.length) logger.info(`[overrides] ${moved} category override(s) now belong to profile ${pid}`);
 }
 
 export function contentKey(type: string, id: string | number): string {
   return `${type}_${id}`;
 }
 
-async function loadGenreOverrides(keys: string[]): Promise<Map<string, any>> {
-  if (keys.length === 0) return new Map();
+/**
+ * The overrides of these categories for the profile, keyed "movie_42" (the profile's row, else
+ * an older one written for every profile).
+ */
+export async function loadGenreOverrides(type: GenreType, ids: string[], profileId: number | null): Promise<Map<string, any>> {
+  if (ids.length === 0) return new Map();
+  const keys = ids.flatMap((id) => (profileId != null ? [genreKey(type, id, profileId), genreKey(type, id)] : [genreKey(type, id)]));
   const rows = await GenreOverride.findAll({ where: { genre_key: keys }, raw: true });
-  return new Map(rows.map((r) => [r.genre_key, r]));
+  const own = new Map<string, any>(), old = new Map<string, any>();
+  const prefix = profileId != null ? `p${profileId}:` : null;
+  for (const r of rows as any[]) {
+    if (prefix && r.genre_key.startsWith(prefix)) own.set(r.genre_key.slice(prefix.length), r);
+    else old.set(r.genre_key, r);
+  }
+  const out = new Map<string, any>();
+  for (const id of ids) {
+    const k = genreKey(type, id);
+    const r = own.get(k) ?? old.get(k);
+    if (r) out.set(k, r);
+  }
+  return out;
 }
 
-async function loadVirtualGenres(type: GenreType): Promise<Array<{ id: string; title: string; sort_order: number | null }>> {
-  const prefix = `${type}_`;
+/** The profile's own categories (and older ones for every profile it has no own row for). */
+export async function loadVirtualGenres(type: GenreType, profileId: number | null): Promise<Array<{ id: string; title: string; sort_order: number | null }>> {
+  const own = profileId != null ? `p${profileId}:${type}_` : null;
+  const old = `${type}_`;
   const rows = await GenreOverride.findAll({ where: { virtual: true }, raw: true });
-  return rows
-    .filter((r) => r.genre_key.startsWith(prefix))
-    .map((r) => ({
-      id: r.genre_key.slice(prefix.length),
-      title: r.virtual_title ?? r.genre_key,
-      sort_order: r.sort_order,
-    }));
+  const byId = new Map<string, { id: string; title: string; sort_order: number | null; own: boolean }>();
+  for (const r of rows as any[]) {
+    const isOwn = !!own && r.genre_key.startsWith(own);
+    if (!isOwn && !r.genre_key.startsWith(old)) continue;
+    const id = r.genre_key.slice((isOwn ? own! : old).length);
+    if (byId.get(id)?.own) continue;
+    byId.set(id, { id, title: r.virtual_title ?? r.genre_key, sort_order: r.sort_order, own: isOwn });
+  }
+  return [...byId.values()].map(({ own: _o, ...v }) => v);
 }
 
 // SQLite has a hard limit on bound parameters per query (historically 999) — a single
@@ -96,8 +181,9 @@ function sortByOrder<T>(items: T[], getKey: (item: T) => string, map: Map<string
 
 // Apply to DB genre arrays: { id, title, ... }
 export async function applyGenreOverrides(genres: any[], type: GenreType): Promise<any[]> {
+  const pid = await overridesProfile();
   const map = genres.length > 0
-    ? await loadGenreOverrides(genres.map((g) => genreKey(type, String(g.id))))
+    ? await loadGenreOverrides(type, genres.map((g) => String(g.id)), pid)
     : new Map();
 
   let filtered = genres
@@ -107,7 +193,7 @@ export async function applyGenreOverrides(genres: any[], type: GenreType): Promi
       return ov?.display_name ? { ...g, title: ov.display_name } : g;
     });
 
-  const virtuals = await loadVirtualGenres(type);
+  const virtuals = await loadVirtualGenres(type, pid);
   const combinedMap = new Map(map);
   for (const v of virtuals) {
     filtered.push({ id: v.id, title: v.title });
@@ -138,14 +224,26 @@ const hiddenGenreCache = new Map<string, { gen: number; ids: Set<string> }>();
 
 export async function getHiddenGenreIds(type: GenreType): Promise<Set<string>> {
   const gen = overridesGeneration();
-  const hit = hiddenGenreCache.get(type);
+  const pid = await overridesProfile();
+  const cacheKey = `${pid ?? ""}|${type}`;
+  const hit = hiddenGenreCache.get(cacheKey);
   if (hit && hit.gen === gen) return new Set(hit.ids);
-  const prefix = `${type}_`;
-  const rows = await GenreOverride.findAll({ where: { hidden: true }, raw: true });
-  const ids = new Set(
-    rows.filter((r) => r.genre_key.startsWith(prefix)).map((r) => r.genre_key.slice(prefix.length))
-  );
-  hiddenGenreCache.set(type, { gen, ids });
+  // The profile's own rows decide; an older row for every profile counts where it has none.
+  const own = pid != null ? `p${pid}:${type}_` : null;
+  const old = `${type}_`;
+  const rows = await GenreOverride.findAll({
+    where: { genre_key: { [Op.or]: [{ [Op.like]: `${old}%` }, ...(own ? [{ [Op.like]: `${own}%` }] : [])] } },
+    raw: true,
+  });
+  const decided = new Map<string, { hidden: boolean; own: boolean }>();
+  for (const r of rows as any[]) {
+    const isOwn = !!own && r.genre_key.startsWith(own);
+    const id = r.genre_key.slice((isOwn ? own! : old).length);
+    if (decided.get(id)?.own) continue;
+    decided.set(id, { hidden: !!r.hidden, own: isOwn });
+  }
+  const ids = new Set([...decided].filter(([, d]) => d.hidden).map(([id]) => id));
+  hiddenGenreCache.set(cacheKey, { gen, ids });
   return new Set(ids);
 }
 
