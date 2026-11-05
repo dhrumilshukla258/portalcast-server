@@ -38,10 +38,16 @@ export function isSubtitleKey(key: unknown): key is string {
   return false;
 }
 
-/** The movie or episode a stream token was minted for (live and unknown items: null). */
+/**
+ * The movie or episode a stream token was minted for (live and unknown items: null). Each version
+ * is its own item, since versions are timed differently (owner 2026-11-04: an HDCAM copy and an
+ * HD copy can need different subtitles). Portal copies have their own ids; a library title's
+ * files (1080p, 2160p) share the title's "L<id>", so a library file counts as "LF<file id>".
+ */
 export function playingItemOf(entry: StreamTokenEntry | null, activeProfileId: number): PlayingItem | null {
   if (!entry || (entry.itemType !== "movie" && entry.itemType !== "episode")) return null;
-  const itemId = String(entry.itemId ?? "").trim();
+  const localFile = /^local:(\d{1,12})$/.exec(entry.resource ?? "");
+  const itemId = localFile ? `LF${localFile[1]}` : String(entry.itemId ?? "").trim();
   if (!itemId || itemId.length > 64) return null;
   return { profileId: entry.profileId ?? activeProfileId, itemType: entry.itemType, itemId };
 }

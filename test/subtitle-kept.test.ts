@@ -46,6 +46,10 @@ test("the item comes from the stream token: movies and episodes only", () => {
   const base = { resource: "x", userLabel: "u", createdAt: 0, lastSeen: 0 };
   assert.deepEqual(playingItemOf({ ...base, itemType: "episode", itemId: "172692", profileId: 3 }, 1), { profileId: 3, itemType: "episode", itemId: "172692" });
   assert.deepEqual(playingItemOf({ ...base, itemType: "movie", itemId: "L12" }, 1), { profileId: 1, itemType: "movie", itemId: "L12" });
+  // Versions are separate: a library movie's two files share its "L2", so each file counts alone.
+  assert.equal(playingItemOf({ ...base, resource: "local:20", itemType: "movie", itemId: "L2" }, 1)?.itemId, "LF20");
+  assert.equal(playingItemOf({ ...base, resource: "local:21", itemType: "movie", itemId: "L2" }, 1)?.itemId, "LF21");
+  assert.equal(playingItemOf({ ...base, resource: "local:21", itemType: "episode", itemId: "LF21" }, 1)?.itemId, "LF21");
   assert.equal(playingItemOf({ ...base, itemType: "live", itemId: "5" }, 1), null);
   assert.equal(playingItemOf({ ...base, itemType: "movie" }, 1), null);
   assert.equal(playingItemOf(null, 1), null);
