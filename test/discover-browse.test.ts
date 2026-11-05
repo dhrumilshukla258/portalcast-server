@@ -83,35 +83,3 @@ test("IMDb scores are stored x10 and only when real", () => {
   assert.equal(imdbScore(0), 0);
   assert.equal(imdbScore(11), 0);
 });
-
-test("a provider category is listed where its titles are (owner 2026-11-04: the same list for both)", async () => {
-  const { categoryFitsType } = await import("../src/content/discoverIndex");
-  // The owner's provider: copies of each type per category id.
-  const counts = new Map<string, number>([
-    ["movie:39", 1], ["series:39", 1010],        // KIDS | TV SHOWS
-    ["movie:4", 20], ["series:4", 12239],        // ENGLISH | TV & WEB SERIES
-    ["movie:10", 63], ["series:10", 3551],       // HINDI | WEB SERIES
-    ["movie:1", 16572], ["series:1", 3],         // ENGLISH | NEW RELEASE
-    ["movie:64", 7262], ["series:64", 4593],     // ENGLISH | DOCUMENTARIES
-    ["movie:55", 970], ["series:55", 61],        // ARABIC | MOVIES
-    ["movie:77", 7], ["series:77", 133],         // PUNJABI | WEB SERIES
-    ["movie:38", 26], ["series:38", 12],         // SHABAD | GURBANI
-    ["movie:6", 5],                              // a small one
-  ]);
-  const fits = (t: "movie" | "series", id: string) => categoryFitsType(counts, t, id);
-  assert.equal(fits("movie", "39"), false);
-  assert.equal(fits("series", "39"), true);
-  assert.equal(fits("movie", "4"), false);
-  assert.equal(fits("movie", "10"), false);
-  assert.equal(fits("series", "1"), false);
-  assert.equal(fits("movie", "1"), true);
-  assert.equal(fits("movie", "64"), true);
-  assert.equal(fits("series", "64"), true);
-  assert.equal(fits("series", "55"), true);
-  assert.equal(fits("movie", "77"), false);
-  assert.equal(fits("series", "38"), true);
-  // Too few to tell, unknown, or no index yet: listed.
-  assert.equal(fits("movie", "6"), true);
-  assert.equal(fits("series", "999"), true);
-  assert.equal(categoryFitsType(undefined, "movie", "39"), true);
-});

@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { genreKey } from "../src/content/overrides";
-import { categoryFitsType } from "../src/content/discoverIndex";
+import { categoryListedUnder } from "../src/content/discoverIndex";
 
 test("override keys carry the profile; older keys had none", () => {
   assert.equal(genreKey("movie", "42", 3), "p3:movie_42");
@@ -11,13 +11,13 @@ test("override keys carry the profile; older keys had none", () => {
   assert.equal(genreKey("vod", "10", 1), "p1:vod_10");
 });
 
-test("what the admin says a category holds wins over its titles", () => {
-  const counts = new Map([["movie:39", 1], ["series:39", 1010]]);
-  assert.equal(categoryFitsType(counts, "movie", "39"), false);
-  assert.equal(categoryFitsType(counts, "movie", "39", "both"), true);
-  assert.equal(categoryFitsType(counts, "movie", "39", "movie"), true);
-  assert.equal(categoryFitsType(counts, "series", "39", "movie"), false);
-  assert.equal(categoryFitsType(undefined, "series", "39", "movie"), false);
+test("a category is listed as the provider lists it unless the admin says what it holds", () => {
+  assert.equal(categoryListedUnder("movie"), true, "nothing set: as before");
+  assert.equal(categoryListedUnder("series"), true);
+  assert.equal(categoryListedUnder("movie", "both"), true);
+  assert.equal(categoryListedUnder("movie", "movie"), true);
+  assert.equal(categoryListedUnder("series", "movie"), false);
+  assert.equal(categoryListedUnder("movie", "series"), false);
 });
 
 test("a profile's own overrides win; older ones apply until moved to the active profile", async () => {

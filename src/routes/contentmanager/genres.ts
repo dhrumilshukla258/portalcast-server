@@ -5,7 +5,7 @@ import { ContentOverride } from "@/models/ContentOverride";
 import { readGenres, readChannels } from "@/infra/storage";
 import { xtreamCache } from "@/services/xtreamCache";
 import { genreKey, contentKey, overridesProfile, loadGenreOverrides, loadVirtualGenres, categoryHolds, isCategoryHolds } from "@/content/overrides";
-import { peekDiscoverIndex, categoryFitsType, categoryTypeCounts } from "@/content/discoverIndex";
+import { peekDiscoverIndex, categoryListedUnder, categoryTypeCounts } from "@/content/discoverIndex";
 import { GenreType } from "@/models/Genre";
 import { requireAdmin, forbidden, getItemCount } from "./shared";
 export const genreRoutes: ServerRoute[] = [
@@ -23,7 +23,8 @@ export const genreRoutes: ServerRoute[] = [
       const pid = await overridesProfile();
       const genres = await readGenres(genreType, pid ?? undefined);
       const ovMap = await loadGenreOverrides(genreType, genres.map((g) => String(g.id)), pid);
-      // Movies / Series: what each category holds (set here, else decided from its titles).
+      // Movies / Series: what each category holds (set here; none: listed as the provider lists
+      // it), and its titles of each type, to help decide.
       const vod = genreType === "movie" || genreType === "series";
       const holds = vod ? await categoryHolds(pid) : new Map();
       const counts = peekDiscoverIndex()?.categoryCounts;
@@ -43,7 +44,7 @@ export const genreRoutes: ServerRoute[] = [
             ...(vod && id !== "*" ? {
               holds: holds.get(id) ?? null,
               titles: categoryTypeCounts(counts, id),
-              listed: categoryFitsType(counts, genreType as "movie" | "series", id, holds.get(id)),
+              listed: categoryListedUnder(genreType as "movie" | "series", holds.get(id)),
             } : {}),
           };
         }),

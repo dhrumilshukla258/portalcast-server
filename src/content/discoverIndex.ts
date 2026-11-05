@@ -52,7 +52,7 @@ export interface DiscoverIndex {
   /** rank -> IMDb score x10 (75 = 7.5), the highest of the title's copies with 20+ votes
    *  (the rating cards show, content/titleRatings.ts); 0 = none. The IMDb rating filter. */
   imdb: Uint8Array;
-  /** "movie:10" -> the copies of that type in portal category 10 (categoryFitsType). */
+  /** "movie:10" -> the copies of that type in portal category 10 (shown in Admin › Content manager). */
   categoryCounts: Map<string, number>;
   rankOf: Map<string, number>;   // id -> rank
   postings: Record<TagKind, Map<string, Int32Array>>;
@@ -97,27 +97,14 @@ export function categoryTypeCounts(counts: Map<string, number> | undefined, cate
 }
 
 /**
- * Whether a provider category is listed under Movies or Series. A portal can send the same
- * categories for both (owner 2026-11-04: "KIDS | TV SHOWS", 1 film and 1,010 shows, was a Movies
- * category; "ENGLISH | NEW RELEASE", 16,572 films and 3 shows, a Series one). It is listed where
- * that type has at least 10 of its titles and 5 % of them; mixed ones ("ENGLISH | DOCUMENTARIES")
- * stay in both. Too few titles to tell (or none known yet): it stays. Its titles are found
- * either way (All, search, filters).
+ * Whether a provider category is listed under Movies or Series: every category the provider
+ * sends for that type is, unless the admin said what it holds (Admin › Content manager, per
+ * profile). Nothing is decided from its titles (owner 2026-11-04: an automatic split was
+ * removed; the provider's lists and the series field stay the method).
  */
-export function categoryFitsType(
-  counts: Map<string, number> | undefined,
-  type: "movie" | "series",
-  categoryId: string,
-  /** What the admin said it holds (Admin › Categories, per profile): it wins. */
-  holds?: "movie" | "series" | "both",
-): boolean {
-  if (holds === "both") return true;
-  if (holds) return holds === type;
-  if (!counts) return true;
-  const mine = counts.get(`${type}:${categoryId}`) ?? 0;
-  const other = counts.get(`${type === "movie" ? "series" : "movie"}:${categoryId}`) ?? 0;
-  if (mine + other < 20) return true;
-  return mine >= 10 && mine / (mine + other) >= 0.05;
+export function categoryListedUnder(type: "movie" | "series", holds?: "movie" | "series" | "both"): boolean {
+  if (!holds || holds === "both") return true;
+  return holds === type;
 }
 
 /** Build at startup in the background (server.ts). */

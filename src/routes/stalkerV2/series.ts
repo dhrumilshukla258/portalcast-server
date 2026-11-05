@@ -24,7 +24,7 @@ import { XtreamCache } from "@/models/XtreamCache";
 import { ContentOverride } from "@/models/ContentOverride";
 import { warmVodCache, warmSeriesCache, warmSeriesInfoCache, cleanupGenres, catchupScan, xtreamCache, getOrRefreshVodStreams, getOrRefreshSeriesList, invalidateSeriesSourceCache, isNativeSeriesSource } from "@/services/xtreamCache";
 import { logger } from "@/infra/logger";
-import { peekDiscoverIndex, categoryFitsType } from "@/content/discoverIndex";
+import { categoryListedUnder } from "@/content/discoverIndex";
 import { authCheck } from "@/auth/jwt";
 import { mintStreamToken, proxyUrlFor, streamTokenFromRequest } from "@/services/StreamTokens";
 import {
@@ -467,11 +467,10 @@ export const seriesRoutes: ServerRoute[] = [
         }
         // Local library (content/library): "My Library" first, when it has shows.
         const local = await localSeriesCategory();
-        // Only the categories that hold this type's titles (discoverIndex categoryFitsType), or
-        // that the admin says do (Admin › Categories, per profile).
-        const counts = peekDiscoverIndex()?.categoryCounts;
+        // The provider's categories, less those the admin says hold only the other type
+        // (Admin › Content manager, per profile; discoverIndex categoryListedUnder).
         const holds = await categoryHolds(profileId ?? null);
-        const provider = (await applyGenreOverrides(channels, "series")).filter((g: any) => categoryFitsType(counts, "series", String(g.id), holds.get(String(g.id))));
+        const provider = (await applyGenreOverrides(channels, "series")).filter((g: any) => categoryListedUnder("series", holds.get(String(g.id))));
         const groups = [...(local ? [local] : []), ...provider];
         return {
           success: true,
