@@ -75,11 +75,16 @@ export const subtitleRoutes: ServerRoute[] = [
         if (lang !== undefined && !/^[a-z]{2,3}(-[a-z]{2})?$/i.test(String(lang))) return h.response({ error: "Invalid language" }).code(400);
 
         // Same query from any client within 24 h is answered from memory (saves API calls).
-        // Only non-empty answers are cached, so a user who adds a key gets results right away.
+        // Only non-empty answers are cached. Which sources have a key is part of the query: a
+        // key added (Admin or the viewer's own) counts at the next search, not 24 h later
+        // (owner 2026-11-11: a SubDL key added, and nothing from SubDL).
         const moviehash = playing ? await hashForResource(playing.resource) : null;
         const jfFile = playing?.resource?.startsWith("local:") ? (await fileForToken(playing.resource))?.file : null;
         const jfItem = jfFile?.root === JELLYFIN_ROOT ? jellyfinIdsOf(jfFile.relPath)?.itemId ?? null : null;
-        const key = JSON.stringify([title.trim().toLowerCase(), year ?? "", season ?? "", episode ?? "", lang ?? "", moviehash ?? "", jfItem ?? ""]);
+        const caller = authCheck(request);
+        const keys = await subtitleKeysFor(caller ? caller.userId : undefined);
+        const sources = `${keys.openSubtitles ? "os" : ""}+${keys.subdl ? "subdl" : ""}`;
+        const key = JSON.stringify([title.trim().toLowerCase(), year ?? "", season ?? "", episode ?? "", lang ?? "", moviehash ?? "", jfItem ?? "", sources]);
         const hit = searchCache.get(key);
         // Subtitles viewers kept on for this very item come first (content/subtitleChoices.ts);
         // they change as viewers report them, so they are added after the cache.
@@ -102,8 +107,6 @@ export const subtitleRoutes: ServerRoute[] = [
           language: lang,
           moviehash,
         };
-        const caller = authCheck(request);
-        const keys = await subtitleKeysFor(caller ? caller.userId : undefined);
         const fromJellyfin = async (): Promise<SubtitleResult[]> => {
           if (!jfItem) return [];
           try {
@@ -120,6 +123,9 @@ export const subtitleRoutes: ServerRoute[] = [
         // Made for this exact file first, wherever they come from; then each source in turn,
         // Jellyfin's first (owner 2026-10-29: Jellyfin's subtitles come first).
         const all: SubtitleResult[] = [...jf, ...os, ...subdl, ...gd];
+        // What each source gave (no keys): shows at once whether a key works.
+        const se = params.season !== undefined ? ` S${params.season}E${params.episode ?? "?"}` : "";
+        logger.info(`[subtitles] "${title.slice(0, 80)}"${se} ${lang ?? "en"}: OpenSubtitles ${keys.openSubtitles ? os.length : "no key"}, SubDL ${keys.subdl ? subdl.length : "no key"}, Gestdown ${gd.length}${jfItem ? `, Jellyfin ${jf.length}` : ""}`);
         const results = [...all.filter((r) => r.exactMatch), ...all.filter((r) => !r.exactMatch)];
         if (results.length > 0) {
           searchCache.set(key, { at: Date.now(), results });

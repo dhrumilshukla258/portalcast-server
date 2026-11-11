@@ -30,6 +30,17 @@ export function isValidSubdlPath(path: string): boolean {
   return PATH_RE.test(path);
 }
 
+/**
+ * A search result's download path without its query: SubDL now appends "?api_key=<key>" to
+ * every link (owner 2026-11-11: every SubDL result was dropped by the path check, so SubDL
+ * never showed). The key must never reach the apps (the path is the result's id); the server
+ * adds it back when it downloads (downloadSubdlText). null: not a SubDL subtitle path.
+ */
+export function subdlPathOf(url: unknown): string | null {
+  const path = String(url ?? "").split(/[?#]/)[0];
+  return isValidSubdlPath(path) ? path : null;
+}
+
 export async function searchSubdl(params: {
   title: string;
   year?: string;
@@ -50,11 +61,15 @@ export async function searchSubdl(params: {
   if (params.episode !== undefined) query.episode_number = String(params.episode);
   try {
     const { data } = await axios.get(SEARCH_URL, { params: query, timeout: 8000, headers: { "User-Agent": "PortalCast-Server" } });
-    if (!data?.status || !Array.isArray(data.subtitles)) return [];
+    if (!data?.status || !Array.isArray(data.subtitles)) {
+      // SubDL said no without an HTTP error (no match, or a key it does not take): say why.
+      if (data?.status === false && (data.error || data.message)) logger.warn(`[SubDL] search for "${params.title}": ${String(data.error ?? "")} ${String(data.message ?? "")}`.trim());
+      return [];
+    }
     return data.subtitles
       .map((s: any): SubtitleResult | null => {
-        const url = String(s?.url ?? "");
-        if (!isValidSubdlPath(url)) return null;
+        const url = subdlPathOf(s?.url);
+        if (!url) return null;
         return {
           id: `subdl:${url}`,
           fileId: 0,
@@ -67,7 +82,9 @@ export async function searchSubdl(params: {
       })
       .filter((r: SubtitleResult | null): r is SubtitleResult => r !== null);
   } catch (err: any) {
-    logger.error(`[SubDL] search failed for "${params.title}": ${err?.response?.status ?? ""} ${err?.message ?? err}`);
+    // 403 is a key SubDL does not accept (wrong, or not activated yet in its dashboard).
+    const why = err?.response?.data?.message || err?.response?.data?.error;
+    logger.error(`[SubDL] search failed for "${params.title}": ${err?.response?.status ?? ""} ${why ? `${why} ` : ""}${err?.message ?? err}`);
     return [];
   }
 }
@@ -77,6 +94,8 @@ export async function downloadSubdlText(path: string, apiKey: string = setting<s
   if (!apiKey || !isValidSubdlPath(path)) return null;
   try {
     const res = await axios.get(`${DOWNLOAD_BASE}${path}`, {
+      // SubDL's links carry the key now; it is added here, server side, never in the result id.
+      params: { api_key: apiKey },
       responseType: "arraybuffer",
       timeout: 15000,
       maxContentLength: MAX_ZIP_BYTES,
