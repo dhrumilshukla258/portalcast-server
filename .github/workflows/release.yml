@@ -33,7 +33,7 @@ jobs:
           - { target: linux-x64,   os: ubuntu-22.04,     node: linux-x64,    deb: amd64 }
           - { target: linux-arm64, os: ubuntu-22.04-arm, node: linux-arm64,  deb: arm64 }
           - { target: windows-x64, os: windows-2022,     node: win-x64 }
-          - { target: macos-arm64, os: macos-14,         node: darwin-arm64, mac: arm64 }
+          - { target: macos-arm64, os: macos-15,         node: darwin-arm64, mac: arm64 }
           - { target: macos-x64,   os: macos-15-intel,   node: darwin-x64,   mac: x64 }
     defaults:
       run:

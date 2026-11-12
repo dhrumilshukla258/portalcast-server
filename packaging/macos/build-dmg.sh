@@ -18,7 +18,10 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp -R "$BUNDLE" "$APP/Contents/Resources/portalcast"
 
 # The app: a window with the log, Start/Stop and a menu-bar item (PortalCastServer.swift).
-swiftc -O -o "$APP/Contents/MacOS/PortalCast Server" "$HERE/PortalCastServer.swift" -framework AppKit
+# Built for macOS 11 (LSMinimumSystemVersion below, and Node 20's floor): without -target, swiftc
+# targets the build machine's own macOS, and the app would not open on older ones.
+SWIFT_ARCH=$([ "$ARCH" = arm64 ] && echo arm64 || echo x86_64)
+swiftc -O -target "$SWIFT_ARCH-apple-macos11.0" -o "$APP/Contents/MacOS/PortalCast Server" "$HERE/PortalCastServer.swift" -framework AppKit
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
