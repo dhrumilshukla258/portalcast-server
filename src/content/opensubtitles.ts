@@ -8,10 +8,15 @@ import { User } from "@/models/User";
 
 const OS_BASE = "https://api.opensubtitles.com/api/v1";
 
-function headers(bearerToken?: string, apiKey: string = serverOpenSubtitlesKey()) {
+/** The headers of every OpenSubtitles API call. */
+export function openSubtitlesHeaders(bearerToken?: string, apiKey: string = serverOpenSubtitlesKey()) {
   return {
     "Api-Key": apiKey,
     "Content-Type": "application/json",
+    // Never axios's default "application/json, text/plain, */*": OpenSubtitles answers POST
+    // /download and /login with an HTML "Error 503" page then (owner 2026-11-13: every
+    // download failed while searches worked; with "application/json" the same call gets a link).
+    Accept: "application/json",
     // OpenSubtitles requires a descriptive User-Agent identifying the app, not a browser UA.
     "User-Agent": "PortalCast v1",
     ...(bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {}),
@@ -37,7 +42,7 @@ async function loginOpenSubtitlesUser(username: string, password: string, apiKey
     const { data } = await axios.post(
       `${OS_BASE}/login`,
       { username, password },
-      { headers: headers(undefined, apiKey), timeout: 8000 },
+      { headers: openSubtitlesHeaders(undefined, apiKey), timeout: 8000 },
     );
     if (!data?.token) return null;
     return {
@@ -121,7 +126,7 @@ export async function searchSubtitles(params: {
 
   try {
     const { data } = await axios.get(`${OS_BASE}/subtitles`, {
-      headers: headers(undefined, apiKey),
+      headers: openSubtitlesHeaders(undefined, apiKey),
       params: query,
       timeout: 8000,
     });
@@ -205,7 +210,7 @@ export async function resolveSubtitleDownloadUrl(fileId: number, appUserId?: num
     const { data } = await axios.post(
       `${base}/download`,
       { file_id: fileId },
-      { headers: headers(session?.token, apiKey), timeout: 8000 },
+      { headers: openSubtitlesHeaders(session?.token, apiKey), timeout: 8000 },
     );
     if (data?.link) noteOpenSubtitlesDownload(null, !session);
     return data?.link || null;
@@ -216,7 +221,7 @@ export async function resolveSubtitleDownloadUrl(fileId: number, appUserId?: num
       sessionCache.delete(appUserId);
       logger.warn(`[OpenSubtitles] linked session for user ${appUserId} rejected (401) — retrying anonymously`);
       try {
-        const { data } = await axios.post(`${OS_BASE}/download`, { file_id: fileId }, { headers: headers(undefined, apiKey), timeout: 8000 });
+        const { data } = await axios.post(`${OS_BASE}/download`, { file_id: fileId }, { headers: openSubtitlesHeaders(undefined, apiKey), timeout: 8000 });
         if (data?.link) noteOpenSubtitlesDownload(null, true);
         return data?.link || null;
       } catch {

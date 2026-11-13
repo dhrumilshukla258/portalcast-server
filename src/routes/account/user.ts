@@ -19,7 +19,7 @@ import { titleRows } from "@/content/catalog/cards";
 import { ConfigProfile } from "../../models/ConfigProfile";
 import { authCheck } from "../../auth/jwt";
 import { encryptSecret } from "../../auth/crypto";
-import { forgetOpenSubtitlesSession, linkOpenSubtitlesAccount } from "../../content/opensubtitles";
+import { forgetOpenSubtitlesSession, linkOpenSubtitlesAccount, openSubtitlesHeaders } from "../../content/opensubtitles";
 import { proxiedImageUrl } from "@/providers/portalAssets";
 import { getPublicOrigin } from "@/infra/publicUrl";
 import { socketService } from "@/services/SocketService";
@@ -476,7 +476,7 @@ export const userRoutes: ServerRoute[] = [
       } else if (ownKey) {
         // Key only: check it is accepted by a tiny search before storing it.
         const probe = await axios.get("https://api.opensubtitles.com/api/v1/infos/formats", {
-          headers: { "Api-Key": ownKey, "User-Agent": "PortalCast-Server" }, timeout: 8000, validateStatus: () => true,
+          headers: openSubtitlesHeaders(undefined, ownKey), timeout: 8000, validateStatus: () => true,
         });
         if (probe.status === 401 || probe.status === 403) return h.response({ error: "OpenSubtitles rejected that API key" }).code(400);
       }

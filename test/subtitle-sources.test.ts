@@ -3,7 +3,7 @@
 // result failed in turn.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { downloadableFirst, noteOpenSubtitlesDownload, openSubtitlesDownloadsFailing } from "../src/content/opensubtitles";
+import { downloadableFirst, noteOpenSubtitlesDownload, openSubtitlesDownloadsFailing, openSubtitlesHeaders } from "../src/content/opensubtitles";
 
 const r = (id: string, source: string) => ({ id, source });
 
@@ -47,4 +47,14 @@ test("failures in a row keep OpenSubtitles last for longer, up to 6 hours; a wor
   noteOpenSubtitlesDownload(503, false, t0 + 3);
   assert.equal(openSubtitlesDownloadsFailing(t0 + 14 * min), true);
   assert.equal(openSubtitlesDownloadsFailing(t0 + 16 * min), false);
+});
+
+// The 503s were our request (2026-11-13): OpenSubtitles answers POST /download and /login with an
+// HTML "Error 503" page to axios's default Accept ("application/json, text/plain, */*"), and with a
+// link to "application/json". Searches (GET) worked either way, so it looked like their outage.
+test("every OpenSubtitles call asks for JSON only", () => {
+  const h = openSubtitlesHeaders(undefined, "k");
+  assert.equal(h.Accept, "application/json");
+  assert.equal(h["Api-Key"], "k");
+  assert.equal(openSubtitlesHeaders("tok", "k").Authorization, "Bearer tok");
 });
