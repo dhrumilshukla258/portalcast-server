@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-<p align="center"><b>PortalCast Server</b> turns a Stalker portal or Xtream Codes account into a clean, private catalog for your own web and TV apps.</p>
+<p align="center"><b>PortalCast Server</b> turns a Stalker portal, Xtream Codes account or M3U playlist into a clean, private catalog for your own web and TV apps, and runs beside your Jellyfin so your own films and shows join it.</p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Node.js-20-339933?style=flat-square&logo=nodedotjs&logoColor=white" alt="Node.js 20">
@@ -29,17 +29,17 @@ The server signs in to your provider, keeps its catalog cached, and serves it th
 ## Features
 
 - **Home made for each viewer** — Continue Watching, "Because you watched", top picks, trending and top rated, built per profile from what was watched; one card per title across all its language and quality versions.
-- **Discover and filters** — a TMDB-enriched catalog with genre, language, country, channel/platform and mood filters, plus the provider's own IPTV categories and a separate **My library** for your own files.
+- **Discover and filters** — a TMDB-enriched catalog with genre, language, country, channel/platform and mood filters, plus the provider's own IPTV categories and a separate **My library** for your Jellyfin's films and shows.
 - **Title menu** — hold a title (TV, phone) or right-click it (PC): My List, Mark as watched, Not interested. My List keeps saved titles, watched ones, hidden ones and favourite channels, each with undo.
 - **Cast** — browse actors, actresses, directors, creators and writers with photos, ranked by what each viewer watched; every person's page lists what can be played.
 - **Sports** — the next 30 days of the leagues each viewer chooses, from a free schedule and from your provider's TV guide (cricket, kabaddi, NBA, NHL…), with the channel showing each match.
 - **Clean titles** — channel and platform prefixes ("Zee5 : …", "HUM TV : …"), quality and language tags come off names and show as badges; TMDB is matched by title and year, never on a guess.
 - **Series done properly** — TMDB episode stills, titles, descriptions and runtimes; air dates read out of episode names.
 - **Live TV** with EPG, catch-up, favourites and recent channels synced across devices.
-- **Subtitles** — OpenSubtitles and SubDL search merged, embedded tracks from video files, per-user accounts and API keys.
+- **Subtitles** — OpenSubtitles, SubDL and Gestdown search merged with Jellyfin's own, embedded tracks from video files, per-user accounts and API keys; every file is stored once, and the one viewers kept (with its timing) is listed first next time.
 - **Measured quality** — players report the real resolution and frame rate, so a mislabelled "CAM" title shows its true quality.
 - **Admin dashboard** — live viewers, users and approvals, content manager (rename, hide, move, virtual categories), broken streams, security log, server logs.
-- **Your own files** — scan folders of movies and series (NFO and artwork read like Jellyfin) and play them next to the IPTV catalog.
+- **Works with Jellyfin** — PortalCast runs beside your Jellyfin, not instead of it: Jellyfin keeps scanning, metadata and transcoding. Add its address and an API key under **Admin › Settings › Jellyfin**; its movie and show libraries join the catalog, one card per title with the IPTV versions, with Jellyfin's details and artwork, played from Jellyfin. "Sign in with Jellyfin" (off by default) lets people use their Jellyfin login. Without Jellyfin, PortalCast runs on the IPTV alone.
 - **Fast** — in-memory indexes for Discover, search and category lists, an optional in-memory catalog, a TMDB image cache with one stored copy per image, and apps that open on the last Home they saw; responses in milliseconds on catalogs of 100k+ titles.
 
 ## Security
@@ -72,7 +72,7 @@ Building the image yourself instead (for example to run your own fork): point th
 
 **Without Docker** — each [release](https://github.com/dhrumilshukla258/portalcast-server/releases) ships native packages with Node.js included: `.deb` (Debian/Ubuntu/Raspberry Pi, systemd service), `.exe` (Windows, runs at boot) and `.dmg` (macOS). The first start writes the admin sign-in to `FIRST-RUN.txt` next to the config file.
 
-Then open `http://<server>:3000`, sign in as admin, and add your provider under **Admin › Profiles** (Stalker portal or Xtream Codes). Profiles switch without a restart.
+Then open `http://<server>:3000`, sign in as admin, and add your provider under **Admin › Profiles** (Stalker portal, Xtream Codes or an M3U playlist with an optional XMLTV guide). Profiles switch without a restart. Run Jellyfin? Add it under **Admin › Settings › Jellyfin**.
 
 The first fill of the catalog and TV guide is deliberately slow, so the provider is never flooded: one request at a time with a pause between, and a longer pause whenever the provider answers "too many requests". On a big provider it takes a few hours (progress is in the server log); playback works meanwhile. The pace is **Admin › Settings › Provider tuning › Pause between background portal requests**.
 
