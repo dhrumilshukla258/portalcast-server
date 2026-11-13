@@ -337,9 +337,10 @@ export const discoverRoutes: ServerRoute[] = [
         // "Channel / Platform": TV channels that exist in Live TV, plus streaming platforms and
         // the generic "Urdu TV" (never in Live TV). A channel the portal does not carry keeps
         // its clean name and badge but is not offered.
-        // Series only: channels and platforms are a series thing (in Movies the list would be a
-        // handful of award shows), so the filter is offered only when Series is selected.
-        networks: type !== "series" ? [] : f.networks.filter((n) => isLiveChannel(n.value) || PLATFORMS.has(n.value)).map((n) => ({ ...n, logo: channelLogo(n.value, getPublicOrigin(request)) || undefined })),
+        // Not in Movies alone: channels and platforms are a series thing (there the list would
+        // be a handful of award shows). Home with both types offers it too (owner 2026-11-13:
+        // "if both then we show all filters for both").
+        networks: type === "movie" ? [] : f.networks.filter((n) => isLiveChannel(n.value) || PLATFORMS.has(n.value)).map((n) => ({ ...n, logo: channelLogo(n.value, getPublicOrigin(request)) || undefined })),
       };
     },
   },
