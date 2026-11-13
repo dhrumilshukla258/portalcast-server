@@ -55,7 +55,7 @@ fs.writeFileSync(path.join(out, "README.txt"), [
   "         By hand: node/bin/node launcher.js  (Windows: node\\node.exe launcher.js)",
   "Open:    http://localhost:3000",
   "",
-  "First run creates the config file and FIRST-RUN.txt with the admin sign-in.",
+  "First run creates the config file and FIRST-RUN.txt; then open the page and create the admin account.",
   "  Linux (.deb):  /etc/portalcast/portalcast.env, data in /var/lib/portalcast",
   "  Windows:       C:\\ProgramData\\PortalCast\\portalcast.env",
   "  macOS:         ~/Library/Application Support/PortalCast/portalcast.env",
