@@ -136,6 +136,8 @@ export interface PartSeasons {
   opened?: boolean;
   /** The provider's season items for this part. */
   seasons: any[];
+  /** TMDB's season count for the show, when known (a season past it is not real). */
+  seasonCount?: number | null;
 }
 
 function providerSeasonNumber(item: any): number | null {
@@ -151,16 +153,22 @@ function providerSeasonNumber(item: any): number | null {
  * The real season number of each of a part's seasons. The name decides when it names one
  * season and the provider lists one ("Mylanchi S07" filed as season 1 is season 7); a range
  * ("Season 16 To Current") keeps the provider's numbers, moved up into the range when they
- * all fall below it. Otherwise the provider's numbers stand.
+ * all fall below it, unless that would go past the show's last season on TMDB ("Young Sheldon :
+ * Season 04 To Current" listing seasons 1 to 7 of a 7-season show is the whole show, not 4 to
+ * 10). Otherwise the provider's numbers stand, also for a name that names one
+ * season while the provider lists several ("Two and a Half Men: Season 12" with seasons 1 to
+ * 12 is the whole show, not seasons 12 to 23).
  */
 export function numberSeasons(part: PartSeasons): { n: number; item: any }[] {
   const marker = seasonMarkerOf(part.name);
   const items = part.seasons.filter((s) => s && s.id != null);
   const nums = items.map(providerSeasonNumber);
   if (marker && marker.to === marker.from && items.length === 1) return [{ n: marker.from, item: items[0] }];
-  if (marker && items.length > 0 && nums.every((n) => n != null)) {
+  if (marker && marker.to !== marker.from && items.length > 0 && nums.every((n) => n != null)) {
     const min = Math.min(...(nums as number[]));
-    const shift = min < marker.from ? marker.from - min : 0;
+    const max = Math.max(...(nums as number[]));
+    let shift = min < marker.from ? marker.from - min : 0;
+    if (shift && part.seasonCount && max <= part.seasonCount && max + shift > part.seasonCount) shift = 0;
     return items.map((item, i) => ({ n: (nums[i] as number) + shift, item }));
   }
   return items.flatMap((item, i) => (nums[i] == null ? [] : [{ n: nums[i] as number, item }]));

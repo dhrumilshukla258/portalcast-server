@@ -19,6 +19,7 @@ import { LOCAL_CATEGORY } from "@/content/metaEnrichment";
 import { categoryNames } from "@/content/versionLabel";
 import { getHiddenContentKeySet } from "@/content/overrides";
 import { rememberSeasonNumbers } from "@/content/tmdbEpisodes";
+import { fetchTvSeasonCount } from "@/content/tmdb";
 import { seasonMarkerOf, audioLanguageOf, qualityRankOf, mergeSeasonLists, mergeEpisodeLists, decodeSeasonId, type PartSeasons, type SeasonSource } from "@/content/seasonParts";
 import { getActiveProfileId } from "./shared";
 import { logger } from "@/infra/logger";
@@ -26,7 +27,7 @@ import { initialConfig } from "@/config/server";
 
 type Handler = (request: Request, h: ResponseToolkit) => any;
 
-interface Part { id: string; name: string; quality: number; opened: boolean }
+interface Part { id: string; name: string; quality: number; opened: boolean; tmdbId?: number | null }
 
 const EPISODE_PAGE = 14; // what the provider pages episodes by (series.ts itemsPerApiPage)
 const MAX_EPISODE_PAGES = 80;
@@ -70,7 +71,7 @@ async function findParts(movieId: string): Promise<Part[] | null> {
   if (!row?.groupKey || row.portalCategoryId === LOCAL_CATEGORY) return null;
   const members = (await ContentMeta.findAll({
     where: { groupKey: row.groupKey, type: "series", portalCategoryId: { [Op.ne]: LOCAL_CATEGORY } },
-    attributes: ["id", "name", "portalCategoryId"],
+    attributes: ["id", "name", "portalCategoryId", "tmdbId"],
     raw: true,
   })) as any[];
   if (!members.some((m) => seasonMarkerOf(m.name))) return null;
@@ -84,7 +85,7 @@ async function findParts(movieId: string): Promise<Part[] | null> {
   const want = langOf(row.id);
   const parts = members
     .filter((m) => m.id === row.id || (!hidden.has(m.id) && langOf(m.id) === want))
-    .map((m) => ({ id: String(m.id).replace(/^series_/, ""), name: m.name, quality: qualityRankOf(m.name), opened: m.id === row.id }))
+    .map((m) => ({ id: String(m.id).replace(/^series_/, ""), name: m.name, quality: qualityRankOf(m.name), opened: m.id === row.id, tmdbId: m.tmdbId ?? null }))
     .sort((a, b) => Number(b.opened) - Number(a.opened));
   // One part alone is served this way too when its name names its season ("Coke Studio India
   // Season 03" filed by the provider as season 1 is Season 3).
@@ -107,9 +108,12 @@ function listResponse(data: any[], page: number, total: number) {
 
 async function mergedSeasons(inner: Handler, request: Request, h: ResponseToolkit, parts: Part[]) {
   const q = request.query as any;
+  // The show's season count on TMDB keeps a "Season 04 To Current" part from being moved past it.
+  const tmdbId = parts.find((p) => p.tmdbId)?.tmdbId;
+  const seasonCount = tmdbId ? await fetchTvSeasonCount(tmdbId).catch(() => null) : null;
   const lists = await pool(parts, 3, async (p) => {
     const r = await inner(withQuery(request, { ...q, movieId: p.id, page: 1 }), h);
-    return { ...p, seasons: (dataOf(r) ?? []).filter((s: any) => !s?.is_episode) } as PartSeasons;
+    return { ...p, seasonCount, seasons: (dataOf(r) ?? []).filter((s: any) => !s?.is_episode) } as PartSeasons;
   });
   const merged = mergeSeasonLists(lists.filter((l) => l.seasons.length > 0));
   if (merged.length === 0) return null;
