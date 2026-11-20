@@ -1,0 +1,101 @@
+# Guards outside pull requests before they can be merged (a required check, "pr-guard").
+#
+# Fails when a pull request from someone without write access:
+#   - changes files that steer AI coding agents or that run on their own: CLAUDE.md, AGENTS.md,
+#     .claude/, docs/skill-*.md, .github/, editor and devcontainer settings, package and build
+#     files (npm scripts run on install), Docker and packaging, the Gradle build;
+#   - adds invisible characters (bidi overrides, zero-width, Unicode tag characters), which can
+#     hide code from a reviewer or hide instructions from an AI agent reading the code;
+#   - adds text written to steer an AI agent ("ignore previous instructions", "system prompt");
+#   - adds a file too large or binary to scan.
+# It also lists every outside web address the change adds, so the reviewer sees where new code
+# could send data. The owner can still merge after reading such a change (ruleset bypass).
+#
+# SAFETY: pull_request_target runs this file as it is on the base branch, so a pull request
+# cannot change the check that judges it. It never checks out or runs the pull request's code:
+# it only reads the diff through the API, with a read-only token and no secrets. Keep it so.
+
+name: PR guard
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  pr-guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+        run: |
+          gh api --paginate "repos/$REPO/pulls/$PR/files?per_page=100" --jq '.[] | @json' > files.jsonl
+          gh api "repos/$REPO/pulls/$PR" --jq '{title, body}' > pr.json
+          node - <<'JS'
+          const fs = require('fs');
+          const trusted = ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(process.env.ASSOCIATION);
+          const files = fs.readFileSync('files.jsonl', 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+          const pr = JSON.parse(fs.readFileSync('pr.json', 'utf8'));
+          const fail = [], warn = [];
+
+          const SENSITIVE = [
+            /(^|\/)(CLAUDE|AGENTS|GEMINI)\.md$/i, /(^|\/)\.claude\//, /(^|\/)\.mcp\.json$/, /(^|\/)\.cursor/,
+            /(^|\/)\.windsurf/, /(^|\/)\.github\//, /(^|\/)\.vscode\//, /(^|\/)\.idea\//, /(^|\/)\.devcontainer\//,
+            /^docs\/skill-[^/]*\.md$/, /(^|\/)copilot-instructions\.md$/,
+            /(^|\/)package(-lock)?\.json$/, /(^|\/)(npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml)$/, /(^|\/)\.npmrc$/, /(^|\/)\.nvmrc$/,
+            /(^|\/)[^/]*\.config\.(c|m)?(js|ts)$/, /(^|\/)tsconfig[^/]*\.json$/, /(^|\/)\.gitattributes$/, /(^|\/)\.gitmodules$/,
+            /(^|\/)Dockerfile[^/]*$/, /(^|\/)docker-compose[^/]*$/, /(^|\/)\.dockerignore$/, /^packaging\//, /\.(sh|ps1|bat|cmd)$/i,
+            /\.gradle(\.kts)?$/, /(^|\/)gradle\//, /(^|\/)gradlew(\.bat)?$/, /(^|\/)gradle\.properties$/, /(^|\/)local\.properties$/,
+            /(^|\/)proguard[^/]*$/,
+          ];
+          const HIDDEN = /[\u00AD\u180E\u200B-\u200F\u202A-\u202E\u2028\u2029\u2060-\u2064\u2066-\u2069\uFEFF]|[\u{E0000}-\u{E007F}]/u;
+          const STEER = /ignore (all |any )?(the )?(previous|prior|above|earlier) (instructions|prompts?|rules)|disregard (all |any )?(previous|prior|your) (instructions|rules)|system prompt|<\/?(system|assistant|human|user)>|you are (now )?(an? )?(ai|llm|assistant|language model|claude|chatgpt|copilot)\b|(as|for) (an? )?(ai|llm) (agent|assistant|model)|\b(claude|anthropic|openai|chatgpt|copilot|cursor) (code|agent)?\s*(must|should|please|will)\b|do not (tell|inform|show) the (user|owner|reviewer)|without (telling|asking) the (user|owner)|\[\[?(system|instructions?)\]?\]/i;
+          const URL = /\bhttps?:\/\/([a-z0-9.-]+\.[a-z]{2,})(:\d+)?/gi;
+          const OWN = /(^|\.)(github\.com|githubusercontent\.com|portalcast\.stream|themoviedb\.org|tmdb\.org|example\.(com|org)|localhost)$/i;
+
+          const scanText = (where, text) => {
+            if (HIDDEN.test(text)) fail.push(`${where}: invisible or direction-changing characters`);
+            const m = STEER.exec(text);
+            if (m) fail.push(`${where}: text aimed at an AI agent ("${m[0]}")`);
+          };
+          scanText('PR title', pr.title || '');
+          scanText('PR description', pr.body || '');
+
+          const hosts = new Map();
+          for (const f of files) {
+            const names = [f.filename, f.previous_filename].filter(Boolean);
+            if (names.some((n) => SENSITIVE.some((re) => re.test(n)))) {
+              (trusted ? warn : fail).push(`${f.filename}: a protected file (agent instructions, workflows, build or install scripts)`);
+            }
+            if (f.status === 'removed') continue;
+            if (!f.patch) {
+              if (f.changes > 0 || f.status === 'added') fail.push(`${f.filename}: binary or too large to scan, review it by hand`);
+              continue;
+            }
+            const added = f.patch.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++')).map((l) => l.slice(1));
+            added.forEach((line, i) => {
+              scanText(`${f.filename} (added line ${i + 1})`, line);
+              for (const u of line.matchAll(URL)) if (!OWN.test(u[1])) hosts.set(u[1].toLowerCase(), f.filename);
+            });
+          }
+
+          const out = [];
+          out.push(`## PR guard: ${fail.length ? 'needs the owner' : 'passed'}`, '');
+          out.push(`${files.length} files checked; author: ${process.env.ASSOCIATION}.`, '');
+          if (fail.length) out.push('**Blocked:**', ...fail.map((x) => `- ${x}`), '');
+          if (warn.length) out.push('**Protected files (trusted author):**', ...warn.map((x) => `- ${x}`), '');
+          if (hosts.size) out.push('**New outside addresses** (check what is sent there):', ...[...hosts].map(([h, f]) => `- ${h} (${f})`), '');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, out.join('\n') + '\n');
+          for (const x of fail) console.log(`::error::${x}`);
+          for (const x of warn) console.log(`::warning::${x}`);
+          for (const [h, f] of hosts) console.log(`::notice::new outside address ${h} in ${f}`);
+          process.exit(fail.length ? 1 : 0);
+          JS
