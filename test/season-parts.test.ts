@@ -90,6 +90,14 @@ test("the name's season number wins over a provider that files one season as 1",
   assert.deepEqual(numberSeasons({ id: "2", name: "The Simpsons : Season 11 to 29", quality: 0, seasons: [season("a", 11), season("b", 12)] }).map((s) => s.n), [11, 12]);
   // A full series: the provider's numbers.
   assert.deepEqual(numberSeasons({ id: "3", name: "Westworld", quality: 5, seasons: [season("5600", 1), season("5601", 2)] }).map((s) => s.n), [1, 2]);
+  // "From season 4" listing seasons 1 to 7 of a 7-season show (TMDB): the whole show, not 4 to 10.
+  const seven = Array.from({ length: 7 }, (_, i) => season(String(100 + i), i + 1));
+  assert.deepEqual(numberSeasons({ id: "50209", name: "Young Sheldon : Season 04 To Current", quality: 0, seasons: seven, seasonCount: 7 }).map((s) => s.n), [1, 2, 3, 4, 5, 6, 7]);
+  // Without the count, or when the range fits the show, the range still moves them (Mom: 3, 4).
+  assert.deepEqual(numberSeasons({ id: "1", name: "Mom : Seasons 03 To 08", quality: 0, seasons: [season("a", 1), season("b", 2)], seasonCount: 8 }).map((s) => s.n), [3, 4]);
+  // Named after its latest season, listing every season: still the provider's numbers (was 12 to 23).
+  const twelve = Array.from({ length: 12 }, (_, i) => season(String(5215 + i), i + 1));
+  assert.deepEqual(numberSeasons({ id: "15794", name: "Two and a Half Men: Season 12", quality: 0, seasons: twelve }).map((s) => s.n), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
   // Xtream: the season id is its number.
   assert.deepEqual(numberSeasons({ id: "4", name: "Lost", quality: 0, seasons: [{ id: 2, name: "Season 2" }] }).map((s) => s.n), [2]);
 });

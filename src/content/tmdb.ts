@@ -493,6 +493,22 @@ export async function fetchCreditGenders(kind: "movie" | "tv", tmdbId: number): 
   return out;
 }
 
+// ---- a show's season count (content/seasonParts.ts) ----------------------------------
+const seasonCounts = new Map<number, { at: number; n: number | null }>();
+
+/** How many seasons TMDB lists for a show; null when unknown. Remembered for a day. */
+export async function fetchTvSeasonCount(tmdbId: number): Promise<number | null> {
+  const memo = seasonCounts.get(tmdbId);
+  if (memo && Date.now() - memo.at < 86_400_000) return memo.n;
+  const data = await tmdbGet(`/tv/${tmdbId}?language=en-US`);
+  if (!data) return null;
+  const n = Number(data.number_of_seasons);
+  const count = Number.isInteger(n) && n > 0 ? n : null;
+  if (seasonCounts.size > 5000) seasonCounts.clear();
+  seasonCounts.set(tmdbId, { at: Date.now(), n: count });
+  return count;
+}
+
 // ---- networks a show airs on (for channel logos) ---------------------------------------
 export interface TmdbNetwork { name: string; logo: string | null }
 
