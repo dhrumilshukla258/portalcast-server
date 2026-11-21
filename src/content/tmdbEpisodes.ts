@@ -68,9 +68,57 @@ function strippedTitle(name: string): string {
     .replace(/^[\-–—:.\s]+/, "");
 }
 
-/** True for titles that say nothing: empty, "Ep. 1294", a date ("25-07-2026"). */
-function isPlaceholderTitle(stripped: string): boolean {
-  return !stripped || /^[\d\s.\-–—:\/]+$/.test(stripped) || /^(?:ep\.?|episode)\s*\d+$/i.test(stripped);
+const SEASON_ONLY = /^(?:season|s)\s*:?\s*\d{1,3}(?:\s*(?:[-–—]|to)\s*(?:\d{1,3}|current))?$/i;
+const SHOW_AND_SEASON = /^.+?\s*[:\-–—|]\s*(?:season|s)\s*:?\s*\d{1,3}(?:\s*(?:[-–—]|to)\s*(?:\d{1,3}|current))?$/i;
+const GENERIC_EPISODE = /^(?:ep\.?|episode)\s*\d+$/i;
+
+/**
+ * True for titles that say nothing: empty, "Ep. 1294", a date ("25-07-2026"),
+ * a bare season ("Season 1"), or a show+season stamp ("The Big Bang Theory: Season 1").
+ */
+export function isPlaceholderTitle(stripped: string): boolean {
+  return (
+    !stripped ||
+    /^[\d\s.\-–—:\/]+$/.test(stripped) ||
+    GENERIC_EPISODE.test(stripped) ||
+    SEASON_ONLY.test(stripped) ||
+    SHOW_AND_SEASON.test(stripped)
+  );
+}
+
+/** Pure episode enrichment step, shared with tests. */
+export function applyTmdbEpisodes(items: any[], episodes: TmdbEpisode[], origin?: string): any[] {
+  const byNumber = new Map(episodes.map((e) => [e.number, e]));
+  // When a portal stamps the same show/season string onto 3+ episodes in a season,
+  // treat it as a placeholder so TMDB's real episode names take over.
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const s = strippedTitle(String(item?.name || item?.title || "")).toLowerCase();
+    if (s) counts.set(s, (counts.get(s) ?? 0) + 1);
+  }
+  const repeatedTitles = new Set<string>();
+  for (const [key, count] of counts) {
+    if (count >= 3) repeatedTitles.add(key);
+  }
+
+  return items.map((item) => {
+    const n = episodeNumberOf(item);
+    const e = n ? byNumber.get(n) : undefined;
+    if (!e) return item;
+    const name = String(item.name || item.title || "");
+    const stripped = strippedTitle(name);
+    const out: any = { ...item };
+    if (e.still && !item.local_still) out.screenshot_uri = proxiedImageUrl(e.still, origin);
+    if (!String(item.description || "").trim() && e.overview) out.description = e.overview;
+    if (e.name && (isPlaceholderTitle(stripped) || repeatedTitles.has(stripped.toLowerCase()))) {
+      const tmdbName = e.name.trim();
+      out.name = GENERIC_EPISODE.test(tmdbName) ? `Episode ${n}` : `Episode ${n}. ${tmdbName}`;
+      if (item.title) out.title = out.name;
+    }
+    if (!(Number(item.time) > 0) && e.runtime) out.time = String(e.runtime);
+    if (e.airDate && !item.air_date) out.air_date = e.airDate;
+    return out;
+  });
 }
 
 // ---- TMDB lookups --------------------------------------------------------------------
@@ -123,21 +171,7 @@ export async function withTmdbEpisodes(
     if (!tmdbId) return items;
     const episodes = await seasonEpisodes(tmdbId, season);
     if (!episodes) return items;
-    const byNumber = new Map(episodes.map((e) => [e.number, e]));
-
-    return items.map((item) => {
-      const n = episodeNumberOf(item);
-      const e = n ? byNumber.get(n) : undefined;
-      if (!e) return item;
-      const name = String(item.name || item.title || "");
-      const out: any = { ...item };
-      if (e.still && !item.local_still) out.screenshot_uri = proxiedImageUrl(e.still, origin);
-      if (!String(item.description || "").trim() && e.overview) out.description = e.overview;
-      if (e.name && isPlaceholderTitle(strippedTitle(name))) out.name = `Episode ${n}. ${e.name}`;
-      if (!(Number(item.time) > 0) && e.runtime) out.time = String(e.runtime);
-      if (e.airDate && !item.air_date) out.air_date = e.airDate;
-      return out;
-    });
+    return applyTmdbEpisodes(items, episodes, origin);
   } catch (err: any) {
     logger.warn(`[tmdbEpisodes] series ${seriesId} season ${seasonId}: ${err?.message ?? err}`);
     return items;
